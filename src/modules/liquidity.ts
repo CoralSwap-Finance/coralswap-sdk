@@ -7,6 +7,7 @@ import {
 } from '../types/liquidity';
 import { LPPosition } from '../types/pool';
 import { PRECISION } from '../config';
+import { TransactionError, ValidationError } from '../errors';
 
 /**
  * Liquidity module -- manages LP positions in CoralSwap pools.
@@ -96,8 +97,9 @@ export class LiquidityModule {
     const result = await this.client.submitTransaction([op]);
 
     if (!result.success) {
-      throw new Error(
+      throw new TransactionError(
         `Add liquidity failed: ${result.error?.message ?? 'Unknown error'}`,
+        result.txHash,
       );
     }
 
@@ -129,8 +131,9 @@ export class LiquidityModule {
     const result = await this.client.submitTransaction([op]);
 
     if (!result.success) {
-      throw new Error(
+      throw new TransactionError(
         `Remove liquidity failed: ${result.error?.message ?? 'Unknown error'}`,
+        result.txHash,
       );
     }
 
@@ -210,7 +213,7 @@ export class LiquidityModule {
    * Integer square root (Babylonian method) for LP token calculations.
    */
   private sqrt(value: bigint): bigint {
-    if (value < 0n) throw new Error('Square root of negative number');
+    if (value < 0n) throw new ValidationError('Cannot calculate square root of negative number');
     if (value === 0n) return 0n;
     let x = value;
     let y = (x + 1n) / 2n;

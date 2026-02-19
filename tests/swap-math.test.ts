@@ -48,7 +48,7 @@ describe('Swap Math', () => {
     it('throws on zero input', () => {
       expect(() =>
         swap.getAmountOut(0n, 1000n, 1000n, 30),
-      ).toThrow('Insufficient input');
+      ).toThrow('greater than zero');
     });
 
     it('throws on zero reserves', () => {
@@ -72,13 +72,13 @@ describe('Swap Math', () => {
     it('throws when output exceeds reserve', () => {
       expect(() =>
         swap.getAmountIn(2000n, 1000n, 1000n, 30),
-      ).toThrow('Insufficient reserve');
+      ).toThrow('exceeds available reserve');
     });
 
     it('throws on zero output', () => {
       expect(() =>
         swap.getAmountIn(0n, 1000n, 1000n, 30),
-      ).toThrow('Insufficient output');
+      ).toThrow('greater than zero');
     });
   });
 
