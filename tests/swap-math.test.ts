@@ -48,7 +48,7 @@ describe('Swap Math', () => {
     it('throws on zero input', () => {
       expect(() =>
         swap.getAmountOut(0n, 1000n, 1000n, 30),
-      ).toThrow('Insufficient input');
+      ).toThrow('greater than zero');
     });
 
     it('throws on zero reserves', () => {
@@ -72,13 +72,13 @@ describe('Swap Math', () => {
     it('throws when output exceeds reserve', () => {
       expect(() =>
         swap.getAmountIn(2000n, 1000n, 1000n, 30),
-      ).toThrow('Insufficient reserve');
+      ).toThrow('exceeds available reserve');
     });
 
     it('throws on zero output', () => {
       expect(() =>
         swap.getAmountIn(0n, 1000n, 1000n, 30),
-      ).toThrow('Insufficient output');
+      ).toThrow('greater than zero');
     });
   });
 
@@ -98,6 +98,74 @@ describe('Swap Math', () => {
 
       // k should increase or stay the same (never decrease)
       expect(kAfter).toBeGreaterThanOrEqual(kBefore);
+    });
+  });
+
+  describe('edge cases', () => {
+    // 1. Zero Input: getAmountOut(0) throws (acceptable per spec)
+    it('getAmountOut throws on zero input', () => {
+      expect(() =>
+        swap.getAmountOut(0n, 1000n, 1000n, 30),
+      ).toThrow();
+    });
+
+    // 2. Zero Reserves: Validation should fail
+    it('getAmountOut throws on zero reserves', () => {
+      expect(() =>
+        swap.getAmountOut(100n, 0n, 0n, 30),
+      ).toThrow('Insufficient liquidity');
+    });
+
+    // 3. Fee Extremes: feeBps = 0
+    it('getAmountOut works with zero fee', () => {
+      const out = swap.getAmountOut(1000n, 10000n, 10000n, 0);
+      expect(out).toBeGreaterThan(0n);
+    });
+
+    // 3. Fee Extremes: feeBps = 10000 (all fees)
+    it('getAmountOut returns 0 when fee is 10000 bps', () => {
+      const out = swap.getAmountOut(1000n, 10000n, 10000n, 10000);
+      expect(out).toBe(0n);
+    });
+
+    // 4. Max Values: Reserves near 2^63 - 1 (BigInt)
+    it('getAmountOut handles max BigInt values', () => {
+      const maxRes = BigInt(2 ** 63) - 1n;
+      const out = swap.getAmountOut(1000n, maxRes, maxRes, 30);
+      expect(out).toBeGreaterThanOrEqual(0n);
+    });
+
+    // 5. Invalid Path: getAmountIn where amountOut > reserveOut (should throw)
+    it('getAmountIn throws when output exceeds reserve', () => {
+      expect(() =>
+        swap.getAmountIn(2000n, 1000n, 1000n, 30),
+      ).toThrow();
+    });
+
+    // 6. Small Amounts: Swapping 1 stroop (smallest unit)
+    it('getAmountOut handles smallest input amount (1 stroop)', () => {
+      const out = swap.getAmountOut(1n, 1000000000n, 1000000000n, 30);
+      // Should work but may return 0 due to rounding
+      expect(out).toBeGreaterThanOrEqual(0n);
+    });
+
+    // Additional edge cases
+    it('getAmountIn throws on zero reserves', () => {
+      expect(() =>
+        swap.getAmountIn(100n, 0n, 1000n, 30),
+      ).toThrow('Insufficient liquidity');
+    });
+
+    it('getAmountIn handles zero fee', () => {
+      const inAmount = swap.getAmountIn(1000n, 10000n, 10000n, 0);
+      expect(inAmount).toBeGreaterThan(1000n);
+    });
+
+    // Zero output throws (acceptable per spec)
+    it('getAmountIn throws on zero output', () => {
+      expect(() =>
+        swap.getAmountIn(0n, 1000n, 1000n, 30),
+      ).toThrow();
     });
   });
 });

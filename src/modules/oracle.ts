@@ -1,5 +1,6 @@
 import { CoralSwapClient } from '../client';
 import { PRECISION } from '../config';
+import { ValidationError, InsufficientLiquidityError } from '../errors';
 
 /**
  * TWAP Oracle data point from cumulative price accumulators.
@@ -78,7 +79,7 @@ export class OracleModule {
     const timeElapsed = endObs.blockTimestampLast - startObs.blockTimestampLast;
 
     if (timeElapsed <= 0) {
-      throw new Error('End observation must be after start observation');
+      throw new ValidationError('TWAP end observation timestamp must be after start observation');
     }
 
     const price0TWAP =
@@ -141,7 +142,7 @@ export class OracleModule {
     const { reserve0, reserve1 } = await pair.getReserves();
 
     if (reserve0 === 0n || reserve1 === 0n) {
-      throw new Error('Pool has no liquidity');
+      throw new InsufficientLiquidityError(pairAddress);
     }
 
     return {
