@@ -3,8 +3,12 @@ import { PairClient } from '../contracts/pair';
 import { TradeType } from '../types/common';
 import { SwapRequest, SwapQuote, SwapResult, HopResult } from '../types/swap';
 import { PRECISION, DEFAULTS } from '../config';
-import { PairNotFoundError, ValidationError, InsufficientLiquidityError } from '../errors';
-import { PairClient } from '../contracts/pair';
+import {
+  PairNotFoundError,
+  ValidationError,
+  InsufficientLiquidityError,
+  TransactionError,
+} from '../errors';
 
 /**
  * Swap module -- builds, quotes, and executes token swaps.
@@ -90,8 +94,9 @@ export class SwapModule {
     const result = await this.client.submitTransaction([op]);
 
     if (!result.success) {
-      throw new Error(
+      throw new TransactionError(
         `Swap failed: ${result.error?.message ?? 'Unknown error'}`,
+        result.txHash,
       );
     }
 
@@ -114,8 +119,8 @@ export class SwapModule {
     reserveOut: bigint,
     feeBps: number,
   ): bigint {
-    if (amountIn <= 0n) throw new Error('Insufficient input amount');
-    if (reserveIn <= 0n || reserveOut <= 0n) throw new Error('Insufficient liquidity');
+    if (amountIn <= 0n) throw new ValidationError('Insufficient input amount');
+    if (reserveIn <= 0n || reserveOut <= 0n) throw new InsufficientLiquidityError('unknown');
 
     const feeFactor = BigInt(10000 - feeBps);
     const amountInWithFee = amountIn * feeFactor;
@@ -133,9 +138,9 @@ export class SwapModule {
     reserveOut: bigint,
     feeBps: number,
   ): bigint {
-    if (amountOut <= 0n) throw new Error('Insufficient output amount');
-    if (reserveIn <= 0n || reserveOut <= 0n) throw new Error('Insufficient liquidity');
-    if (amountOut >= reserveOut) throw new Error('Insufficient reserve for output');
+    if (amountOut <= 0n) throw new ValidationError('Insufficient output amount');
+    if (reserveIn <= 0n || reserveOut <= 0n) throw new InsufficientLiquidityError('unknown');
+    if (amountOut >= reserveOut) throw new InsufficientLiquidityError('unknown', { reason: 'Output amount exceeds available reserves' });
 
     const feeFactor = BigInt(10000 - feeBps);
     const numerator = reserveIn * amountOut * 10000n;

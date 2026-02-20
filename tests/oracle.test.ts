@@ -1,5 +1,6 @@
 import { OracleModule, TWAPObservation } from '../src/modules/oracle';
 import { PRECISION } from '../src/config';
+import { InsufficientLiquidityError } from '../src/errors';
 
 function mockClient(pairOverrides: Record<string, (...args: any[]) => any> = {}) {
   return {
@@ -228,7 +229,7 @@ describe('OracleModule', () => {
 
       const oracle = new OracleModule(client);
       await expect(oracle.getSpotPrice(pairAddress)).rejects.toThrow(
-        'Pool has no liquidity',
+        InsufficientLiquidityError,
       );
     });
   });

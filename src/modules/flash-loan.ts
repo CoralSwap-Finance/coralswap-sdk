@@ -6,6 +6,7 @@ import {
 } from '../types/flash-loan';
 import { FlashLoanConfig } from '../types/pool';
 import { calculateRepayment, validateFeeFloor } from '../contracts/flash-receiver';
+import { FlashLoanError, TransactionError } from '../errors';
 
 /**
  * Flash Loan module -- first-class flash loan support for CoralSwap.
@@ -33,7 +34,9 @@ export class FlashLoanModule {
     const config = await pair.getFlashLoanConfig();
 
     if (config.locked) {
-      throw new Error('Flash loans are currently disabled for this pair');
+      throw new FlashLoanError('Flash loans are currently disabled for this pair', {
+        pairAddress,
+      });
     }
 
     const feeAmount = (amount * BigInt(config.flashFeeBps)) / BigInt(10000);
@@ -60,11 +63,16 @@ export class FlashLoanModule {
     const config = await pair.getFlashLoanConfig();
 
     if (config.locked) {
-      throw new Error('Flash loans are currently disabled for this pair');
+      throw new FlashLoanError('Flash loans are currently disabled for this pair', {
+        pairAddress: request.pairAddress,
+      });
     }
 
     if (!validateFeeFloor(config.flashFeeBps, config.flashFeeFloor)) {
-      throw new Error('Flash loan fee below protocol floor');
+      throw new FlashLoanError('Flash loan fee below protocol floor', {
+        feeBps: config.flashFeeBps,
+        feeFloor: config.flashFeeFloor,
+      });
     }
 
     const feeEstimate = await this.estimateFee(
@@ -84,8 +92,9 @@ export class FlashLoanModule {
     const result = await this.client.submitTransaction([op]);
 
     if (!result.success) {
-      throw new Error(
+      throw new TransactionError(
         `Flash loan failed: ${result.error?.message ?? 'Unknown error'}`,
+        result.txHash,
       );
     }
 

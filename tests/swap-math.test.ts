@@ -1,4 +1,9 @@
 import { SwapModule } from '../src/modules/swap';
+import {
+  ValidationError,
+  InsufficientLiquidityError,
+  CoralSwapSDKError,
+} from '../src/errors';
 
 /**
  * Test the V2 AMM swap math independently (no RPC calls).
@@ -45,16 +50,22 @@ describe('Swap Math', () => {
       expect(outLowFee).toBeGreaterThan(outHighFee);
     });
 
-    it('throws on zero input', () => {
+    it('throws ValidationError on zero input', () => {
       expect(() =>
         swap.getAmountOut(0n, 1000n, 1000n, 30),
-      ).toThrow('Insufficient input');
+      ).toThrow(ValidationError);
     });
 
-    it('throws on zero reserves', () => {
+    it('throws InsufficientLiquidityError on zero reserves', () => {
       expect(() =>
         swap.getAmountOut(100n, 0n, 1000n, 30),
-      ).toThrow('Insufficient liquidity');
+      ).toThrow(InsufficientLiquidityError);
+    });
+
+    it('thrown errors are instances of CoralSwapSDKError', () => {
+      expect(() =>
+        swap.getAmountOut(0n, 1000n, 1000n, 30),
+      ).toThrow(CoralSwapSDKError);
     });
   });
 
@@ -69,16 +80,16 @@ describe('Swap Math', () => {
       expect(amountIn).toBeGreaterThan(amountOut);
     });
 
-    it('throws when output exceeds reserve', () => {
+    it('throws InsufficientLiquidityError when output exceeds reserve', () => {
       expect(() =>
         swap.getAmountIn(2000n, 1000n, 1000n, 30),
-      ).toThrow('Insufficient reserve');
+      ).toThrow(InsufficientLiquidityError);
     });
 
-    it('throws on zero output', () => {
+    it('throws ValidationError on zero output', () => {
       expect(() =>
         swap.getAmountIn(0n, 1000n, 1000n, 30),
-      ).toThrow('Insufficient output');
+      ).toThrow(ValidationError);
     });
   });
 
