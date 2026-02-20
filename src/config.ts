@@ -1,4 +1,4 @@
-import { Network, Logger } from './types/common';
+import { Network, Logger, Signer } from './types/common';
 
 /**
  * Contract addresses per network deployment.
@@ -21,6 +21,8 @@ export interface CoralSwapConfig {
   publicKey?: string;
   /** Optional logger for RPC request/response instrumentation. */
   logger?: Logger;
+  /** External signer for wallet adapter pattern. Takes precedence over secretKey. */
+  signer?: Signer;
   defaultSlippageBps?: number;
   defaultDeadlineSec?: number;
   maxRetries?: number;

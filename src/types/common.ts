@@ -81,3 +81,16 @@ export interface Logger {
   /** Error-level log for failed simulations, submissions, and exceptions. */
   error(msg: string, err?: unknown): void;
 }
+
+/**
+ * External signer interface for wallet adapter pattern.
+ *
+ * Implement this interface to integrate external wallets (e.g. Freighter,
+ * Albedo) with CoralSwapClient instead of passing raw secret keys.
+ */
+export interface Signer {
+  /** Return the public key of the signer. */
+  publicKey(): Promise<string>;
+  /** Sign a Stellar transaction and return the signed transaction. */
+  signTransaction(xdr: string): Promise<string>;
+}

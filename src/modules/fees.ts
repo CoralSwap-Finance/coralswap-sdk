@@ -1,5 +1,5 @@
 import { CoralSwapClient } from '../client';
-import { FeeEstimate, FeeHistoryEntry } from '../types/fee';
+import { FeeEstimate } from '../types/fee';
 import { FeeState } from '../types/pool';
 
 /**

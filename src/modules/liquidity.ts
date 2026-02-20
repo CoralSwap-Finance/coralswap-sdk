@@ -53,10 +53,6 @@ export class LiquidityModule {
 
     const amountBOptimal = (amountADesired * reserveB) / reserveA;
 
-    const currentProduct = reserveA * reserveB;
-    const newProduct = (reserveA + amountADesired) * (reserveB + amountBOptimal);
-    const lpRatio = this.sqrt(newProduct) - this.sqrt(currentProduct);
-
     const totalSupply = await this.getLPTotalSupply(pairAddress);
     const estimatedLP = totalSupply > 0n
       ? (amountADesired * totalSupply) / reserveA
@@ -151,7 +147,7 @@ export class LiquidityModule {
     owner: string,
   ): Promise<LPPosition> {
     const pair = this.client.pair(pairAddress);
-    const [reserves, tokens] = await Promise.all([
+    const [reserves] = await Promise.all([
       pair.getReserves(),
       pair.getTokens(),
     ]);

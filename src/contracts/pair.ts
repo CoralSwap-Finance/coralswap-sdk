@@ -1,5 +1,5 @@
 import { Contract, SorobanRpc, TransactionBuilder, xdr, Address, nativeToScVal } from '@stellar/stellar-sdk';
-import { PoolState, FeeState, FlashLoanConfig } from '../types/pool';
+import { FeeState, FlashLoanConfig } from '../types/pool';
 
 /**
  * Type-safe client for a CoralSwap Pair contract.

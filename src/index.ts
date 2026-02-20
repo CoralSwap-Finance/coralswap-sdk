@@ -27,7 +27,7 @@
  */
 
 // Core client
-export { CoralSwapClient } from './client';
+export { CoralSwapClient, KeypairSigner } from './client';
 
 // Configuration
 export {
