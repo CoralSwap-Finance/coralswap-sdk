@@ -7,7 +7,7 @@ import {
   Account,
 } from '@stellar/stellar-sdk';
 import { CoralSwapConfig, NetworkConfig, NETWORK_CONFIGS, DEFAULTS } from './config';
-import { Network, TxStatus, Result } from './types/common';
+import { Network, TxStatus, Result, Logger } from './types/common';
 import { FactoryClient } from './contracts/factory';
 import { PairClient } from './contracts/pair';
 import { RouterClient } from './contracts/router';
@@ -28,6 +28,7 @@ export class CoralSwapClient {
   private keypair: Keypair | null = null;
   private _factory: FactoryClient | null = null;
   private _router: RouterClient | null = null;
+  private readonly logger?: Logger;
 
   constructor(config: CoralSwapConfig) {
     this.config = {
@@ -49,6 +50,8 @@ export class CoralSwapClient {
     if (config.secretKey) {
       this.keypair = Keypair.fromSecret(config.secretKey);
     }
+
+    this.logger = config.logger;
   }
 
   /**
@@ -132,7 +135,10 @@ export class CoralSwapClient {
   ): Promise<Result<{ txHash: string; ledger: number }>> {
     try {
       const sourceKey = source ?? this.publicKey;
+
+      this.logger?.debug('getAccount: fetching account', { sourceKey });
       const account = await this.server.getAccount(sourceKey);
+      this.logger?.debug('getAccount: success', { sourceKey });
 
       let builder = new TransactionBuilder(account, {
         fee: '100',
@@ -145,8 +151,13 @@ export class CoralSwapClient {
 
       const tx = builder.setTimeout(this.networkConfig.sorobanTimeout).build();
 
+      this.logger?.debug('simulateTransaction: simulating', {
+        sourceKey,
+        operationCount: operations.length,
+      });
       const sim = await this.server.simulateTransaction(tx);
       if (!SorobanRpc.Api.isSimulationSuccess(sim)) {
+        this.logger?.error('simulateTransaction: simulation failed', { simulation: sim });
         return {
           success: false,
           error: {
@@ -156,6 +167,7 @@ export class CoralSwapClient {
           },
         };
       }
+      this.logger?.debug('simulateTransaction: success');
 
       const preparedTx = SorobanRpc.assembleTransaction(tx, sim).build();
 
@@ -174,6 +186,7 @@ export class CoralSwapClient {
       const response = await this.server.sendTransaction(preparedTx);
 
       if (response.status === 'ERROR') {
+        this.logger?.error('sendTransaction: submission failed', { response });
         return {
           success: false,
           error: {
@@ -184,9 +197,11 @@ export class CoralSwapClient {
         };
       }
 
+      this.logger?.info('sendTransaction: submitted', { txHash: response.hash });
       const result = await this.pollTransaction(response.hash);
       return result;
     } catch (err) {
+      this.logger?.error('submitTransaction: unexpected error', err);
       return {
         success: false,
         error: {
@@ -208,9 +223,18 @@ export class CoralSwapClient {
     const retryDelay = this.config.retryDelayMs ?? DEFAULTS.retryDelayMs;
 
     for (let attempt = 0; attempt < maxRetries * 10; attempt++) {
+      this.logger?.debug('pollTransaction: polling attempt', {
+        txHash,
+        attempt: attempt + 1,
+        maxAttempts: maxRetries * 10,
+      });
       const status = await this.server.getTransaction(txHash);
 
       if (status.status === 'SUCCESS') {
+        this.logger?.info('pollTransaction: confirmed', {
+          txHash,
+          ledger: status.ledger,
+        });
         return {
           success: true,
           data: {
@@ -222,6 +246,10 @@ export class CoralSwapClient {
       }
 
       if (status.status === 'FAILED') {
+        this.logger?.error('pollTransaction: transaction failed on-chain', {
+          txHash,
+          status,
+        });
         return {
           success: false,
           error: {
@@ -236,6 +264,10 @@ export class CoralSwapClient {
       await new Promise((resolve) => setTimeout(resolve, retryDelay));
     }
 
+    this.logger?.error('pollTransaction: timed out', {
+      txHash,
+      attempts: maxRetries * 10,
+    });
     return {
       success: false,
       error: {
@@ -254,6 +286,8 @@ export class CoralSwapClient {
     source?: string,
   ): Promise<SorobanRpc.Api.SimulateTransactionResponse> {
     const sourceKey = source ?? this.publicKey;
+
+    this.logger?.debug('simulateTransaction (dry-run): fetching account', { sourceKey });
     const account = await this.server.getAccount(sourceKey);
 
     let builder = new TransactionBuilder(account, {
@@ -266,7 +300,14 @@ export class CoralSwapClient {
     }
 
     const tx = builder.setTimeout(30).build();
-    return this.server.simulateTransaction(tx);
+
+    this.logger?.debug('simulateTransaction (dry-run): simulating', {
+      sourceKey,
+      operationCount: operations.length,
+    });
+    const sim = await this.server.simulateTransaction(tx);
+    this.logger?.debug('simulateTransaction (dry-run): completed');
+    return sim;
   }
 
   /**

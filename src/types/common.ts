@@ -65,3 +65,19 @@ export interface CoralSwapError {
   message: string;
   details?: Record<string, unknown>;
 }
+
+/**
+ * Logger interface for SDK request/response instrumentation.
+ *
+ * Implement this interface to receive debug, info, and error
+ * logs from all RPC interactions within CoralSwapClient.
+ * Defaults to undefined (no logging) for backward compatibility.
+ */
+export interface Logger {
+  /** Debug-level log for routine RPC calls and polling. */
+  debug(msg: string, data?: unknown): void;
+  /** Info-level log for successful operations. */
+  info(msg: string, data?: unknown): void;
+  /** Error-level log for failed simulations, submissions, and exceptions. */
+  error(msg: string, err?: unknown): void;
+}

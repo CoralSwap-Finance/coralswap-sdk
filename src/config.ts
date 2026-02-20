@@ -1,4 +1,4 @@
-import { Network } from './types/common';
+import { Network, Logger } from './types/common';
 
 /**
  * Contract addresses per network deployment.
@@ -19,6 +19,8 @@ export interface CoralSwapConfig {
   rpcUrl?: string;
   secretKey?: string;
   publicKey?: string;
+  /** Optional logger for RPC request/response instrumentation. */
+  logger?: Logger;
   defaultSlippageBps?: number;
   defaultDeadlineSec?: number;
   maxRetries?: number;

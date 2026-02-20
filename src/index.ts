@@ -40,6 +40,7 @@ export {
 
 // Type exports
 export * from './types';
+export type { Logger } from './types/common';
 
 // Contract clients
 export {
