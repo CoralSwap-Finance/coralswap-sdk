@@ -34,3 +34,5 @@ export {
   RetryConfig,
   DEFAULT_RETRY_CONFIG,
 } from './retry';
+
+export { Fraction, Percent, Rounding } from './math';
