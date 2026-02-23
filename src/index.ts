@@ -89,8 +89,10 @@ export {
   withRetry,
   isRetryable,
   sleep,
+  EventParser,
+  EVENT_TOPICS,
 } from './utils';
-export type { RetryConfig } from './utils';
+export type { RetryConfig, RawSorobanEvent, GetEventsOptions } from './utils';
 
 // Errors
 export {
