@@ -89,6 +89,8 @@ export {
   withRetry,
   isRetryable,
   sleep,
+  EventParser,
+  EVENT_TOPICS,
 } from './utils';
 export type { RetryConfig } from './utils';
 
