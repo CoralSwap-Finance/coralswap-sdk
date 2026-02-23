@@ -59,6 +59,16 @@ export class PairClient {
   }
 
   /**
+   * Read the LP token address for this pair.
+   */
+  async getLPTokenAddress(): Promise<string> {
+    const op = this.contract.call('lp_token');
+    const result = await this.simulateRead(op);
+    if (!result) throw new Error('Failed to read LP token address');
+    return Address.fromScVal(result).toString();
+  }
+
+  /**
    * Read the current dynamic fee in basis points.
    */
   async getDynamicFee(): Promise<number> {
