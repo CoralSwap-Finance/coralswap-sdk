@@ -1,7 +1,14 @@
 import { CoralSwapClient } from '../client';
 import { PairClient } from '../contracts/pair';
 import { TradeType } from '../types/common';
-import { SwapRequest, SwapQuote, SwapResult, HopResult } from '../types/swap';
+import {
+  SwapRequest,
+  SwapQuote,
+  SwapResult,
+  HopResult,
+  MultiHopSwapRequest,
+  MultiHopSwapQuote,
+} from '../types/swap';
 import { PRECISION, DEFAULTS } from '../config';
 import {
   PairNotFoundError,
@@ -96,6 +103,106 @@ export class SwapModule {
     if (!result.success) {
       throw new TransactionError(
         `Swap failed: ${result.error?.message ?? 'Unknown error'}`,
+        result.txHash,
+      );
+    }
+
+    return {
+      txHash: result.txHash!,
+      amountIn: quote.amountIn,
+      amountOut: quote.amountOut,
+      feePaid: quote.feeAmount,
+      ledger: result.data!.ledger,
+      timestamp: Math.floor(Date.now() / 1000),
+    };
+  }
+
+  /**
+   * Get a multi-hop swap quote with per-hop breakdown.
+   *
+   * Accepts a `MultiHopSwapRequest` whose `path` must contain 3+ tokens.
+   * Returns a `MultiHopSwapQuote` that includes the standard quote fields
+   * plus an ordered `hops` array with the calculation result for each
+   * consecutive pair.
+   *
+   * @param request - Multi-hop swap request with required path.
+   * @returns Quote including per-hop fee, amount, and price impact breakdown.
+   * @throws {ValidationError} If path has fewer than 3 tokens or trade type
+   *   is not EXACT_IN.
+   * @throws {PairNotFoundError} If any intermediate pair does not exist.
+   */
+  async getMultiHopQuote(request: MultiHopSwapRequest): Promise<MultiHopSwapQuote> {
+    const { path } = request;
+
+    if (path.length < 3) {
+      throw new ValidationError(
+        'Multi-hop path must contain at least 3 tokens',
+        { path },
+      );
+    }
+
+    if (request.tradeType !== TradeType.EXACT_IN) {
+      throw new ValidationError(
+        'Multi-hop routing only supports EXACT_IN trade type',
+        { tradeType: request.tradeType },
+      );
+    }
+
+    const hops = await this.computeHops(request.amount, path);
+
+    const totalFeeAmount = hops.reduce((acc, h) => acc + h.feeAmount, 0n);
+    const totalFeeBps = hops.reduce((acc, h) => acc + h.feeBps, 0);
+    const compoundImpactBps = this.compoundPriceImpact(hops.map((h) => h.priceImpactBps));
+
+    const amountIn = hops[0].amountIn;
+    const amountOut = hops[hops.length - 1].amountOut;
+
+    const slippageBps = request.slippageBps ?? this.client.config.defaultSlippageBps ?? DEFAULTS.slippageBps;
+    const amountOutMin = amountOut - (amountOut * BigInt(slippageBps)) / PRECISION.BPS_DENOMINATOR;
+
+    return {
+      tokenIn: path[0],
+      tokenOut: path[path.length - 1],
+      amountIn,
+      amountOut,
+      amountOutMin,
+      priceImpactBps: compoundImpactBps,
+      feeBps: totalFeeBps,
+      feeAmount: totalFeeAmount,
+      path,
+      deadline: request.deadline ?? this.client.getDeadline(),
+      hops,
+    };
+  }
+
+  /**
+   * Execute a multi-hop swap as a single router transaction.
+   *
+   * Builds a `swap_exact_tokens_for_tokens` operation with the full path
+   * and submits it in one transaction, minimising gas and latency.
+   *
+   * @param request - Multi-hop swap request with required path.
+   * @returns Execution result with txHash, amounts, and ledger.
+   * @throws {ValidationError} If path has fewer than 3 tokens.
+   * @throws {PairNotFoundError} If any intermediate pair does not exist.
+   * @throws {TransactionError} If the on-chain transaction fails.
+   */
+  async executeMultiHop(request: MultiHopSwapRequest): Promise<SwapResult> {
+    const quote = await this.getMultiHopQuote(request);
+
+    const op = this.client.router.buildSwapExactTokensForTokens(
+      request.to ?? this.client.publicKey,
+      request.path,
+      quote.amountIn,
+      quote.amountOutMin,
+      quote.deadline,
+    );
+
+    const result = await this.client.submitTransaction([op]);
+
+    if (!result.success) {
+      throw new TransactionError(
+        `Multi-hop swap failed: ${result.error?.message ?? 'Unknown error'}`,
         result.txHash,
       );
     }
