@@ -1,6 +1,8 @@
 import { CoralSwapClient } from '../client';
 import { FeeEstimate } from '../types/fee';
 import { FeeState } from '../types/pool';
+import { validateAddress, validatePositiveAmount } from '../utils/validation';
+
 
 /**
  * Fee module -- dynamic fee transparency and estimation.
@@ -20,6 +22,8 @@ export class FeeModule {
    * Get the current dynamic fee estimate for a pair.
    */
   async getCurrentFee(pairAddress: string): Promise<FeeEstimate> {
+    validateAddress(pairAddress, 'pairAddress');
+
     const pair = this.client.pair(pairAddress);
     const feeState = await pair.getFeeState();
 
@@ -44,6 +48,9 @@ export class FeeModule {
    * Get the fee for a specific token pair via the Router.
    */
   async getFeeForPair(tokenA: string, tokenB: string): Promise<number> {
+    validateAddress(tokenA, 'tokenA');
+    validateAddress(tokenB, 'tokenB');
+
     return this.client.router.getDynamicFee(tokenA, tokenB);
   }
 
@@ -65,6 +72,9 @@ export class FeeModule {
     pairAddress: string,
     amountIn: bigint,
   ): Promise<{ feeBps: number; feeAmount: bigint }> {
+    validateAddress(pairAddress, 'pairAddress');
+    validatePositiveAmount(amountIn, 'amountIn');
+
     const pair = this.client.pair(pairAddress);
     const feeBps = await pair.getDynamicFee();
     const feeAmount = (amountIn * BigInt(feeBps)) / BigInt(10000);

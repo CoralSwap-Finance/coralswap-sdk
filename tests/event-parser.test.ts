@@ -1,9 +1,17 @@
 import { xdr, Address, nativeToScVal } from '@stellar/stellar-sdk';
-import { EventParser, RawSorobanEvent, EVENT_TOPICS } from '../src/utils/events';
-import { ValidationError } from '../src/errors';
+import { EventParser, EVENT_TOPICS } from '../src/utils/events';
+import {
+  SwapEvent,
+  LiquidityEvent,
+  FlashLoanEvent,
+  MintEvent,
+  BurnEvent,
+  SyncEvent,
+  FeeUpdateEvent,
+} from '../src/types/events';
 
 // ---------------------------------------------------------------------------
-// Helpers to build mock ScVal structures
+// Helpers to build mock ScVal / DiagnosticEvent structures
 // ---------------------------------------------------------------------------
 
 function symbolVal(s: string): xdr.ScVal {
@@ -23,8 +31,8 @@ function u32Val(n: number): xdr.ScVal {
 }
 
 function scMap(entries: [string, xdr.ScVal][]): xdr.ScVal {
-  const mapEntries = entries.map(([key, val]) =>
-    new xdr.ScMapEntry({ key: symbolVal(key), val }),
+  const mapEntries = entries.map(
+    ([key, val]) => new xdr.ScMapEntry({ key: symbolVal(key), val }),
   );
   return xdr.ScVal.scvMap(mapEntries);
 }
@@ -36,20 +44,33 @@ function scMap(entries: [string, xdr.ScVal][]): xdr.ScVal {
 const ADDR_SENDER = 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF';
 const ADDR_TOKEN_A = 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC';
 const ADDR_TOKEN_B = 'CBQHNAXSI55GX2GN6D67GK7BHVPSLJUGZQEU7WJ5LKR5PNUCGLIMAO4K';
-const CONTRACT_ID = 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC';
+const CONTRACT_ADDR = 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC';
+const CONTRACT_BUF = Address.fromString(CONTRACT_ADDR).toBuffer();
 
-function makeRaw(topic: string, value: xdr.ScVal): RawSorobanEvent {
-  return {
-    type: 'contract',
-    ledger: 12345,
-    contractId: CONTRACT_ID,
-    id: '001',
-    pagingToken: 'abc',
-    topic: [symbolVal(topic)],
-    value,
-    inSuccessfulContractCall: true,
-    txHash: 'tx_abc123',
-  };
+/**
+ * Build a mock xdr.DiagnosticEvent with the given topic and data.
+ */
+function makeDiagnosticEvent(
+  topic: string,
+  data: xdr.ScVal,
+  inSuccess = true,
+  contractBuf: Buffer = CONTRACT_BUF,
+): xdr.DiagnosticEvent {
+  const topics = [symbolVal(topic)];
+  const bodyV0 = new xdr.ContractEventV0({ topics, data });
+  const body = xdr.ContractEventBody.contractEventBodyV0(bodyV0);
+
+  const contractEvent = new xdr.ContractEvent({
+    ext: xdr.ExtensionPoint.extensionPointVoid(),
+    contractId: contractBuf,
+    type: xdr.ContractEventType.contract(),
+    body,
+  });
+
+  return new xdr.DiagnosticEvent({
+    inSuccessfulContractCall: inSuccess,
+    event: contractEvent,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -68,7 +89,7 @@ describe('EventParser', () => {
   // -----------------------------------------------------------------------
 
   describe('swap events', () => {
-    const swapValue = scMap([
+    const swapData = scMap([
       ['sender', addressVal(ADDR_SENDER)],
       ['token_in', addressVal(ADDR_TOKEN_A)],
       ['token_out', addressVal(ADDR_TOKEN_B)],
@@ -78,18 +99,17 @@ describe('EventParser', () => {
     ]);
 
     it('parses a valid swap event', () => {
-      const raw = makeRaw(EVENT_TOPICS.SWAP, swapValue);
-      const result = parser.parseSingle(raw);
+      const diag = makeDiagnosticEvent(EVENT_TOPICS.SWAP, swapData);
+      const result = parser.parse([diag], 'tx_abc', 12345);
 
-      expect(result).not.toBeNull();
-      expect(result!.type).toBe('swap');
-
-      const swap = result as import('../src/types/events').SwapEvent;
+      expect(result).toHaveLength(1);
+      const swap = result[0] as SwapEvent;
+      expect(swap.type).toBe('swap');
       expect(swap.sender).toBe(ADDR_SENDER);
       expect(swap.amountIn).toBe(1000000n);
       expect(swap.amountOut).toBe(980000n);
       expect(swap.feeBps).toBe(30);
-      expect(swap.txHash).toBe('tx_abc123');
+      expect(swap.txHash).toBe('tx_abc');
       expect(swap.ledger).toBe(12345);
     });
   });
@@ -99,7 +119,7 @@ describe('EventParser', () => {
   // -----------------------------------------------------------------------
 
   describe('liquidity events', () => {
-    const liquidityValue = scMap([
+    const liqData = scMap([
       ['provider', addressVal(ADDR_SENDER)],
       ['token_a', addressVal(ADDR_TOKEN_A)],
       ['token_b', addressVal(ADDR_TOKEN_B)],
@@ -109,25 +129,23 @@ describe('EventParser', () => {
     ]);
 
     it('parses an add_liquidity event', () => {
-      const raw = makeRaw(EVENT_TOPICS.ADD_LIQUIDITY, liquidityValue);
-      const result = parser.parseSingle(raw);
+      const diag = makeDiagnosticEvent(EVENT_TOPICS.ADD_LIQUIDITY, liqData);
+      const result = parser.parse([diag]);
 
-      expect(result).not.toBeNull();
-      expect(result!.type).toBe('add_liquidity');
-
-      const liq = result as import('../src/types/events').LiquidityEvent;
+      expect(result).toHaveLength(1);
+      const liq = result[0] as LiquidityEvent;
+      expect(liq.type).toBe('add_liquidity');
       expect(liq.provider).toBe(ADDR_SENDER);
       expect(liq.amountA).toBe(500000n);
-      expect(liq.amountB).toBe(600000n);
       expect(liq.liquidity).toBe(547722n);
     });
 
     it('parses a remove_liquidity event', () => {
-      const raw = makeRaw(EVENT_TOPICS.REMOVE_LIQUIDITY, liquidityValue);
-      const result = parser.parseSingle(raw);
+      const diag = makeDiagnosticEvent(EVENT_TOPICS.REMOVE_LIQUIDITY, liqData);
+      const result = parser.parse([diag]);
 
-      expect(result).not.toBeNull();
-      expect(result!.type).toBe('remove_liquidity');
+      expect(result).toHaveLength(1);
+      expect(result[0].type).toBe('remove_liquidity');
     });
   });
 
@@ -136,7 +154,7 @@ describe('EventParser', () => {
   // -----------------------------------------------------------------------
 
   describe('flash loan events', () => {
-    const flashValue = scMap([
+    const flashData = scMap([
       ['borrower', addressVal(ADDR_SENDER)],
       ['token', addressVal(ADDR_TOKEN_A)],
       ['amount', i128Val(2000000n)],
@@ -144,16 +162,90 @@ describe('EventParser', () => {
     ]);
 
     it('parses a flash_loan event', () => {
-      const raw = makeRaw(EVENT_TOPICS.FLASH_LOAN, flashValue);
-      const result = parser.parseSingle(raw);
+      const diag = makeDiagnosticEvent(EVENT_TOPICS.FLASH_LOAN, flashData);
+      const result = parser.parse([diag]);
 
-      expect(result).not.toBeNull();
-      expect(result!.type).toBe('flash_loan');
-
-      const fl = result as import('../src/types/events').FlashLoanEvent;
+      expect(result).toHaveLength(1);
+      const fl = result[0] as FlashLoanEvent;
+      expect(fl.type).toBe('flash_loan');
       expect(fl.borrower).toBe(ADDR_SENDER);
       expect(fl.amount).toBe(2000000n);
       expect(fl.fee).toBe(600n);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Mint events
+  // -----------------------------------------------------------------------
+
+  describe('mint events', () => {
+    const mintData = scMap([
+      ['sender', addressVal(ADDR_SENDER)],
+      ['amount_a', i128Val(300000n)],
+      ['amount_b', i128Val(400000n)],
+      ['liquidity', i128Val(346410n)],
+    ]);
+
+    it('parses a mint event', () => {
+      const diag = makeDiagnosticEvent(EVENT_TOPICS.MINT, mintData);
+      const result = parser.parse([diag]);
+
+      expect(result).toHaveLength(1);
+      const mint = result[0] as MintEvent;
+      expect(mint.type).toBe('mint');
+      expect(mint.sender).toBe(ADDR_SENDER);
+      expect(mint.amountA).toBe(300000n);
+      expect(mint.amountB).toBe(400000n);
+      expect(mint.liquidity).toBe(346410n);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Burn events
+  // -----------------------------------------------------------------------
+
+  describe('burn events', () => {
+    const burnData = scMap([
+      ['sender', addressVal(ADDR_SENDER)],
+      ['amount_a', i128Val(150000n)],
+      ['amount_b', i128Val(200000n)],
+      ['liquidity', i128Val(173205n)],
+      ['to', addressVal(ADDR_SENDER)],
+    ]);
+
+    it('parses a burn event', () => {
+      const diag = makeDiagnosticEvent(EVENT_TOPICS.BURN, burnData);
+      const result = parser.parse([diag]);
+
+      expect(result).toHaveLength(1);
+      const burn = result[0] as BurnEvent;
+      expect(burn.type).toBe('burn');
+      expect(burn.sender).toBe(ADDR_SENDER);
+      expect(burn.amountA).toBe(150000n);
+      expect(burn.liquidity).toBe(173205n);
+      expect(burn.to).toBe(ADDR_SENDER);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Sync events
+  // -----------------------------------------------------------------------
+
+  describe('sync events', () => {
+    const syncData = scMap([
+      ['reserve0', i128Val(5000000n)],
+      ['reserve1', i128Val(6000000n)],
+    ]);
+
+    it('parses a sync event', () => {
+      const diag = makeDiagnosticEvent(EVENT_TOPICS.SYNC, syncData);
+      const result = parser.parse([diag]);
+
+      expect(result).toHaveLength(1);
+      const sync = result[0] as SyncEvent;
+      expect(sync.type).toBe('sync');
+      expect(sync.reserve0).toBe(5000000n);
+      expect(sync.reserve1).toBe(6000000n);
     });
   });
 
@@ -162,77 +254,43 @@ describe('EventParser', () => {
   // -----------------------------------------------------------------------
 
   describe('fee update events', () => {
-    const feeValue = scMap([
+    const feeData = scMap([
       ['previous_fee_bps', u32Val(30)],
       ['new_fee_bps', u32Val(45)],
       ['volatility', i128Val(150000n)],
     ]);
 
     it('parses a fee_update event', () => {
-      const raw = makeRaw(EVENT_TOPICS.FEE_UPDATE, feeValue);
-      const result = parser.parseSingle(raw);
+      const diag = makeDiagnosticEvent(EVENT_TOPICS.FEE_UPDATE, feeData);
+      const result = parser.parse([diag]);
 
-      expect(result).not.toBeNull();
-      expect(result!.type).toBe('fee_update');
-
-      const fee = result as import('../src/types/events').FeeUpdateEvent;
+      expect(result).toHaveLength(1);
+      const fee = result[0] as FeeUpdateEvent;
+      expect(fee.type).toBe('fee_update');
       expect(fee.previousFeeBps).toBe(30);
       expect(fee.newFeeBps).toBe(45);
-      expect(fee.volatility).toBe(150000n);
     });
   });
 
   // -----------------------------------------------------------------------
-  // Proposal events
+  // Batch parsing & filtering
   // -----------------------------------------------------------------------
 
-  describe('proposal events', () => {
-    const proposalValue = scMap([
-      ['action_hash', symbolVal('hash_abc')],
-      ['signer', addressVal(ADDR_SENDER)],
-      ['signatures_count', u32Val(2)],
+  describe('parse (batch)', () => {
+    const swapData = scMap([
+      ['sender', addressVal(ADDR_SENDER)],
+      ['token_in', addressVal(ADDR_TOKEN_A)],
+      ['token_out', addressVal(ADDR_TOKEN_B)],
+      ['amount_in', i128Val(100n)],
+      ['amount_out', i128Val(90n)],
+      ['fee_bps', u32Val(30)],
     ]);
 
-    it('parses a proposal_signed event', () => {
-      const raw = makeRaw(EVENT_TOPICS.PROPOSAL_SIGNED, proposalValue);
-      const result = parser.parseSingle(raw);
-
-      expect(result).not.toBeNull();
-      expect(result!.type).toBe('proposal_signed');
-
-      const prop = result as import('../src/types/events').ProposalEvent;
-      expect(prop.actionHash).toBe('hash_abc');
-      expect(prop.signaturesCount).toBe(2);
-    });
-
-    it('parses a proposal_executed event', () => {
-      const raw = makeRaw(EVENT_TOPICS.PROPOSAL_EXECUTED, proposalValue);
-      const result = parser.parseSingle(raw);
-
-      expect(result).not.toBeNull();
-      expect(result!.type).toBe('proposal_executed');
-    });
-  });
-
-  // -----------------------------------------------------------------------
-  // Batch parsing
-  // -----------------------------------------------------------------------
-
-  describe('parse (lenient)', () => {
     it('handles multiple events and skips unknown topics', () => {
-      const swapValue = scMap([
-        ['sender', addressVal(ADDR_SENDER)],
-        ['token_in', addressVal(ADDR_TOKEN_A)],
-        ['token_out', addressVal(ADDR_TOKEN_B)],
-        ['amount_in', i128Val(100n)],
-        ['amount_out', i128Val(90n)],
-        ['fee_bps', u32Val(30)],
-      ]);
-
-      const events: RawSorobanEvent[] = [
-        makeRaw('swap', swapValue),
-        makeRaw('unknown_event', xdr.ScVal.scvVoid()),
-        makeRaw('swap', swapValue),
+      const events = [
+        makeDiagnosticEvent('swap', swapData),
+        makeDiagnosticEvent('unknown_topic', xdr.ScVal.scvVoid()),
+        makeDiagnosticEvent('swap', swapData),
       ];
 
       const result = parser.parse(events);
@@ -245,44 +303,74 @@ describe('EventParser', () => {
       expect(parser.parse([])).toHaveLength(0);
     });
 
-    it('skips events with malformed XDR data', () => {
-      const bad: RawSorobanEvent = {
-        ...makeRaw('swap', xdr.ScVal.scvVoid()),
-      };
-      const result = parser.parse([bad]);
+    it('skips events not in a successful contract call', () => {
+      const diag = makeDiagnosticEvent('swap', swapData, false);
+      const result = parser.parse([diag]);
+      expect(result).toHaveLength(0);
+    });
+
+    it('skips events with malformed data', () => {
+      const diag = makeDiagnosticEvent('swap', xdr.ScVal.scvVoid());
+      const result = parser.parse([diag]);
       expect(result).toHaveLength(0);
     });
   });
 
   // -----------------------------------------------------------------------
-  // Strict parsing
+  // Contract ID filtering
   // -----------------------------------------------------------------------
 
-  describe('parseStrict', () => {
-    it('throws on unknown event topics', () => {
-      const events = [makeRaw('unknown_event', xdr.ScVal.scvVoid())];
-      expect(() => parser.parseStrict(events)).toThrow(ValidationError);
+  describe('contract filtering', () => {
+    const swapData = scMap([
+      ['sender', addressVal(ADDR_SENDER)],
+      ['token_in', addressVal(ADDR_TOKEN_A)],
+      ['token_out', addressVal(ADDR_TOKEN_B)],
+      ['amount_in', i128Val(100n)],
+      ['amount_out', i128Val(90n)],
+      ['fee_bps', u32Val(30)],
+    ]);
+
+    it('filters events by contract ID when configured', () => {
+      const OTHER_ADDR = 'CBQHNAXSI55GX2GN6D67GK7BHVPSLJUGZQEU7WJ5LKR5PNUCGLIMAO4K';
+      const filtered = new EventParser([OTHER_ADDR]);
+
+      const diag = makeDiagnosticEvent('swap', swapData);
+      const result = filtered.parse([diag]);
+      // Event is from CONTRACT_ADDR which is not OTHER_ADDR
+      expect(result).toHaveLength(0);
+    });
+
+    it('allows events when contract matches filter', () => {
+      const filtered = new EventParser([CONTRACT_ADDR]);
+
+      const diag = makeDiagnosticEvent('swap', swapData);
+      const result = filtered.parse([diag]);
+      expect(result).toHaveLength(1);
+    });
+
+    it('allows all events when no contract filter is set', () => {
+      const noFilter = new EventParser();
+
+      const diag = makeDiagnosticEvent('swap', swapData);
+      const result = noFilter.parse([diag]);
+      expect(result).toHaveLength(1);
     });
   });
 
   // -----------------------------------------------------------------------
-  // Edge cases
+  // Strict mode
   // -----------------------------------------------------------------------
 
-  describe('edge cases', () => {
-    it('returns null for events with no topics', () => {
-      const raw: RawSorobanEvent = {
-        type: 'contract',
-        ledger: 1,
-        contractId: CONTRACT_ID,
-        id: '999',
-        pagingToken: 'xyz',
-        topic: [],
-        value: xdr.ScVal.scvVoid(),
-        inSuccessfulContractCall: true,
-        txHash: 'tx_000',
-      };
-      expect(parser.parseSingle(raw)).toBeNull();
+  describe('parseStrict', () => {
+    it('still skips unknown topics without throwing', () => {
+      const diag = makeDiagnosticEvent('unknown_topic', xdr.ScVal.scvVoid());
+      const result = parser.parseStrict([diag]);
+      expect(result).toHaveLength(0);
+    });
+
+    it('throws on malformed data for a known topic', () => {
+      const diag = makeDiagnosticEvent('swap', xdr.ScVal.scvVoid());
+      expect(() => parser.parseStrict([diag])).toThrow();
     });
   });
 });

@@ -62,3 +62,35 @@ export interface SwapResult {
   ledger: number;
   timestamp: number;
 }
+
+/**
+ * Request parameters for a multi-hop swap.
+ *
+ * Unlike SwapRequest, `path` is required and must contain 3+ token addresses
+ * describing the routing path (e.g. [tokenA, tokenB, tokenC]).
+ */
+export interface MultiHopSwapRequest {
+  /** Ordered token addresses describing the route (minimum 3). */
+  path: string[];
+  /** Input amount (in tokenIn's smallest unit). */
+  amount: bigint;
+  /** Trade direction — only EXACT_IN is supported for multi-hop. */
+  tradeType: TradeType;
+  /** Slippage tolerance in basis points. */
+  slippageBps?: number;
+  /** Deadline as Unix timestamp. */
+  deadline?: number;
+  /** Recipient address (defaults to sender). */
+  to?: string;
+}
+
+/**
+ * Multi-hop swap quote with per-hop breakdown.
+ *
+ * Extends the standard SwapQuote with an ordered `hops` array containing
+ * the calculation result for each consecutive pair in the route.
+ */
+export interface MultiHopSwapQuote extends SwapQuote {
+  /** Per-hop breakdown in path order. */
+  hops: HopResult[];
+}

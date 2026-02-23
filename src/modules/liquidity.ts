@@ -8,6 +8,13 @@ import {
 import { LPPosition } from '../types/pool';
 import { PRECISION } from '../config';
 import { TransactionError, ValidationError } from '../errors';
+import {
+  validateAddress,
+  validatePositiveAmount,
+  validateNonNegativeAmount,
+  validateDistinctTokens,
+} from '../utils/validation';
+
 
 /**
  * Liquidity module -- manages LP positions in CoralSwap pools.
@@ -30,6 +37,11 @@ export class LiquidityModule {
     tokenB: string,
     amountADesired: bigint,
   ): Promise<AddLiquidityQuote> {
+    validateAddress(tokenA, 'tokenA');
+    validateAddress(tokenB, 'tokenB');
+    validateDistinctTokens(tokenA, tokenB);
+    validatePositiveAmount(amountADesired, 'amountADesired');
+
     const pairAddress = await this.client.getPairAddress(tokenA, tokenB);
 
     if (!pairAddress) {
@@ -77,6 +89,28 @@ export class LiquidityModule {
    * Execute an add-liquidity transaction via the Router.
    */
   async addLiquidity(request: AddLiquidityRequest): Promise<LiquidityResult> {
+    validateAddress(request.tokenA, 'tokenA');
+    validateAddress(request.tokenB, 'tokenB');
+    validateDistinctTokens(request.tokenA, request.tokenB);
+    validateAddress(request.to, 'to');
+    validatePositiveAmount(request.amountADesired, 'amountADesired');
+    validatePositiveAmount(request.amountBDesired, 'amountBDesired');
+    validateNonNegativeAmount(request.amountAMin, 'amountAMin');
+    validateNonNegativeAmount(request.amountBMin, 'amountBMin');
+    
+    if (request.amountAMin > request.amountADesired) {
+      throw new ValidationError('amountAMin must not exceed amountADesired', {
+        amountAMin: request.amountAMin.toString(),
+        amountADesired: request.amountADesired.toString(),
+      });
+    }
+    if (request.amountBMin > request.amountBDesired) {
+      throw new ValidationError('amountBMin must not exceed amountBDesired', {
+        amountBMin: request.amountBMin.toString(),
+        amountBDesired: request.amountBDesired.toString(),
+      });
+    }
+
     const deadline = request.deadline ?? this.client.getDeadline();
 
     const op = this.client.router.buildAddLiquidity(
@@ -112,6 +146,14 @@ export class LiquidityModule {
    * Execute a remove-liquidity transaction via the Router.
    */
   async removeLiquidity(request: RemoveLiquidityRequest): Promise<LiquidityResult> {
+    validateAddress(request.tokenA, 'tokenA');
+    validateAddress(request.tokenB, 'tokenB');
+    validateDistinctTokens(request.tokenA, request.tokenB);
+    validateAddress(request.to, 'to');
+    validatePositiveAmount(request.liquidity, 'liquidity');
+    validateNonNegativeAmount(request.amountAMin, 'amountAMin');
+    validateNonNegativeAmount(request.amountBMin, 'amountBMin');
+
     const deadline = request.deadline ?? this.client.getDeadline();
 
     const op = this.client.router.buildRemoveLiquidity(
