@@ -61,6 +61,7 @@ export {
   FlashLoanModule,
   FeeModule,
   OracleModule,
+  TokenListModule,
 } from './modules';
 export type { TWAPObservation, TWAPResult } from './modules';
 
@@ -95,6 +96,7 @@ export {
   validateSlippage,
   validateDistinctTokens,
 } from './utils';
+
 export type { RetryConfig } from './utils';
 
 // Errors
