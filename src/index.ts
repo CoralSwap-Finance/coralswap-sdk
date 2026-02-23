@@ -61,6 +61,7 @@ export {
   FlashLoanModule,
   FeeModule,
   OracleModule,
+  TokenListModule,
 } from './modules';
 export type { TWAPObservation, TWAPResult } from './modules';
 

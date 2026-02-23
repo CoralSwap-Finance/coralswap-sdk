@@ -12,6 +12,7 @@ import { FactoryClient } from './contracts/factory';
 import { PairClient } from './contracts/pair';
 import { RouterClient } from './contracts/router';
 import { LPTokenClient } from './contracts/lp-token';
+import { TokenListModule } from './modules/tokens';
 
 /**
  * Default signer implementation that wraps a Stellar Keypair.
@@ -183,6 +184,13 @@ export class CoralSwapClient {
       this.networkConfig.rpcUrl,
       this.networkConfig.networkPassphrase,
     );
+  }
+
+  /**
+   * Create a TokenListModule for fetching and validating token lists.
+   */
+  tokens(): TokenListModule {
+    return new TokenListModule(this);
   }
 
   /**
