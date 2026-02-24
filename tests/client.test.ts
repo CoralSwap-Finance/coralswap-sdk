@@ -13,7 +13,7 @@ const mockTx = {
 // Mock TransactionBuilder
 jest.mock('@stellar/stellar-sdk', () => {
   const actual = jest.requireActual('@stellar/stellar-sdk');
-  
+
   const MockTransactionBuilder = jest.fn().mockImplementation(() => ({
     addOperation: jest.fn().mockReturnThis(),
     setTimeout: jest.fn().mockReturnThis(),

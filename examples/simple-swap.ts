@@ -51,4 +51,3 @@ main().catch((err) => {
   console.error('Error running simple-swap example:', err);
   process.exit(1);
 });
-

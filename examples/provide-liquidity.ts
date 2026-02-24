@@ -53,4 +53,3 @@ main().catch((err) => {
   console.error('Error running provide-liquidity example:', err);
   process.exit(1);
 });
-

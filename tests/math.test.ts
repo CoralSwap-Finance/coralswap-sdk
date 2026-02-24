@@ -85,10 +85,10 @@ describe('Fraction', () => {
     it('handles rounding edge cases', () => {
       // 0.0999 -> 0.10 with 2 sig figs
       expect(new Fraction(999, 10000).toSignificant(2)).toBe('0.10');
-      
+
       // 0.00999 -> 0.010 with 2 sig figs
       expect(new Fraction(999, 100000).toSignificant(2)).toBe('0.010');
-      
+
       // 99.9 -> 100 with 2 sig figs
       expect(new Fraction(999, 10).toSignificant(2)).toBe('100');
     });
