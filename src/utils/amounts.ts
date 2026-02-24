@@ -72,6 +72,27 @@ export function applyBps(amount: bigint, bps: number): bigint {
 }
 
 /**
+ * Calculate slippage-adjusted amount using basis points.
+ *
+ * - `isInput = false`: returns minimum output amount
+ * - `isInput = true`: returns maximum input amount
+ */
+export function getSlippageTolerance(
+  amount: bigint,
+  slippageBips: bigint,
+  isInput: boolean,
+): bigint {
+  if (slippageBips < 0n || slippageBips > PRECISION.BPS_DENOMINATOR) {
+    throw new Error('Slippage bips must be between 0 and 10000');
+  }
+
+  const bps = PRECISION.BPS_DENOMINATOR;
+  const multiplier = isInput ? bps + slippageBips : bps - slippageBips;
+
+  return (amount * multiplier) / bps;
+}
+
+/**
  * Calculate percentage difference between two amounts.
  */
 export function percentDiff(a: bigint, b: bigint): number {
