@@ -2,16 +2,49 @@ import {
   Keypair,
   SorobanRpc,
   TransactionBuilder,
-  Networks,
+  Transaction,
   xdr,
-  Account,
 } from '@stellar/stellar-sdk';
 import { CoralSwapConfig, NetworkConfig, NETWORK_CONFIGS, DEFAULTS } from './config';
-import { Network, TxStatus, Result } from './types/common';
+import { Network, Result, Logger, Signer } from './types/common';
+import { SignerError } from './errors';
 import { FactoryClient } from './contracts/factory';
 import { PairClient } from './contracts/pair';
 import { RouterClient } from './contracts/router';
 import { LPTokenClient } from './contracts/lp-token';
+import { TokenListModule } from './modules/tokens';
+
+/**
+ * Default signer implementation that wraps a Stellar Keypair.
+ *
+ * Used internally when the client is constructed with a secret key string
+ * for backward compatibility.
+ */
+export class KeypairSigner implements Signer {
+  private readonly keypair: Keypair;
+  private readonly networkPassphrase: string;
+
+  /** The public key, available synchronously for backward compatibility. */
+  readonly publicKeySync: string;
+
+  constructor(secretKey: string, networkPassphrase: string) {
+    this.keypair = Keypair.fromSecret(secretKey);
+    this.networkPassphrase = networkPassphrase;
+    this.publicKeySync = this.keypair.publicKey();
+  }
+
+  /** Return the public key derived from the secret key. */
+  async publicKey(): Promise<string> {
+    return this.publicKeySync;
+  }
+
+  /** Sign the transaction XDR and return the signed XDR. */
+  async signTransaction(txXdr: string): Promise<string> {
+    const tx = new Transaction(txXdr, this.networkPassphrase);
+    tx.sign(this.keypair);
+    return tx.toXDR();
+  }
+}
 
 /**
  * Main entry point for the CoralSwap SDK.
@@ -25,10 +58,19 @@ export class CoralSwapClient {
   readonly networkConfig: NetworkConfig;
   readonly server: SorobanRpc.Server;
 
-  private keypair: Keypair | null = null;
+  private signer: Signer | null = null;
+  private _publicKeyCache: string | null = null;
   private _factory: FactoryClient | null = null;
   private _router: RouterClient | null = null;
+  private readonly logger?: Logger;
 
+  /**
+   * Create a new CoralSwapClient.
+   *
+   * @param config - SDK configuration. Provide `secretKey` for the built-in
+   *   KeypairSigner, or pass a `signer` implementing the {@link Signer}
+   *   interface for external wallets (Freighter, Albedo, etc.).
+   */
   constructor(config: CoralSwapConfig) {
     this.config = {
       defaultSlippageBps: DEFAULTS.slippageBps,
@@ -46,18 +88,46 @@ export class CoralSwapClient {
 
     this.server = new SorobanRpc.Server(this.networkConfig.rpcUrl);
 
-    if (config.secretKey) {
-      this.keypair = Keypair.fromSecret(config.secretKey);
+    if (config.signer) {
+      this.signer = config.signer;
+    } else if (config.secretKey) {
+      const kpSigner = new KeypairSigner(config.secretKey, this.networkConfig.networkPassphrase);
+      this.signer = kpSigner;
+      this._publicKeyCache = kpSigner.publicKeySync;
     }
+
+    this.logger = config.logger;
   }
 
   /**
    * Get the public key of the configured signer.
+   *
+   * For synchronous access, the key is resolved on first call to
+   * {@link resolvePublicKey} and cached. Falls back to config values.
    */
   get publicKey(): string {
+    if (this._publicKeyCache) return this._publicKeyCache;
     if (this.config.publicKey) return this.config.publicKey;
-    if (this.keypair) return this.keypair.publicKey();
-    throw new Error('No signing key configured');
+    throw new SignerError();
+  }
+
+  /**
+   * Resolve the public key from the signer asynchronously and cache it.
+   *
+   * Must be called at least once before using {@link publicKey} when
+   * an external signer is provided without an explicit `publicKey` in config.
+   */
+  async resolvePublicKey(): Promise<string> {
+    if (this._publicKeyCache) return this._publicKeyCache;
+    if (this.config.publicKey) {
+      this._publicKeyCache = this.config.publicKey;
+      return this._publicKeyCache;
+    }
+    if (this.signer) {
+      this._publicKeyCache = await this.signer.publicKey();
+      return this._publicKeyCache;
+    }
+    throw new SignerError();
   }
 
   /**
@@ -117,6 +187,13 @@ export class CoralSwapClient {
   }
 
   /**
+   * Create a TokenListModule for fetching and validating token lists.
+   */
+  tokens(): TokenListModule {
+    return new TokenListModule(this);
+  }
+
+  /**
    * Lookup the pair address for a token pair via the factory.
    */
   async getPairAddress(tokenA: string, tokenB: string): Promise<string | null> {
@@ -131,8 +208,11 @@ export class CoralSwapClient {
     source?: string,
   ): Promise<Result<{ txHash: string; ledger: number }>> {
     try {
-      const sourceKey = source ?? this.publicKey;
+      const sourceKey = source ?? await this.resolvePublicKey();
+
+      this.logger?.debug('getAccount: fetching account', { sourceKey });
       const account = await this.server.getAccount(sourceKey);
+      this.logger?.debug('getAccount: success', { sourceKey });
 
       let builder = new TransactionBuilder(account, {
         fee: '100',
@@ -145,8 +225,13 @@ export class CoralSwapClient {
 
       const tx = builder.setTimeout(this.networkConfig.sorobanTimeout).build();
 
+      this.logger?.debug('simulateTransaction: simulating', {
+        sourceKey,
+        operationCount: operations.length,
+      });
       const sim = await this.server.simulateTransaction(tx);
       if (!SorobanRpc.Api.isSimulationSuccess(sim)) {
+        this.logger?.error('simulateTransaction: simulation failed', { simulation: sim });
         return {
           success: false,
           error: {
@@ -156,24 +241,30 @@ export class CoralSwapClient {
           },
         };
       }
+      this.logger?.debug('simulateTransaction: success');
 
       const preparedTx = SorobanRpc.assembleTransaction(tx, sim).build();
 
-      if (this.keypair) {
-        preparedTx.sign(this.keypair);
-      } else {
+      if (!this.signer) {
         return {
           success: false,
           error: {
             code: 'NO_SIGNER',
-            message: 'No signing key configured. Use signAndSubmit with an external signer.',
+            message: 'No signing key configured. Provide secretKey or a Signer instance.',
           },
         };
       }
 
-      const response = await this.server.sendTransaction(preparedTx);
+      const signedXdr = await this.signer.signTransaction(preparedTx.toXDR());
+      const signedTx = new Transaction(
+        signedXdr,
+        this.networkConfig.networkPassphrase,
+      );
+
+      const response = await this.server.sendTransaction(signedTx);
 
       if (response.status === 'ERROR') {
+        this.logger?.error('sendTransaction: submission failed', { response });
         return {
           success: false,
           error: {
@@ -184,9 +275,11 @@ export class CoralSwapClient {
         };
       }
 
+      this.logger?.info('sendTransaction: submitted', { txHash: response.hash });
       const result = await this.pollTransaction(response.hash);
       return result;
     } catch (err) {
+      this.logger?.error('submitTransaction: unexpected error', err);
       return {
         success: false,
         error: {
@@ -208,9 +301,18 @@ export class CoralSwapClient {
     const retryDelay = this.config.retryDelayMs ?? DEFAULTS.retryDelayMs;
 
     for (let attempt = 0; attempt < maxRetries * 10; attempt++) {
+      this.logger?.debug('pollTransaction: polling attempt', {
+        txHash,
+        attempt: attempt + 1,
+        maxAttempts: maxRetries * 10,
+      });
       const status = await this.server.getTransaction(txHash);
 
       if (status.status === 'SUCCESS') {
+        this.logger?.info('pollTransaction: confirmed', {
+          txHash,
+          ledger: status.ledger,
+        });
         return {
           success: true,
           data: {
@@ -222,6 +324,10 @@ export class CoralSwapClient {
       }
 
       if (status.status === 'FAILED') {
+        this.logger?.error('pollTransaction: transaction failed on-chain', {
+          txHash,
+          status,
+        });
         return {
           success: false,
           error: {
@@ -236,6 +342,10 @@ export class CoralSwapClient {
       await new Promise((resolve) => setTimeout(resolve, retryDelay));
     }
 
+    this.logger?.error('pollTransaction: timed out', {
+      txHash,
+      attempts: maxRetries * 10,
+    });
     return {
       success: false,
       error: {
@@ -254,6 +364,8 @@ export class CoralSwapClient {
     source?: string,
   ): Promise<SorobanRpc.Api.SimulateTransactionResponse> {
     const sourceKey = source ?? this.publicKey;
+
+    this.logger?.debug('simulateTransaction (dry-run): fetching account', { sourceKey });
     const account = await this.server.getAccount(sourceKey);
 
     let builder = new TransactionBuilder(account, {
@@ -266,7 +378,14 @@ export class CoralSwapClient {
     }
 
     const tx = builder.setTimeout(30).build();
-    return this.server.simulateTransaction(tx);
+
+    this.logger?.debug('simulateTransaction (dry-run): simulating', {
+      sourceKey,
+      operationCount: operations.length,
+    });
+    const sim = await this.server.simulateTransaction(tx);
+    this.logger?.debug('simulateTransaction (dry-run): completed');
+    return sim;
   }
 
   /**

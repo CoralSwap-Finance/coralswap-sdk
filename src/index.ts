@@ -27,7 +27,7 @@
  */
 
 // Core client
-export { CoralSwapClient } from './client';
+export { CoralSwapClient, KeypairSigner } from './client';
 
 // Configuration
 export {
@@ -40,6 +40,7 @@ export {
 
 // Type exports
 export * from './types';
+export type { Logger } from './types/common';
 
 // Contract clients
 export {
@@ -60,6 +61,7 @@ export {
   FlashLoanModule,
   FeeModule,
   OracleModule,
+  TokenListModule,
 } from './modules';
 export type { TWAPObservation, TWAPResult } from './modules';
 
@@ -88,7 +90,13 @@ export {
   withRetry,
   isRetryable,
   sleep,
+  validateAddress,
+  validatePositiveAmount,
+  validateNonNegativeAmount,
+  validateSlippage,
+  validateDistinctTokens,
 } from './utils';
+
 export type { RetryConfig } from './utils';
 
 // Errors

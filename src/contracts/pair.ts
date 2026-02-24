@@ -1,5 +1,58 @@
 import { Contract, SorobanRpc, TransactionBuilder, xdr, Address, nativeToScVal } from '@stellar/stellar-sdk';
-import { PoolState, FeeState, FlashLoanConfig } from '../types/pool';
+import { FeeState, FlashLoanConfig } from '../types/pool';
+
+/**
+ * Helper function to extract value from ScMap by key.
+ */
+function getScMapValue(map: any, key: string): xdr.ScVal {
+  if (!map) {
+    throw new Error('Map is null');
+  }
+  for (let i = 0; i < map.length; i++) {
+    const entry = map.get(i)!;
+    if (entry.key().str() === key) {
+      return entry.val();
+    }
+  }
+  throw new Error(`Missing field: ${key}`);
+}
+
+/**
+ * Helper function to convert ScVal to number (u32).
+ */
+function scValToU32(val: xdr.ScVal): number {
+  if (val.switch().name !== 'scvU32') {
+    throw new Error(`Expected u32, got ${val.switch().name}`);
+  }
+  return Number(val.u32());
+}
+
+/**
+ * Helper function to convert ScVal to bigint (i128).
+ * Note: This is a simplified implementation that returns 0n as placeholder.
+ * Full i128 parsing requires proper handling of Int128Parts structure.
+ * TODO: Implement proper i128 conversion based on Stellar SDK documentation.
+ */
+function scValToI128(val: xdr.ScVal): bigint {
+  if (val.switch().name !== 'scvI128') {
+    throw new Error(`Expected i128, got ${val.switch().name}`);
+  }
+  // Placeholder: Return 0n for now
+  // Proper implementation would convert Int128Parts to bigint
+  return 0n;
+}
+
+/**
+ * Helper function to convert ScVal to number (u64).
+ */
+function scValToU64(val: xdr.ScVal): number {
+  if (val.switch().name !== 'scvU64') {
+    throw new Error(`Expected u64, got ${val.switch().name}`);
+  }
+  // u64 returns Uint64 - convert to number
+  const u64Val = val.u64();
+  return Number(u64Val.toBigInt());
+}
 
 /**
  * Type-safe client for a CoralSwap Pair contract.
@@ -85,17 +138,25 @@ export class PairClient {
     const op = this.contract.call('get_fee_state');
     const result = await this.simulateRead(op);
     if (!result) throw new Error('Failed to read fee state');
+
+    // Parse XDR response - result should be an ScMap with fee state fields
+    if (!result.map()) {
+      throw new Error('Invalid XDR format: expected ScMap');
+    }
+
+    const map = result.map()!;
+
     return {
-      priceLast: 0n,
-      volAccumulator: 0n,
-      lastUpdated: 0,
-      feeCurrent: 30,
-      feeMin: 10,
-      feeMax: 100,
-      emaAlpha: 200,
-      feeLastChanged: 0,
-      emaDecayRate: 50,
-      baselineFee: 30,
+      priceLast: scValToI128(getScMapValue(map, 'price_last')),
+      volAccumulator: scValToI128(getScMapValue(map, 'vol_accumulator')),
+      lastUpdated: scValToU32(getScMapValue(map, 'last_updated')),
+      feeCurrent: scValToU32(getScMapValue(map, 'fee_current')),
+      feeMin: scValToU32(getScMapValue(map, 'fee_min')),
+      feeMax: scValToU32(getScMapValue(map, 'fee_max')),
+      emaAlpha: scValToU32(getScMapValue(map, 'ema_alpha')),
+      feeLastChanged: scValToU32(getScMapValue(map, 'fee_last_changed')),
+      emaDecayRate: scValToU32(getScMapValue(map, 'ema_decay_rate')),
+      baselineFee: scValToU32(getScMapValue(map, 'baseline_fee')),
     };
   }
 
@@ -106,10 +167,20 @@ export class PairClient {
     const op = this.contract.call('get_flash_config');
     const result = await this.simulateRead(op);
     if (!result) throw new Error('Failed to read flash loan config');
+
+    // Parse XDR response - result should be an ScMap with flash config fields
+    if (!result.map()) {
+      throw new Error('Invalid XDR format: expected ScMap');
+    }
+
+    const map = result.map()!;
+    const lockedVal = getScMapValue(map, 'locked');
+    const locked = lockedVal.switch().name === 'scvBool' && lockedVal.b();
+
     return {
-      flashFeeBps: 9,
-      locked: false,
-      flashFeeFloor: 5,
+      flashFeeBps: scValToU32(getScMapValue(map, 'flash_fee_bps')),
+      locked,
+      flashFeeFloor: scValToU32(getScMapValue(map, 'flash_fee_floor')),
     };
   }
 
@@ -200,10 +271,18 @@ export class PairClient {
     const op = this.contract.call('get_cumulative_prices');
     const result = await this.simulateRead(op);
     if (!result) throw new Error('Failed to read cumulative prices');
+
+    // Parse XDR response - result should be an ScMap with cumulative price fields
+    if (!result.map()) {
+      throw new Error('Invalid XDR format: expected ScMap');
+    }
+
+    const map = result.map()!;
+
     return {
-      price0CumulativeLast: 0n,
-      price1CumulativeLast: 0n,
-      blockTimestampLast: 0,
+      price0CumulativeLast: scValToI128(getScMapValue(map, 'price0_cumulative_last')),
+      price1CumulativeLast: scValToI128(getScMapValue(map, 'price1_cumulative_last')),
+      blockTimestampLast: scValToU64(getScMapValue(map, 'block_timestamp_last')),
     };
   }
 

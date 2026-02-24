@@ -4,7 +4,9 @@
   "description": "TypeScript SDK for CoralSwap -- contract-first AMM on Stellar/Soroban",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
-  "files": ["dist/**/*"],
+  "files": [
+    "dist/**/*"
+  ],
   "scripts": {
     "build": "tsc",
     "build:watch": "tsc --watch",
@@ -15,9 +17,21 @@
     "lint:fix": "eslint src/**/*.ts --fix",
     "clean": "rimraf dist",
     "prepare": "npm run build",
-    "prepublishOnly": "npm test && npm run lint"
+    "prepublishOnly": "npm test && npm run lint",
+    "examples:simple-swap": "ts-node examples/simple-swap.ts",
+    "examples:provide-liquidity": "ts-node examples/provide-liquidity.ts",
+    "examples:read-reserves": "ts-node examples/read-reserves.ts"
   },
-  "keywords": ["coralswap", "stellar", "soroban", "dex", "defi", "amm", "sdk", "typescript"],
+  "keywords": [
+    "coralswap",
+    "stellar",
+    "soroban",
+    "dex",
+    "defi",
+    "amm",
+    "sdk",
+    "typescript"
+  ],
   "author": "CoralSwap Finance",
   "license": "MIT",
   "repository": {
@@ -25,17 +39,20 @@
     "url": "https://github.com/CoralSwap-Finance/coralswap-sdk.git"
   },
   "dependencies": {
-    "@stellar/stellar-sdk": "^12.3.0"
+    "@stellar/stellar-sdk": "^12.3.0",
+    "zod": "^3.23.0"
   },
   "devDependencies": {
     "@types/jest": "^29.5.0",
     "@types/node": "^22.0.0",
     "@typescript-eslint/eslint-plugin": "^8.0.0",
     "@typescript-eslint/parser": "^8.0.0",
+    "dotenv": "^17.3.1",
     "eslint": "^9.0.0",
     "jest": "^29.7.0",
     "rimraf": "^6.0.0",
     "ts-jest": "^29.2.0",
+    "ts-node": "^10.9.2",
     "typescript": "^5.6.0"
   },
   "engines": {

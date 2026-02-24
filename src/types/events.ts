@@ -47,6 +47,38 @@ export interface FlashLoanEvent extends ContractEvent {
 }
 
 /**
+ * Mint event emitted when LP tokens are minted (liquidity added).
+ */
+export interface MintEvent extends ContractEvent {
+  type: 'mint';
+  sender: string;
+  amountA: bigint;
+  amountB: bigint;
+  liquidity: bigint;
+}
+
+/**
+ * Burn event emitted when LP tokens are burned (liquidity removed).
+ */
+export interface BurnEvent extends ContractEvent {
+  type: 'burn';
+  sender: string;
+  amountA: bigint;
+  amountB: bigint;
+  liquidity: bigint;
+  to: string;
+}
+
+/**
+ * Sync event emitted when reserves are updated.
+ */
+export interface SyncEvent extends ContractEvent {
+  type: 'sync';
+  reserve0: bigint;
+  reserve1: bigint;
+}
+
+/**
  * Fee update event from dynamic fee engine.
  */
 export interface FeeUpdateEvent extends ContractEvent {
@@ -73,5 +105,8 @@ export type CoralSwapEvent =
   | SwapEvent
   | LiquidityEvent
   | FlashLoanEvent
+  | MintEvent
+  | BurnEvent
+  | SyncEvent
   | FeeUpdateEvent
   | ProposalEvent;

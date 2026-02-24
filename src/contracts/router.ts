@@ -66,6 +66,32 @@ export class RouterClient {
   }
 
   /**
+   * Build a swap_exact_tokens_for_tokens operation for multi-hop routing.
+   *
+   * The full `path` vector (token addresses) is forwarded to the on-chain
+   * router, which iterates through each consecutive pair autonomously.
+   */
+  buildSwapExactTokensForTokens(
+    sender: string,
+    path: string[],
+    amountIn: bigint,
+    amountOutMin: bigint,
+    deadline: number,
+  ): xdr.Operation {
+    const pathVal = xdr.ScVal.scvVec(
+      path.map((addr) => nativeToScVal(Address.fromString(addr), { type: 'address' })),
+    );
+    return this.contract.call(
+      'swap_exact_tokens_for_tokens',
+      nativeToScVal(Address.fromString(sender), { type: 'address' }),
+      pathVal,
+      nativeToScVal(amountIn, { type: 'i128' }),
+      nativeToScVal(amountOutMin, { type: 'i128' }),
+      nativeToScVal(deadline, { type: 'u64' }),
+    );
+  }
+
+  /**
    * Build an add_liquidity operation via the router.
    */
   buildAddLiquidity(
