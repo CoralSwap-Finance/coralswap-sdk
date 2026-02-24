@@ -229,7 +229,7 @@ export class EventParser {
     const meta = response.resultMetaXdr;
     const v3 = meta.v3();
     const diagnosticEvents = v3.sorobanMeta()?.diagnosticEvents() ?? [];
-    const txHash = response.hash ?? '';
+    const txHash = (response as any).hash ?? '';
     const ledger = response.ledger ?? 0;
     return this.parse(diagnosticEvents, txHash, ledger);
   }

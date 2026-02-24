@@ -1,7 +1,6 @@
 import { LiquidityModule } from '../src/modules/liquidity';
 import { CoralSwapClient } from '../src/client';
 import { PairClient } from '../src/contracts/pair';
-import { LPTokenClient } from '../src/contracts/lp-token'; // assume it exists, or use whatever return type
 import { PRECISION } from '../src/config';
 import { ValidationError } from '../src/errors';
 
@@ -27,8 +26,8 @@ function createMockClient(overrides: {
     pairAddress = null,
     reserve0 = 0n,
     reserve1 = 0n,
-    token0 = 'TOKEN_A',
-    token1 = 'TOKEN_B',
+    token0 = 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM',
+    token1 = 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4',
     totalSupply = 0n,
   } = overrides;
 
@@ -36,7 +35,9 @@ function createMockClient(overrides: {
     getPairAddress: jest.fn().mockResolvedValue(pairAddress),
     pair: jest.fn().mockReturnValue({
       getReserves: jest.fn().mockResolvedValue({ reserve0, reserve1 }),
-      getTokens: jest.fn().mockRe      getTokens: jest.fn().mockRe      getTokenToken: jest.fn().mockReturnValue({
+      getTokens: jest.fn().mockResolvedValue({ token0, token1 }),
+    }),
+    lpToken: jest.fn().mockReturnValue({
       totalSupply: jest.fn().mockResolvedValue(totalSupply),
       balance: jest.fn().mockResolvedValue(0n),
     }),
@@ -106,29 +107,50 @@ describe('LiquidityModule', () => {
     });
 
     it('floors non-perfect square: sqrt(10n) returns 3n', () => {
-      expect(sqrtOf(module, 10n)).toBe(      expect(sq   it('throws ValidationErro      negative input', () => {
+      expect(sqrtOf(module, 10n)).toBe(3n);
+    });
+
+    it('throws ValidationError for negative input', () => {
       expect(() => sqrtOf(module, -1n)).toThrow(ValidationError);
       expect(() => sqrtOf(module, -1n)).toThrow('Square root of negative number');
     });
 
-    it('throws ValidationError for larg    it('throws ValidationError for larg    => sqrtOf(    it('throws ValidationError for ldat    it('throws ValidationError for lar------    it----------------------------------------------------
+    it('throws ValidationError for large negative input', () => {
+      expect(() => sqrtOf(module, -(10n ** 18n))).toThrow(ValidationError);
+    });
+  });
+
+  // -----------------------------------------------------------------------
   // getAddLiquidityQuote()
-  // -  // -  // -  // -  // -  // -  // -  // -  // -  // -  /--  // ----  // -  // -  // -  // -  // -  // -  // -  // -  // -  //TOKEN_A  // -  // -  // -  // -  // -  // -  // B';
-    const PAIR_ADDRESS = 'PAIR_CONTRACT';
+  // -----------------------------------------------------------------------
+  describe('getAddLiquidityQuote()', () => {
+    const TOKEN_A = 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM';
+    const TOKEN_B = 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4';
+    const PAIR_ADDRESS = 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM';
 
-    // -- First liquidity pro    // -- First liquidity pro    // -------    
+    // -- First liquidity provider (no existing pair) ----------------------
 
-                                                                        it('returns desired amounts as-is for both token                                                                Address: null });
+    describe('first liquidity provider (no pair exists)', () => {
+      it('returns desired amounts as-is for both tokens', async () => {
+        const client = createMockClient({ pairAddress: null });
         const module = new LiquidityModule(client);
         const amount = 1_000_000n;
 
-        c        c        c        c        c        c        c        c  a        c        c        c        c        c        c        c        c  a      ).toBe(amount);
+        const quote = await module.getAddLiquidityQuote(TOKEN_A, TOKEN_B, amount);
+
+        expect(quote.amountA).toBe(amount);
+        expect(quote.amountB).toBe(amount);
       });
 
       it('returns sqrt(amountA * amountB) - MIN_LIQUIDITY as estimated LP tokens', async () => {
         const client = createMockClient({ pairAddress: null });
         const module = new LiquidityModule(client);
-        const amount = 1_000_000n        const amount = 1_000_000n        const amount = 1_000_000n        const amount = 1_000_000n        const amount = 1_000_000n        const amount = 1_000_000n        const amo   const expectedLP = amount - PRECISION.MIN_LIQUIDITY;
+        const amount = 1_000_000n;
+
+        const quote = await module.getAddLiquidityQuote(TOKEN_A, TOKEN_B, amount);
+
+        // For first LP: amountA == amountB == amount, so sqrt(amount * amount) == amount
+        const expectedLP = amount - PRECISION.MIN_LIQUIDITY;
         expect(quote.estimatedLPTokens).toBe(expectedLP);
       });
 
@@ -158,21 +180,26 @@ describe('LiquidityModule', () => {
       it('calculates optimal amountB based on reserve ratio', async () => {
         // Pool has 1000 A : 2000 B (1:2 ratio)
         const client = createMockClient({
-                                                         1000n,
+          pairAddress: PAIR_ADDRESS,
+          reserve0: 1000n,
           reserve1: 2000n,
           token0: TOKEN_A,
           token1: TOKEN_B,
           totalSupply: 1000n,
-                                                                                       awa                                          KEN_B, 100n);
+        });
+        const module = new LiquidityModule(client);
+
+        const quote = await module.getAddLiquidityQuote(TOKEN_A, TOKEN_B, 100n);
 
         // amountB = (100 * 2000) / 1000 = 200
-                                                               amountA).toBe(100n);
+        expect(quote.amountB).toBe(200n);
+        expect(quote.amountA).toBe(100n);
       });
 
       it('calculates LP tokens proportionally to total supply', async () => {
         const reserveA = 10_000n;
-        const reserveA = 10_000n;
-portionaconst totalSupply = 5_000n;
+        const reserveB = 20_000n;
+        const totalSupply = 5_000n;
         const amountA = 1_000n;
 
         const client = createMockClient({
@@ -188,13 +215,15 @@ portionaconst totalSupply = 5_000n;
         const quote = await module.getAddLiquidityQuote(TOKEN_A, TOKEN_B, amountA);
 
         // estimatedLP = (amountA * totalSupply) / reserveA = (1000 * 5000) / 10000 = 500
-                      LP = (amountA * totalSupply) / reserveA;
+        const expectedLP = (amountA * totalSupply) / reserveA;
         expect(quote.estimatedLPTokens).toBe(expectedLP);
       });
 
       it('computes correct fractional share of pool', async () => {
         const totalSupply = 10_000n;
-        const reserve        const reserve        const reserve        const reserve        cons_000n;
+        const reserveA = 100_000n;
+        const reserveB = 200_000n;
+        const amountA = 10_000n;
 
         const client = createMockClient({
           pairAddress: PAIR_ADDRESS,
@@ -202,15 +231,21 @@ portionaconst totalSupply = 5_000n;
           reserve1: reserveB,
           token0: TOKEN_A,
           token1: TOKEN_B,
-                               });
-        const module = new LiquidityModul        const module = new Liquiditwait module.getAddLiquidityQuote        const modulamountA);
+          totalSupply,
+        });
+        const module = new LiquidityModule(client);
 
+        const quote = await module.getAddLiquidityQuote(TOKEN_A, TOKEN_B, amountA);
 
-       const module = = (10000 * 10000) / 100000 = 10       const module = 1      10000 / (10000 + 1000) / 10000 = 10000000 / 11000 / 10000
+        // estimatedLP = (10000 * 10000) / 100000 = 1000
+        // share = 1000 * 10000 / (10000 + 1000) / 10000
         const estimatedLP = (amountA * totalSupply) / reserveA;
-        const expected        const expected        const expected        const expected        const expected
-                                                               expect(quote.shareOfPool).toBeGreaterThan(0);
-        expec       .shareOfPool).toBeLessThan(1);
+        const expectedShare =
+          Number((estimatedLP * 10000n) / (totalSupply + estimatedLP)) / 10000;
+
+        expect(quote.shareOfPool).toBe(expectedShare);
+        expect(quote.shareOfPool).toBeGreaterThan(0);
+        expect(quote.shareOfPool).toBeLessThan(1);
       });
 
       it('computes correct price ratios using PRICE_SCALE', async () => {
@@ -231,7 +266,11 @@ portionaconst totalSupply = 5_000n;
 
         // priceAPerB = (reserveB * PRICE_SCALE) / reserveA = 2 * PRICE_SCALE
         expect(quote.priceAPerB).toBe(
-          (reserveB * PRECISION.PRICE_SCAL          (reserveB * PRECISION.PRICE_SCAL          (reserveB PR          (reserveB * PRECISION.PRICE_SCAL          (reserveB * PRECISION.PRICE_SCAL          (reserveB PR   ION.PRICE_SCALE) / reserveB,
+          (reserveB * PRECISION.PRICE_SCALE) / reserveA,
+        );
+        // priceBPerA = (reserveA * PRICE_SCALE) / reserveB = 0.5 * PRICE_SCALE
+        expect(quote.priceBPerA).toBe(
+          (reserveA * PRECISION.PRICE_SCALE) / reserveB,
         );
       });
 
@@ -253,7 +292,7 @@ portionaconst totalSupply = 5_000n;
         // amountB = (1000 * 5000) / 10000 = 500
         expect(quote.amountB).toBe(500n);
 
-                                             0 = 200
+        // estimatedLP = (1000 * 2000) / 10000 = 200
         expect(quote.estimatedLPTokens).toBe(200n);
       });
     });
@@ -261,15 +300,22 @@ portionaconst totalSupply = 5_000n;
     // -- Edge cases -------------------------------------------------------
 
     describe('edge cases', () => {
-      it('equal reserves yield 1:1 deposit ratio', asy      it({
-      itconst reserve = 1_000_000n;
+      it('equal reserves yield 1:1 deposit ratio', async () => {
+        const reserve = 1_000_000n;
         const client = createMockClient({
-                                                                            r                                        N_                                        totalSupply: 1000n,
-                              le = new LiquidityModule(client);
+          pairAddress: PAIR_ADDRESS,
+          reserve0: reserve,
+          reserve1: reserve,
+          token0: TOKEN_A,
+          token1: TOKEN_B,
+          totalSupply: 1000n,
+        });
+        const module = new LiquidityModule(client);
 
-        const quote = await module.getAddLiquidityQuote(TOKEN_A        const qu;
+        const quote = await module.getAddLiquidityQuote(TOKEN_A, TOKEN_B, 500n);
 
-        expect(quote.am        expect(quote.am        expect(quote.am    oBe(500n);
+        expect(quote.amountA).toBe(500n);
+        expect(quote.amountB).toBe(500n);
       });
 
       it('small deposit into large pool yields small share', async () => {
@@ -279,17 +325,32 @@ portionaconst totalSupply = 5_000n;
           reserve1: 10n ** 18n,
           token0: TOKEN_A,
           token1: TOKEN_B,
-                                                       const module = new LiquidityModule(client);
+          totalSupply: 10n ** 15n,
+        });
+        const module = new LiquidityModule(client);
 
-        const quote = await module.getAddLiquidityQuo        const quote = await modul          const quote = await module.gsThan(0.001);
-        expect(        expect(        expect(    er        expect(        expect(       // --        expect(        expect(        expect(    er        expect(        expect(       // --        expect(        expect(        expect(    er        expect(        expect(   --------------------
+        const quote = await module.getAddLiquidityQuote(TOKEN_A, TOKEN_B, 1000n);
+
+        expect(quote.shareOfPool).toBeLessThan(0.001);
+        expect(quote.estimatedLPTokens).toBeGreaterThan(0n);
+      });
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // getPosition() — LP token address resolution
+  // -----------------------------------------------------------------------
   describe('getPosition', () => {
-    let modu    let modu    let modu    let modu    let modu    let modu    let modu    letmockPairClient: jest.Mocked<PairClient>;
+    let module: LiquidityModule;
+    let mockClient: jest.Mocked<CoralSwapClient>;
+    let mockPairClient: jest.Mocked<PairClient>;
     let mockLPClient: any;
 
     beforeEach(() => {
-                                                                               erve0: 1000n, reserve1: 2000n }),
-        getTokens: jest.fn().mockResolvedValue({ token0: 'TOKEN_A', token1: 'TO        getTokens: jest.fn().mdd        getTokens: jest.fvedValue('REAL_LP_TOKEN_ADDRESS'),
+      mockPairClient = {
+        getReserves: jest.fn().mockResolvedValue({ reserve0: 1000n, reserve1: 2000n }),
+        getTokens: jest.fn().mockResolvedValue({ token0: 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM', token1: 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4' }),
+        getLPTokenAddress: jest.fn().mockResolvedValue('CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4'),
       } as any;
 
       mockLPClient = {
@@ -298,14 +359,30 @@ portionaconst totalSupply = 5_000n;
       };
 
       mockClient = {
-        pair: jest.fn().mockReturnValue(mockPairCli        pair: jest.fn().mockReturnValue(mockPairCli        pair: jest.fn().mockReturnValue(mockPairCli        pair: jest.fn().mockReturnValue(mockPairCli        pair: jest.fn().mockReturnValue(mockPairCli        pair: jest.fn().mockReturnValue(mockPairCli        pair: jest.fn().mockReturnPA        pair: jest.fn().mockRetu      expect(mockPairClient.getLPTokenAddress).toHaveBeenCalledTimes(1);
-      expect(mockClient.lpToken).toHaveBeenCalledWith('REAL_LP_TOKEN_ADDRESS');
-      exp      exp      exp nAddress).toBe('REAL_LP_TOKEN_ADDRESS');
-      expect(position.balance).toBe(500n);
-      expect(position.share).toBe      expect(position.share).toBe      expect(position.share).toBe      expect(position.share).toBe      expect(position.share).toBe      expect(position.share).toBe    S' ;
-      await mo      awaisition('PAIR_      await mo      awaisition('PAIR_      await m called once due to caching
+        pair: jest.fn().mockReturnValue(mockPairClient),
+        lpToken: jest.fn().mockReturnValue(mockLPClient),
+      } as any;
+
+      module = new LiquidityModule(mockClient);
+    });
+
+    it('fetches LP token address from pair contract and correctly calculates position', async () => {
+      const position = await module.getPosition('PAIR_ADDRESS', 'OWNER_ADDRESS');
+
       expect(mockPairClient.getLPTokenAddress).toHaveBeenCalledTimes(1);
-      expect(mockClient.lpToken).toHaveBeenCalledWith('REAL_LP_TOKEN_ADDRESS');
+      expect(mockClient.lpToken).toHaveBeenCalledWith('CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4');
+      expect(position.lpTokenAddress).toBe('CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4');
+      expect(position.balance).toBe(500n);
+      expect(position.share).toBe(0.05); // 500 / 10000
+    });
+
+    it('caches the LP token address to avoid redundant calls', async () => {
+      await module.getPosition('PAIR_ADDRESS', 'OWNER_ADDRESS');
+      await module.getPosition('PAIR_ADDRESS', 'OTHER_OWNER');
+
+      // Should only be called once due to caching
+      expect(mockPairClient.getLPTokenAddress).toHaveBeenCalledTimes(1);
+      expect(mockClient.lpToken).toHaveBeenCalledWith('CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4');
       expect(mockClient.lpToken).toHaveBeenCalledTimes(2);
     });
   });

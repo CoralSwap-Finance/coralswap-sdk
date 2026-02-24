@@ -12,6 +12,9 @@ import {
 import { PRECISION, DEFAULTS } from '../config';
 import {
   TransactionError,
+  ValidationError,
+  InsufficientLiquidityError,
+  PairNotFoundError,
 } from '../errors';
 import {
   validateAddress,
@@ -63,7 +66,7 @@ export class SwapModule {
       return this.getDirectQuote(request, path);
     }
 
-    return this.getMultiHopQuote(request, path);
+    return this.getMultiHopSwapQuote(request, path);
   }
 
   /**
@@ -393,7 +396,7 @@ export class SwapModule {
    *   totalFeeAmount = sum of per-hop fee amounts (denominated in each hop's tokenIn)
    *   compoundImpact = 1 - product((1 - impact_i/10000)) expressed in bps
    */
-  private async getMultiHopQuote(
+  private async getMultiHopSwapQuote(
     request: SwapRequest,
     path: string[],
   ): Promise<SwapQuote> {
