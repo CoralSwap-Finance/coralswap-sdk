@@ -27,7 +27,8 @@
  */
 
 // Core client
-export { CoralSwapClient, KeypairSigner } from '@/client';
+export { CoralSwapClient } from "@/client";
+export { KeypairSigner } from "@/utils/signer";
 
 // Configuration
 export {
@@ -36,11 +37,11 @@ export {
   NETWORK_CONFIGS,
   DEFAULTS,
   PRECISION,
-} from '@/config';
+} from "@/config";
 
 // Type exports
-export * from '@/types';
-export type { Logger } from '@/types/common';
+export * from "@/types";
+export type { Logger } from "@/types/common";
 
 // Contract clients
 export {
@@ -52,7 +53,7 @@ export {
   decodeFlashLoanData,
   calculateRepayment,
   validateFeeFloor,
-} from '@/contracts';
+} from "@/contracts";
 
 // Feature modules
 export {
@@ -62,8 +63,8 @@ export {
   FeeModule,
   OracleModule,
   TokenListModule,
-} from '@/modules';
-export type { TWAPObservation, TWAPResult } from '@/modules';
+} from "@/modules";
+export type { TWAPObservation, TWAPResult } from "@/modules";
 
 // Utilities
 export {
@@ -98,13 +99,13 @@ export {
   validateNonNegativeAmount,
   validateSlippage,
   validateDistinctTokens,
-} from '@/utils';
+} from "@/utils";
 
 export type {
   RetryConfig,
   SimulationResult,
   SimulationResourceEstimate,
-} from './utils';
+} from "./utils";
 
 // Errors
 export {
@@ -122,4 +123,4 @@ export {
   CircuitBreakerError,
   SignerError,
   mapError,
-} from '@/errors';
+} from "@/errors";
