@@ -95,6 +95,7 @@ export {
   validateNonNegativeAmount,
   validateSlippage,
   validateDistinctTokens,
+  isValidPath,
 } from './utils';
 
 export type { RetryConfig } from './utils';

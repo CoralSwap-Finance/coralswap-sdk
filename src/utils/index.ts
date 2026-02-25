@@ -43,4 +43,5 @@ export {
   validateNonNegativeAmount,
   validateSlippage,
   validateDistinctTokens,
+  isValidPath,
 } from './validation';

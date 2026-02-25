@@ -12,6 +12,12 @@ import {
 } from '../types/events';
 import { ValidationError } from '../errors';
 
+/** Response type that may include hash/id for transaction identifier. */
+type TxWithOptionalHash = SorobanRpc.Api.GetSuccessfulTransactionResponse & {
+  hash?: string;
+  id?: string;
+};
+
 // ---------------------------------------------------------------------------
 // Known event topic symbols emitted by CoralSwap Pair contracts
 // ---------------------------------------------------------------------------
@@ -229,7 +235,8 @@ export class EventParser {
     const meta = response.resultMetaXdr;
     const v3 = meta.v3();
     const diagnosticEvents = v3.sorobanMeta()?.diagnosticEvents() ?? [];
-    const txHash = response.hash ?? '';
+    const tx = response as TxWithOptionalHash;
+    const txHash = tx.hash ?? tx.id ?? '';
     const ledger = response.ledger ?? 0;
     return this.parse(diagnosticEvents, txHash, ledger);
   }
