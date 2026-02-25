@@ -28,6 +28,19 @@ export function isValidContractId(address: string): boolean {
 
 /**
  * Validate any Stellar address (public key or contract).
+ *
+ * General-purpose address validator that handles both Stellar Public Keys (G...)
+ * and Soroban Contract IDs (C...), returning a boolean indicating validity.
+ *
+ * @param address - The address string to validate
+ * @returns true if the address is a valid Stellar public key or Soroban contract ID, false otherwise
+ *
+ * @example
+ * ```ts
+ * isValidAddress('GABC...'); // true for valid public key
+ * isValidAddress('CABC...'); // true for valid contract
+ * isValidAddress('invalid'); // false
+ * ```
  */
 export function isValidAddress(address: string): boolean {
   return isValidPublicKey(address) || isValidContractId(address);
@@ -59,7 +72,7 @@ export function isNativeToken(identifier: string): boolean {
  * CoralSwap Factory sorts tokens: token0 < token1.
  */
 export function sortTokens(tokenA: string, tokenB: string): [string, string] {
-  if (tokenA === tokenB) throw new Error('Identical tokens');
+  if (tokenA === tokenB) throw new Error("Identical tokens");
   return tokenA < tokenB ? [tokenA, tokenB] : [tokenB, tokenA];
 }
 
