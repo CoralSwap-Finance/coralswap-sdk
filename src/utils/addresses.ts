@@ -1,4 +1,4 @@
-import { Address, StrKey } from '@stellar/stellar-sdk';
+import { Address, StrKey, hash, xdr } from '@stellar/stellar-sdk';
 
 /**
  * Address utilities for Stellar/Soroban address handling.
@@ -56,4 +56,43 @@ export function truncateAddress(address: string, chars: number = 4): string {
  */
 export function toScAddress(address: string): Address {
   return Address.fromString(address);
+}
+
+/**
+ * Derive the deterministic pair contract address off-chain.
+ *
+ * Mirrors the on-chain factory's CREATE2-style derivation:
+ * salt = sha256(token0_bytes || token1_bytes), where token0 < token1.
+ * Contract ID = sha256(HashIdPreimage(networkId, factory, salt)).
+ */
+export function getPairAddress(
+  factoryAddress: string,
+  tokenA: string,
+  tokenB: string,
+  networkPassphrase: string,
+): string {
+  const [token0, token1] = sortTokens(tokenA, tokenB);
+
+  const salt = hash(
+    Buffer.concat([
+      Address.fromString(token0).toBuffer(),
+      Address.fromString(token1).toBuffer(),
+    ]),
+  );
+
+  const networkId = hash(Buffer.from(networkPassphrase));
+
+  const preimage = xdr.HashIdPreimage.envelopeTypeContractId(
+    new xdr.HashIdPreimageContractId({
+      networkId,
+      contractIdPreimage: xdr.ContractIdPreimage.contractIdPreimageFromAddress(
+        new xdr.ContractIdPreimageFromAddress({
+          address: Address.fromString(factoryAddress).toScAddress(),
+          salt,
+        }),
+      ),
+    }),
+  );
+
+  return StrKey.encodeContract(hash(preimage.toXDR()));
 }

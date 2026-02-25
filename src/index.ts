@@ -83,6 +83,7 @@ export {
   sortTokens,
   truncateAddress,
   toScAddress,
+  getPairAddress,
   isSimulationSuccess,
   getSimulationReturnValue,
   getResourceEstimate,
