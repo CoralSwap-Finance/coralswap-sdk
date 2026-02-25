@@ -13,6 +13,7 @@ import { PairClient } from '@/contracts/pair';
 import { RouterClient } from '@/contracts/router';
 import { LPTokenClient } from '@/contracts/lp-token';
 import { TokenListModule } from '@/modules/tokens';
+import { KeypairSigner } from '@/utils/signer';
 
 /**
  * Default signer implementation that wraps a Stellar Keypair.
@@ -28,10 +29,10 @@ import { TokenListModule } from '@/modules/tokens';
  * connecting directly to Soroban RPC without intermediary APIs.
  */
 export class CoralSwapClient {
-  readonly network: Network;
-  readonly config: CoralSwapConfig;
-  readonly networkConfig: NetworkConfig;
-  readonly server: SorobanRpc.Server;
+  network: Network;
+  config: CoralSwapConfig;
+  networkConfig: NetworkConfig;
+  server: SorobanRpc.Server;
 
   private signer: Signer | null = null;
   private _publicKeyCache: string | null = null;
@@ -148,6 +149,38 @@ export class CoralSwapClient {
       this.networkConfig.rpcUrl,
       this.networkConfig.networkPassphrase,
     );
+  }
+
+  /**
+   * Switch the client to a different network.
+   *
+   * @param network - The target network.
+   * @param rpcUrl - Optional override for the RPC URL.
+   */
+  setNetwork(network: Network, rpcUrl?: string): void {
+    this.network = network;
+    this.networkConfig = {
+      ...NETWORK_CONFIGS[network],
+      ...(rpcUrl ? { rpcUrl } : {}),
+    };
+
+    this.server = new SorobanRpc.Server(this.networkConfig.rpcUrl);
+
+    // Reset contract client singletons to trigger re-initialization
+    this._factory = null;
+    this._router = null;
+
+    // Refresh signer if using built-in KeypairSigner
+    if (this.config.secretKey) {
+      const kpSigner = new KeypairSigner(this.config.secretKey, this.networkConfig.networkPassphrase);
+      this.signer = kpSigner;
+      this._publicKeyCache = kpSigner.publicKeySync;
+    }
+
+    this.logger?.info('setNetwork: network switched', {
+      network: this.network,
+      rpcUrl: this.networkConfig.rpcUrl,
+    });
   }
 
   /**
