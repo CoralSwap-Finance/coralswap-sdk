@@ -1,8 +1,11 @@
 # Changelog
 
-## [0.1.0] - 2026-02-17
+## [1.1.0] - 2026-02-17
 
 ### Added
+- Pluggable `Signer` interface in `src/types/common.ts` for wallet adapter support
+- `KeypairSigner` default implementation in `src/utils/signer.ts`
+- `signer` option in `CoralSwapConfig` for external wallet integration (Freighter, Albedo)
 - Core SDK client with direct Soroban RPC interaction
 - Factory, Pair, Router, LP Token contract bindings
 - Flash Receiver interface and helpers
@@ -15,3 +18,11 @@
 - Utility modules: amounts, addresses, simulation, retry
 - Test scaffolding with Jest configuration
 - Full README documentation with examples
+
+
+### Changed
+- `CoralSwapClient` now accepts both `secretKey` and `signer` config options
+- `submitTransaction()` now awaits `signer.signTransaction()` 
+
+### Backward Compatible
+- Existing `secretKey` usage continues to work unchanged

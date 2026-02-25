@@ -1,6 +1,6 @@
 {
   "name": "@coralswap/sdk",
-  "version": "0.1.0",
+  "version": "x.1.0",
   "description": "TypeScript SDK for CoralSwap -- contract-first AMM on Stellar/Soroban",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

@@ -20,31 +20,6 @@ import { TokenListModule } from '@/modules/tokens';
  * Used internally when the client is constructed with a secret key string
  * for backward compatibility.
  */
-export class KeypairSigner implements Signer {
-  private readonly keypair: Keypair;
-  private readonly networkPassphrase: string;
-
-  /** The public key, available synchronously for backward compatibility. */
-  readonly publicKeySync: string;
-
-  constructor(secretKey: string, networkPassphrase: string) {
-    this.keypair = Keypair.fromSecret(secretKey);
-    this.networkPassphrase = networkPassphrase;
-    this.publicKeySync = this.keypair.publicKey();
-  }
-
-  /** Return the public key derived from the secret key. */
-  async publicKey(): Promise<string> {
-    return this.publicKeySync;
-  }
-
-  /** Sign the transaction XDR and return the signed XDR. */
-  async signTransaction(txXdr: string): Promise<string> {
-    const tx = new Transaction(txXdr, this.networkPassphrase);
-    tx.sign(this.keypair);
-    return tx.toXDR();
-  }
-}
 
 /**
  * Main entry point for the CoralSwap SDK.
