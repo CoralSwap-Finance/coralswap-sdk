@@ -1,7 +1,7 @@
-import { CoralSwapClient } from '../client';
-import { FeeEstimate } from '../types/fee';
-import { FeeState } from '../types/pool';
-import { validateAddress, validatePositiveAmount } from '../utils/validation';
+import { CoralSwapClient } from '@/client';
+import { FeeEstimate } from '@/types/fee';
+import { FeeState } from '@/types/pool';
+import { validateAddress, validatePositiveAmount } from '@/utils/validation';
 
 /**
  * Fee module -- dynamic fee transparency and estimation.

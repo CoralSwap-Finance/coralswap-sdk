@@ -1,4 +1,4 @@
-import { xdr, Address, SorobanRpc } from '@stellar/stellar-sdk';
+import { xdr, Address, SorobanRpc } from "@stellar/stellar-sdk";
 import {
   CoralSwapEvent,
   ContractEvent,
@@ -9,8 +9,8 @@ import {
   BurnEvent,
   SyncEvent,
   FeeUpdateEvent,
-} from '../types/events';
-import { ValidationError } from '../errors';
+} from "@/types/events";
+import { ValidationError } from "@/errors";
 
 /** Response type that may include hash/id for transaction identifier. */
 type TxWithOptionalHash = SorobanRpc.Api.GetSuccessfulTransactionResponse & {
@@ -24,14 +24,14 @@ type TxWithOptionalHash = SorobanRpc.Api.GetSuccessfulTransactionResponse & {
 
 /** Recognised event topic identifiers. */
 export const EVENT_TOPICS = {
-  SWAP: 'swap',
-  ADD_LIQUIDITY: 'add_liquidity',
-  REMOVE_LIQUIDITY: 'remove_liquidity',
-  FLASH_LOAN: 'flash_loan',
-  MINT: 'mint',
-  BURN: 'burn',
-  SYNC: 'sync',
-  FEE_UPDATE: 'fee_update',
+  SWAP: "swap",
+  ADD_LIQUIDITY: "add_liquidity",
+  REMOVE_LIQUIDITY: "remove_liquidity",
+  FLASH_LOAN: "flash_loan",
+  MINT: "mint",
+  BURN: "burn",
+  SYNC: "sync",
+  FEE_UPDATE: "fee_update",
 } as const;
 
 const KNOWN_TOPICS = new Set<string>(Object.values(EVENT_TOPICS));
@@ -69,21 +69,24 @@ function decodeAddress(val: xdr.ScVal): string {
  */
 function decodeString(val: xdr.ScVal): string {
   const tag = val.switch().name;
-  if (tag === 'scvSymbol') return val.sym().toString();
-  if (tag === 'scvString') return val.str().toString();
-  return val.value()?.toString() ?? '';
+  if (tag === "scvSymbol") return val.sym().toString();
+  if (tag === "scvString") return val.str().toString();
+  return val.value()?.toString() ?? "";
 }
 
 /**
  * Safely extract a value from an ScMap by key name.
  */
-function getMapValue(map: xdr.ScMapEntry[], key: string): xdr.ScVal | undefined {
+function getMapValue(
+  map: xdr.ScMapEntry[],
+  key: string,
+): xdr.ScVal | undefined {
   for (const entry of map) {
     const k = entry.key();
     const tag = k.switch().name;
     let keyStr: string | undefined;
-    if (tag === 'scvSymbol') keyStr = k.sym().toString();
-    else if (tag === 'scvString') keyStr = k.str().toString();
+    if (tag === "scvSymbol") keyStr = k.sym().toString();
+    else if (tag === "scvString") keyStr = k.str().toString();
     if (keyStr === key) return entry.val();
   }
   return undefined;
@@ -113,7 +116,7 @@ function extractContractId(evt: xdr.DiagnosticEvent): string {
   } catch {
     // contractId may be absent for system events
   }
-  return '';
+  return "";
 }
 
 /**
@@ -186,7 +189,7 @@ export class EventParser {
    */
   parse(
     events: xdr.DiagnosticEvent[],
-    txHash = '',
+    txHash = "",
     ledger = 0,
   ): CoralSwapEvent[] {
     const parsed: CoralSwapEvent[] = [];
@@ -212,7 +215,7 @@ export class EventParser {
    */
   parseStrict(
     events: xdr.DiagnosticEvent[],
-    txHash = '',
+    txHash = "",
     ledger = 0,
   ): CoralSwapEvent[] {
     const parsed: CoralSwapEvent[] = [];
@@ -237,6 +240,7 @@ export class EventParser {
     const diagnosticEvents = v3.sorobanMeta()?.diagnosticEvents() ?? [];
     const tx = response as TxWithOptionalHash;
     const txHash = tx.hash ?? tx.id ?? '';
+
     const ledger = response.ledger ?? 0;
     return this.parse(diagnosticEvents, txHash, ledger);
   }
@@ -278,7 +282,7 @@ export class EventParser {
     const topicName = decodeString(topics[0]);
     if (!KNOWN_TOPICS.has(topicName)) return null;
 
-    const base: Omit<ContractEvent, 'type'> = {
+    const base: Omit<ContractEvent, "type"> = {
       contractId,
       ledger,
       timestamp: ledger,
@@ -290,7 +294,11 @@ export class EventParser {
         return this.parseSwap(data, base);
       case EVENT_TOPICS.ADD_LIQUIDITY:
       case EVENT_TOPICS.REMOVE_LIQUIDITY:
-        return this.parseLiquidity(data, base, topicName as 'add_liquidity' | 'remove_liquidity');
+        return this.parseLiquidity(
+          data,
+          base,
+          topicName as "add_liquidity" | "remove_liquidity",
+        );
       case EVENT_TOPICS.FLASH_LOAN:
         return this.parseFlashLoan(data, base);
       case EVENT_TOPICS.MINT:
@@ -312,123 +320,123 @@ export class EventParser {
 
   private parseSwap(
     data: xdr.ScVal,
-    base: Omit<ContractEvent, 'type'>,
+    base: Omit<ContractEvent, "type">,
   ): SwapEvent {
     const map = data.map();
-    if (!map) throw new ValidationError('Swap event data is not an ScMap');
+    if (!map) throw new ValidationError("Swap event data is not an ScMap");
 
     return {
       ...base,
-      type: 'swap',
-      sender: decodeAddress(requireMapValue(map, 'sender')),
-      tokenIn: decodeAddress(requireMapValue(map, 'token_in')),
-      tokenOut: decodeAddress(requireMapValue(map, 'token_out')),
-      amountIn: decodeI128(requireMapValue(map, 'amount_in')),
-      amountOut: decodeI128(requireMapValue(map, 'amount_out')),
-      feeBps: decodeU32(requireMapValue(map, 'fee_bps')),
+      type: "swap",
+      sender: decodeAddress(requireMapValue(map, "sender")),
+      tokenIn: decodeAddress(requireMapValue(map, "token_in")),
+      tokenOut: decodeAddress(requireMapValue(map, "token_out")),
+      amountIn: decodeI128(requireMapValue(map, "amount_in")),
+      amountOut: decodeI128(requireMapValue(map, "amount_out")),
+      feeBps: decodeU32(requireMapValue(map, "fee_bps")),
     };
   }
 
   private parseLiquidity(
     data: xdr.ScVal,
-    base: Omit<ContractEvent, 'type'>,
-    type: 'add_liquidity' | 'remove_liquidity',
+    base: Omit<ContractEvent, "type">,
+    type: "add_liquidity" | "remove_liquidity",
   ): LiquidityEvent {
     const map = data.map();
-    if (!map) throw new ValidationError('Liquidity event data is not an ScMap');
+    if (!map) throw new ValidationError("Liquidity event data is not an ScMap");
 
     return {
       ...base,
       type,
-      provider: decodeAddress(requireMapValue(map, 'provider')),
-      tokenA: decodeAddress(requireMapValue(map, 'token_a')),
-      tokenB: decodeAddress(requireMapValue(map, 'token_b')),
-      amountA: decodeI128(requireMapValue(map, 'amount_a')),
-      amountB: decodeI128(requireMapValue(map, 'amount_b')),
-      liquidity: decodeI128(requireMapValue(map, 'liquidity')),
+      provider: decodeAddress(requireMapValue(map, "provider")),
+      tokenA: decodeAddress(requireMapValue(map, "token_a")),
+      tokenB: decodeAddress(requireMapValue(map, "token_b")),
+      amountA: decodeI128(requireMapValue(map, "amount_a")),
+      amountB: decodeI128(requireMapValue(map, "amount_b")),
+      liquidity: decodeI128(requireMapValue(map, "liquidity")),
     };
   }
 
   private parseFlashLoan(
     data: xdr.ScVal,
-    base: Omit<ContractEvent, 'type'>,
+    base: Omit<ContractEvent, "type">,
   ): FlashLoanEvent {
     const map = data.map();
-    if (!map) throw new ValidationError('FlashLoan event data is not an ScMap');
+    if (!map) throw new ValidationError("FlashLoan event data is not an ScMap");
 
     return {
       ...base,
-      type: 'flash_loan',
-      borrower: decodeAddress(requireMapValue(map, 'borrower')),
-      token: decodeAddress(requireMapValue(map, 'token')),
-      amount: decodeI128(requireMapValue(map, 'amount')),
-      fee: decodeI128(requireMapValue(map, 'fee')),
+      type: "flash_loan",
+      borrower: decodeAddress(requireMapValue(map, "borrower")),
+      token: decodeAddress(requireMapValue(map, "token")),
+      amount: decodeI128(requireMapValue(map, "amount")),
+      fee: decodeI128(requireMapValue(map, "fee")),
     };
   }
 
   private parseMint(
     data: xdr.ScVal,
-    base: Omit<ContractEvent, 'type'>,
+    base: Omit<ContractEvent, "type">,
   ): MintEvent {
     const map = data.map();
-    if (!map) throw new ValidationError('Mint event data is not an ScMap');
+    if (!map) throw new ValidationError("Mint event data is not an ScMap");
 
     return {
       ...base,
-      type: 'mint',
-      sender: decodeAddress(requireMapValue(map, 'sender')),
-      amountA: decodeI128(requireMapValue(map, 'amount_a')),
-      amountB: decodeI128(requireMapValue(map, 'amount_b')),
-      liquidity: decodeI128(requireMapValue(map, 'liquidity')),
+      type: "mint",
+      sender: decodeAddress(requireMapValue(map, "sender")),
+      amountA: decodeI128(requireMapValue(map, "amount_a")),
+      amountB: decodeI128(requireMapValue(map, "amount_b")),
+      liquidity: decodeI128(requireMapValue(map, "liquidity")),
     };
   }
 
   private parseBurn(
     data: xdr.ScVal,
-    base: Omit<ContractEvent, 'type'>,
+    base: Omit<ContractEvent, "type">,
   ): BurnEvent {
     const map = data.map();
-    if (!map) throw new ValidationError('Burn event data is not an ScMap');
+    if (!map) throw new ValidationError("Burn event data is not an ScMap");
 
     return {
       ...base,
-      type: 'burn',
-      sender: decodeAddress(requireMapValue(map, 'sender')),
-      amountA: decodeI128(requireMapValue(map, 'amount_a')),
-      amountB: decodeI128(requireMapValue(map, 'amount_b')),
-      liquidity: decodeI128(requireMapValue(map, 'liquidity')),
-      to: decodeAddress(requireMapValue(map, 'to')),
+      type: "burn",
+      sender: decodeAddress(requireMapValue(map, "sender")),
+      amountA: decodeI128(requireMapValue(map, "amount_a")),
+      amountB: decodeI128(requireMapValue(map, "amount_b")),
+      liquidity: decodeI128(requireMapValue(map, "liquidity")),
+      to: decodeAddress(requireMapValue(map, "to")),
     };
   }
 
   private parseSync(
     data: xdr.ScVal,
-    base: Omit<ContractEvent, 'type'>,
+    base: Omit<ContractEvent, "type">,
   ): SyncEvent {
     const map = data.map();
-    if (!map) throw new ValidationError('Sync event data is not an ScMap');
+    if (!map) throw new ValidationError("Sync event data is not an ScMap");
 
     return {
       ...base,
-      type: 'sync',
-      reserve0: decodeI128(requireMapValue(map, 'reserve0')),
-      reserve1: decodeI128(requireMapValue(map, 'reserve1')),
+      type: "sync",
+      reserve0: decodeI128(requireMapValue(map, "reserve0")),
+      reserve1: decodeI128(requireMapValue(map, "reserve1")),
     };
   }
 
   private parseFeeUpdate(
     data: xdr.ScVal,
-    base: Omit<ContractEvent, 'type'>,
+    base: Omit<ContractEvent, "type">,
   ): FeeUpdateEvent {
     const map = data.map();
-    if (!map) throw new ValidationError('FeeUpdate event data is not an ScMap');
+    if (!map) throw new ValidationError("FeeUpdate event data is not an ScMap");
 
     return {
       ...base,
-      type: 'fee_update',
-      previousFeeBps: decodeU32(requireMapValue(map, 'previous_fee_bps')),
-      newFeeBps: decodeU32(requireMapValue(map, 'new_fee_bps')),
-      volatility: decodeI128(requireMapValue(map, 'volatility')),
+      type: "fee_update",
+      previousFeeBps: decodeU32(requireMapValue(map, "previous_fee_bps")),
+      newFeeBps: decodeU32(requireMapValue(map, "new_fee_bps")),
+      volatility: decodeI128(requireMapValue(map, "volatility")),
     };
   }
 }

@@ -1,16 +1,20 @@
 import { Contract, SorobanRpc, TransactionBuilder, xdr, Address, nativeToScVal } from '@stellar/stellar-sdk';
-import { FeeState, FlashLoanConfig } from '../types/pool';
+import { FeeState, FlashLoanConfig } from '@/types/pool';
 
 /**
  * Helper function to extract value from ScMap by key.
  */
-function getScMapValue(map: any, key: string): xdr.ScVal {
+function getScMapValue(map: xdr.ScMapEntry[], key: string): xdr.ScVal {
   if (!map) {
     throw new Error('Map is null');
   }
-  for (let i = 0; i < map.length; i++) {
-    const entry = map.get(i)!;
-    if (entry.key().str() === key) {
+  for (const entry of map) {
+    const k = entry.key();
+    const tag = k.switch().name;
+    if (tag === 'scvString' && k.str().toString() === key) {
+      return entry.val();
+    }
+    if (tag === 'scvSymbol' && k.sym().toString() === key) {
       return entry.val();
     }
   }
@@ -109,6 +113,16 @@ export class PairClient {
       token0: Address.fromScVal(r0).toString(),
       token1: Address.fromScVal(r1).toString(),
     };
+  }
+
+  /**
+   * Read the LP token address for this pair.
+   */
+  async getLPTokenAddress(): Promise<string> {
+    const op = this.contract.call('lp_token');
+    const result = await this.simulateRead(op);
+    if (!result) throw new Error('Failed to read LP token address');
+    return Address.fromScVal(result).toString();
   }
 
   /**

@@ -1,13 +1,13 @@
-import { CoralSwapClient } from '../client';
+import { CoralSwapClient } from '@/client';
 import {
   FlashLoanRequest,
   FlashLoanResult,
   FlashLoanFeeEstimate,
-} from '../types/flash-loan';
-import { FlashLoanConfig } from '../types/pool';
-import { calculateRepayment, validateFeeFloor } from '../contracts/flash-receiver';
-import { FlashLoanError, TransactionError } from '../errors';
-import { validateAddress, validatePositiveAmount } from '../utils/validation';
+} from '@/types/flash-loan';
+import { FlashLoanConfig } from '@/types/pool';
+import { calculateRepayment, validateFeeFloor } from '@/contracts/flash-receiver';
+import { FlashLoanError, TransactionError } from '@/errors';
+import { validateAddress, validatePositiveAmount } from '@/utils/validation';
 
 /**
  * Flash Loan module -- first-class flash loan support for CoralSwap.

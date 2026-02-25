@@ -1,5 +1,6 @@
 import { LiquidityModule } from '../src/modules/liquidity';
 import { CoralSwapClient } from '../src/client';
+import { PairClient } from '../src/contracts/pair';
 import { PRECISION } from '../src/config';
 import { ValidationError } from '../src/errors';
 
@@ -25,8 +26,8 @@ function createMockClient(overrides: {
     pairAddress = null,
     reserve0 = 0n,
     reserve1 = 0n,
-    token0 = 'TOKEN_A',
-    token1 = 'TOKEN_B',
+    token0 = 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM',
+    token1 = 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4',
     totalSupply = 0n,
   } = overrides;
 
@@ -123,9 +124,9 @@ describe('LiquidityModule', () => {
   // getAddLiquidityQuote()
   // -----------------------------------------------------------------------
   describe('getAddLiquidityQuote()', () => {
-    const TOKEN_A = 'TOKEN_A';
-    const TOKEN_B = 'TOKEN_B';
-    const PAIR_ADDRESS = 'PAIR_CONTRACT';
+    const TOKEN_A = 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM';
+    const TOKEN_B = 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4';
+    const PAIR_ADDRESS = 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM';
 
     // -- First liquidity provider (no existing pair) ----------------------
 
@@ -237,7 +238,7 @@ describe('LiquidityModule', () => {
         const quote = await module.getAddLiquidityQuote(TOKEN_A, TOKEN_B, amountA);
 
         // estimatedLP = (10000 * 10000) / 100000 = 1000
-        // share = 1000 * 10000 / (10000 + 1000) / 10000 = 10000000 / 11000 / 10000
+        // share = 1000 * 10000 / (10000 + 1000) / 10000
         const estimatedLP = (amountA * totalSupply) / reserveA;
         const expectedShare =
           Number((estimatedLP * 10000n) / (totalSupply + estimatedLP)) / 10000;
@@ -333,6 +334,56 @@ describe('LiquidityModule', () => {
         expect(quote.shareOfPool).toBeLessThan(0.001);
         expect(quote.estimatedLPTokens).toBeGreaterThan(0n);
       });
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // getPosition() — LP token address resolution
+  // -----------------------------------------------------------------------
+  describe('getPosition', () => {
+    let module: LiquidityModule;
+    let mockClient: jest.Mocked<CoralSwapClient>;
+    let mockPairClient: jest.Mocked<PairClient>;
+    let mockLPClient: any;
+
+    beforeEach(() => {
+      mockPairClient = {
+        getReserves: jest.fn().mockResolvedValue({ reserve0: 1000n, reserve1: 2000n }),
+        getTokens: jest.fn().mockResolvedValue({ token0: 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM', token1: 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4' }),
+        getLPTokenAddress: jest.fn().mockResolvedValue('CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4'),
+      } as any;
+
+      mockLPClient = {
+        balance: jest.fn().mockResolvedValue(500n),
+        totalSupply: jest.fn().mockResolvedValue(10000n),
+      };
+
+      mockClient = {
+        pair: jest.fn().mockReturnValue(mockPairClient),
+        lpToken: jest.fn().mockReturnValue(mockLPClient),
+      } as any;
+
+      module = new LiquidityModule(mockClient);
+    });
+
+    it('fetches LP token address from pair contract and correctly calculates position', async () => {
+      const position = await module.getPosition('PAIR_ADDRESS', 'OWNER_ADDRESS');
+
+      expect(mockPairClient.getLPTokenAddress).toHaveBeenCalledTimes(1);
+      expect(mockClient.lpToken).toHaveBeenCalledWith('CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4');
+      expect(position.lpTokenAddress).toBe('CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4');
+      expect(position.balance).toBe(500n);
+      expect(position.share).toBe(0.05); // 500 / 10000
+    });
+
+    it('caches the LP token address to avoid redundant calls', async () => {
+      await module.getPosition('PAIR_ADDRESS', 'OWNER_ADDRESS');
+      await module.getPosition('PAIR_ADDRESS', 'OTHER_OWNER');
+
+      // Should only be called once due to caching
+      expect(mockPairClient.getLPTokenAddress).toHaveBeenCalledTimes(1);
+      expect(mockClient.lpToken).toHaveBeenCalledWith('CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4');
+      expect(mockClient.lpToken).toHaveBeenCalledTimes(2);
     });
   });
 });

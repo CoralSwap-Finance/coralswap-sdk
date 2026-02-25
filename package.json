@@ -1,6 +1,6 @@
 {
   "name": "@coralswap/sdk",
-  "version": "0.1.0",
+  "version": "x.1.0",
   "description": "TypeScript SDK for CoralSwap -- contract-first AMM on Stellar/Soroban",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -20,7 +20,8 @@
     "prepublishOnly": "npm test && npm run lint",
     "examples:simple-swap": "ts-node examples/simple-swap.ts",
     "examples:provide-liquidity": "ts-node examples/provide-liquidity.ts",
-    "examples:read-reserves": "ts-node examples/read-reserves.ts"
+    "examples:read-reserves": "ts-node examples/read-reserves.ts",
+    "docs": "typedoc"
   },
   "keywords": [
     "coralswap",
@@ -53,6 +54,7 @@
     "rimraf": "^6.0.0",
     "ts-jest": "^29.2.0",
     "ts-node": "^10.9.2",
+    "typedoc": "^0.27.0",
     "typescript": "^5.6.0"
   },
   "engines": {

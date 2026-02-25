@@ -5,14 +5,16 @@ import {
   Transaction,
   xdr,
 } from '@stellar/stellar-sdk';
-import { CoralSwapConfig, NetworkConfig, NETWORK_CONFIGS, DEFAULTS } from './config';
-import { Network, Result, Logger, Signer } from './types/common';
-import { SignerError } from './errors';
-import { FactoryClient } from './contracts/factory';
-import { PairClient } from './contracts/pair';
-import { RouterClient } from './contracts/router';
-import { LPTokenClient } from './contracts/lp-token';
-import { TokenListModule } from './modules/tokens';
+import { CoralSwapConfig, NetworkConfig, NETWORK_CONFIGS, DEFAULTS } from '@/config';
+import { Network, Result, Logger, Signer } from '@/types/common';
+import { SignerError } from '@/errors';
+import { FactoryClient } from '@/contracts/factory';
+import { PairClient } from '@/contracts/pair';
+import { RouterClient } from '@/contracts/router';
+import { LPTokenClient } from '@/contracts/lp-token';
+import { TokenListModule } from '@/modules/tokens';
+import { KeypairSigner } from '@/utils/signer';
+export { KeypairSigner };
 
 /**
  * Default signer implementation that wraps a Stellar Keypair.
@@ -20,31 +22,6 @@ import { TokenListModule } from './modules/tokens';
  * Used internally when the client is constructed with a secret key string
  * for backward compatibility.
  */
-export class KeypairSigner implements Signer {
-  private readonly keypair: Keypair;
-  private readonly networkPassphrase: string;
-
-  /** The public key, available synchronously for backward compatibility. */
-  readonly publicKeySync: string;
-
-  constructor(secretKey: string, networkPassphrase: string) {
-    this.keypair = Keypair.fromSecret(secretKey);
-    this.networkPassphrase = networkPassphrase;
-    this.publicKeySync = this.keypair.publicKey();
-  }
-
-  /** Return the public key derived from the secret key. */
-  async publicKey(): Promise<string> {
-    return this.publicKeySync;
-  }
-
-  /** Sign the transaction XDR and return the signed XDR. */
-  async signTransaction(txXdr: string): Promise<string> {
-    const tx = new Transaction(txXdr, this.networkPassphrase);
-    tx.sign(this.keypair);
-    return tx.toXDR();
-  }
-}
 
 /**
  * Main entry point for the CoralSwap SDK.
@@ -53,10 +30,10 @@ export class KeypairSigner implements Signer {
  * connecting directly to Soroban RPC without intermediary APIs.
  */
 export class CoralSwapClient {
-  readonly network: Network;
-  readonly config: CoralSwapConfig;
-  readonly networkConfig: NetworkConfig;
-  readonly server: SorobanRpc.Server;
+  network: Network;
+  config: CoralSwapConfig;
+  networkConfig: NetworkConfig;
+  server: SorobanRpc.Server;
 
   private signer: Signer | null = null;
   private _publicKeyCache: string | null = null;
@@ -91,7 +68,10 @@ export class CoralSwapClient {
     if (config.signer) {
       this.signer = config.signer;
     } else if (config.secretKey) {
-      const kpSigner = new KeypairSigner(config.secretKey, this.networkConfig.networkPassphrase);
+      const kpSigner = new KeypairSigner(
+        config.secretKey,
+        this.networkConfig.networkPassphrase,
+      );
       this.signer = kpSigner;
       this._publicKeyCache = kpSigner.publicKeySync;
     }
@@ -136,7 +116,7 @@ export class CoralSwapClient {
   get factory(): FactoryClient {
     if (!this._factory) {
       if (!this.networkConfig.factoryAddress) {
-        throw new Error('Factory address not configured for this network');
+        throw new Error("Factory address not configured for this network");
       }
       this._factory = new FactoryClient(
         this.networkConfig.factoryAddress,
@@ -153,7 +133,7 @@ export class CoralSwapClient {
   get router(): RouterClient {
     if (!this._router) {
       if (!this.networkConfig.routerAddress) {
-        throw new Error('Router address not configured for this network');
+        throw new Error("Router address not configured for this network");
       }
       this._router = new RouterClient(
         this.networkConfig.routerAddress,
@@ -173,6 +153,38 @@ export class CoralSwapClient {
       this.networkConfig.rpcUrl,
       this.networkConfig.networkPassphrase,
     );
+  }
+
+  /**
+   * Switch the client to a different network.
+   *
+   * @param network - The target network.
+   * @param rpcUrl - Optional override for the RPC URL.
+   */
+  setNetwork(network: Network, rpcUrl?: string): void {
+    this.network = network;
+    this.networkConfig = {
+      ...NETWORK_CONFIGS[network],
+      ...(rpcUrl ? { rpcUrl } : {}),
+    };
+
+    this.server = new SorobanRpc.Server(this.networkConfig.rpcUrl);
+
+    // Reset contract client singletons to trigger re-initialization
+    this._factory = null;
+    this._router = null;
+
+    // Refresh signer if using built-in KeypairSigner
+    if (this.config.secretKey) {
+      const kpSigner = new KeypairSigner(this.config.secretKey, this.networkConfig.networkPassphrase);
+      this.signer = kpSigner;
+      this._publicKeyCache = kpSigner.publicKeySync;
+    }
+
+    this.logger?.info('setNetwork: network switched', {
+      network: this.network,
+      rpcUrl: this.networkConfig.rpcUrl,
+    });
   }
 
   /**
@@ -208,14 +220,14 @@ export class CoralSwapClient {
     source?: string,
   ): Promise<Result<{ txHash: string; ledger: number }>> {
     try {
-      const sourceKey = source ?? await this.resolvePublicKey();
+      const sourceKey = source ?? (await this.resolvePublicKey());
 
-      this.logger?.debug('getAccount: fetching account', { sourceKey });
+      this.logger?.debug("getAccount: fetching account", { sourceKey });
       const account = await this.server.getAccount(sourceKey);
-      this.logger?.debug('getAccount: success', { sourceKey });
+      this.logger?.debug("getAccount: success", { sourceKey });
 
       let builder = new TransactionBuilder(account, {
-        fee: '100',
+        fee: "100",
         networkPassphrase: this.networkConfig.networkPassphrase,
       });
 
@@ -225,23 +237,25 @@ export class CoralSwapClient {
 
       const tx = builder.setTimeout(this.networkConfig.sorobanTimeout).build();
 
-      this.logger?.debug('simulateTransaction: simulating', {
+      this.logger?.debug("simulateTransaction: simulating", {
         sourceKey,
         operationCount: operations.length,
       });
       const sim = await this.server.simulateTransaction(tx);
       if (!SorobanRpc.Api.isSimulationSuccess(sim)) {
-        this.logger?.error('simulateTransaction: simulation failed', { simulation: sim });
+        this.logger?.error("simulateTransaction: simulation failed", {
+          simulation: sim,
+        });
         return {
           success: false,
           error: {
-            code: 'SIMULATION_FAILED',
-            message: 'Transaction simulation failed',
+            code: "SIMULATION_FAILED",
+            message: "Transaction simulation failed",
             details: { simulation: sim },
           },
         };
       }
-      this.logger?.debug('simulateTransaction: success');
+      this.logger?.debug("simulateTransaction: success");
 
       const preparedTx = SorobanRpc.assembleTransaction(tx, sim).build();
 
@@ -249,8 +263,9 @@ export class CoralSwapClient {
         return {
           success: false,
           error: {
-            code: 'NO_SIGNER',
-            message: 'No signing key configured. Provide secretKey or a Signer instance.',
+            code: "NO_SIGNER",
+            message:
+              "No signing key configured. Provide secretKey or a Signer instance.",
           },
         };
       }
@@ -263,28 +278,30 @@ export class CoralSwapClient {
 
       const response = await this.server.sendTransaction(signedTx);
 
-      if (response.status === 'ERROR') {
-        this.logger?.error('sendTransaction: submission failed', { response });
+      if (response.status === "ERROR") {
+        this.logger?.error("sendTransaction: submission failed", { response });
         return {
           success: false,
           error: {
-            code: 'SUBMIT_FAILED',
-            message: 'Transaction submission failed',
+            code: "SUBMIT_FAILED",
+            message: "Transaction submission failed",
             details: { response },
           },
         };
       }
 
-      this.logger?.info('sendTransaction: submitted', { txHash: response.hash });
+      this.logger?.info("sendTransaction: submitted", {
+        txHash: response.hash,
+      });
       const result = await this.pollTransaction(response.hash);
       return result;
     } catch (err) {
-      this.logger?.error('submitTransaction: unexpected error', err);
+      this.logger?.error("submitTransaction: unexpected error", err);
       return {
         success: false,
         error: {
-          code: 'UNEXPECTED_ERROR',
-          message: err instanceof Error ? err.message : 'Unknown error',
+          code: "UNEXPECTED_ERROR",
+          message: err instanceof Error ? err.message : "Unknown error",
           details: { error: err },
         },
       };
@@ -301,15 +318,15 @@ export class CoralSwapClient {
     const retryDelay = this.config.retryDelayMs ?? DEFAULTS.retryDelayMs;
 
     for (let attempt = 0; attempt < maxRetries * 10; attempt++) {
-      this.logger?.debug('pollTransaction: polling attempt', {
+      this.logger?.debug("pollTransaction: polling attempt", {
         txHash,
         attempt: attempt + 1,
         maxAttempts: maxRetries * 10,
       });
       const status = await this.server.getTransaction(txHash);
 
-      if (status.status === 'SUCCESS') {
-        this.logger?.info('pollTransaction: confirmed', {
+      if (status.status === "SUCCESS") {
+        this.logger?.info("pollTransaction: confirmed", {
           txHash,
           ledger: status.ledger,
         });
@@ -323,16 +340,16 @@ export class CoralSwapClient {
         };
       }
 
-      if (status.status === 'FAILED') {
-        this.logger?.error('pollTransaction: transaction failed on-chain', {
+      if (status.status === "FAILED") {
+        this.logger?.error("pollTransaction: transaction failed on-chain", {
           txHash,
           status,
         });
         return {
           success: false,
           error: {
-            code: 'TX_FAILED',
-            message: 'Transaction failed on-chain',
+            code: "TX_FAILED",
+            message: "Transaction failed on-chain",
             details: { status },
           },
           txHash,
@@ -342,14 +359,14 @@ export class CoralSwapClient {
       await new Promise((resolve) => setTimeout(resolve, retryDelay));
     }
 
-    this.logger?.error('pollTransaction: timed out', {
+    this.logger?.error("pollTransaction: timed out", {
       txHash,
       attempts: maxRetries * 10,
     });
     return {
       success: false,
       error: {
-        code: 'TX_TIMEOUT',
+        code: "TX_TIMEOUT",
         message: `Transaction polling timed out after ${maxRetries * 10} attempts`,
       },
       txHash,
@@ -365,11 +382,13 @@ export class CoralSwapClient {
   ): Promise<SorobanRpc.Api.SimulateTransactionResponse> {
     const sourceKey = source ?? this.publicKey;
 
-    this.logger?.debug('simulateTransaction (dry-run): fetching account', { sourceKey });
+    this.logger?.debug("simulateTransaction (dry-run): fetching account", {
+      sourceKey,
+    });
     const account = await this.server.getAccount(sourceKey);
 
     let builder = new TransactionBuilder(account, {
-      fee: '100',
+      fee: "100",
       networkPassphrase: this.networkConfig.networkPassphrase,
     });
 
@@ -379,12 +398,12 @@ export class CoralSwapClient {
 
     const tx = builder.setTimeout(30).build();
 
-    this.logger?.debug('simulateTransaction (dry-run): simulating', {
+    this.logger?.debug("simulateTransaction (dry-run): simulating", {
       sourceKey,
       operationCount: operations.length,
     });
     const sim = await this.server.simulateTransaction(tx);
-    this.logger?.debug('simulateTransaction (dry-run): completed');
+    this.logger?.debug("simulateTransaction (dry-run): completed");
     return sim;
   }
 
@@ -392,7 +411,8 @@ export class CoralSwapClient {
    * Calculate a deadline timestamp (current ledger time + offset seconds).
    */
   getDeadline(offsetSec?: number): number {
-    const offset = offsetSec ?? this.config.defaultDeadlineSec ?? DEFAULTS.deadlineSec;
+    const offset =
+      offsetSec ?? this.config.defaultDeadlineSec ?? DEFAULTS.deadlineSec;
     return Math.floor(Date.now() / 1000) + offset;
   }
 
@@ -402,7 +422,7 @@ export class CoralSwapClient {
   async isHealthy(): Promise<boolean> {
     try {
       const health = await this.server.getHealth();
-      return health.status === 'healthy';
+      return health.status === "healthy";
     } catch {
       return false;
     }

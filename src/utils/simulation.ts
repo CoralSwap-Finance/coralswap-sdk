@@ -7,12 +7,45 @@ import { SorobanRpc, xdr } from '@stellar/stellar-sdk';
  */
 
 /**
+ * Standardized simulation response wrapper.
+ */
+export interface SimulationResult<T> {
+  success: boolean;
+  data: T;
+  error?: string;
+}
+
+/**
+ * Resource usage estimate extracted from simulation cost.
+ */
+export interface SimulationResourceEstimate {
+  cpuInstructions: number;
+  memoryBytes: number;
+  readBytes: number;
+  writeBytes: number;
+}
+
+function simulationFailedResult<T>(data: T): SimulationResult<T> {
+  return {
+    success: false,
+    data,
+    error: 'Simulation failed',
+  };
+}
+
+/**
  * Check if a simulation result is successful.
  */
 export function isSimulationSuccess(
   sim: SorobanRpc.Api.SimulateTransactionResponse,
-): boolean {
-  return SorobanRpc.Api.isSimulationSuccess(sim);
+): SimulationResult<boolean> {
+  const success = SorobanRpc.Api.isSimulationSuccess(sim);
+  if (!success) return simulationFailedResult(false);
+
+  return {
+    success: true,
+    data: true,
+  };
 }
 
 /**
@@ -20,9 +53,15 @@ export function isSimulationSuccess(
  */
 export function getSimulationReturnValue(
   sim: SorobanRpc.Api.SimulateTransactionResponse,
-): xdr.ScVal | null {
-  if (!SorobanRpc.Api.isSimulationSuccess(sim)) return null;
-  return sim.result?.retval ?? null;
+): SimulationResult<xdr.ScVal | null> {
+  if (!SorobanRpc.Api.isSimulationSuccess(sim)) {
+    return simulationFailedResult(null);
+  }
+
+  return {
+    success: true,
+    data: sim.result?.retval ?? null,
+  };
 }
 
 /**
@@ -30,20 +69,20 @@ export function getSimulationReturnValue(
  */
 export function getResourceEstimate(
   sim: SorobanRpc.Api.SimulateTransactionResponse,
-): {
-  cpuInstructions: number;
-  memoryBytes: number;
-  readBytes: number;
-  writeBytes: number;
-} | null {
-  if (!SorobanRpc.Api.isSimulationSuccess(sim)) return null;
+): SimulationResult<SimulationResourceEstimate | null> {
+  if (!SorobanRpc.Api.isSimulationSuccess(sim)) {
+    return simulationFailedResult(null);
+  }
 
   const cost = sim.cost;
   return {
-    cpuInstructions: cost?.cpuInsns ? Number(cost.cpuInsns) : 0,
-    memoryBytes: cost?.memBytes ? Number(cost.memBytes) : 0,
-    readBytes: 0,
-    writeBytes: 0,
+    success: true,
+    data: {
+      cpuInstructions: cost?.cpuInsns ? Number(cost.cpuInsns) : 0,
+      memoryBytes: cost?.memBytes ? Number(cost.memBytes) : 0,
+      readBytes: 0,
+      writeBytes: 0,
+    },
   };
 }
 
@@ -53,8 +92,14 @@ export function getResourceEstimate(
 export function exceedsBudget(
   sim: SorobanRpc.Api.SimulateTransactionResponse,
   maxInstructions: number = 100_000_000,
-): boolean {
+): SimulationResult<boolean> {
   const resources = getResourceEstimate(sim);
-  if (!resources) return true;
-  return resources.cpuInstructions > maxInstructions;
+  if (!resources.success || !resources.data) {
+    return simulationFailedResult(true);
+  }
+
+  return {
+    success: true,
+    data: resources.data.cpuInstructions > maxInstructions,
+  };
 }

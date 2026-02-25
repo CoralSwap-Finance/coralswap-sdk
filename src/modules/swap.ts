@@ -1,6 +1,6 @@
-import { CoralSwapClient } from '../client';
-import { PairClient } from '../contracts/pair';
-import { TradeType } from '../types/common';
+import { CoralSwapClient } from '@/client';
+import { PairClient } from '@/contracts/pair';
+import { TradeType } from '@/types/common';
 import {
   SwapRequest,
   SwapQuote,
@@ -8,8 +8,8 @@ import {
   HopResult,
   MultiHopSwapRequest,
   MultiHopSwapQuote,
-} from '../types/swap';
-import { PRECISION, DEFAULTS } from '../config';
+} from '@/types/swap';
+import { PRECISION, DEFAULTS } from '@/config';
 import {
   TransactionError,
   ValidationError,
@@ -23,6 +23,7 @@ import {
   validateDistinctTokens,
   isValidPath,
 } from '../utils/validation';
+
 
 /**
  * Swap module -- builds, quotes, and executes token swaps.
@@ -67,7 +68,6 @@ export class SwapModule {
     if (path.length === 2) {
       return this.getDirectQuote(request, path);
     }
-
     return this.getMultiHopQuoteInternal(request, path);
   }
 

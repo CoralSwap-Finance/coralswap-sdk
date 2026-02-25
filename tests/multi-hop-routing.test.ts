@@ -6,6 +6,7 @@ import {
   InsufficientLiquidityError,
   ValidationError,
 } from '../src/errors';
+import { shufflePath } from './helpers';
 
 // ---------------------------------------------------------------------------
 // Mock helpers (same pattern as existing multi-hop-swap.test.ts)
@@ -174,6 +175,19 @@ describe('Multi-hop routing (dedicated methods)', () => {
       expect(quote.tokenIn).toBe(TOKEN_A);
       expect(quote.tokenOut).toBe(TOKEN_C);
       expect(quote.path).toEqual([TOKEN_A, TOKEN_B, TOKEN_C]);
+    });
+
+    it('shufflePath returns a shuffled copy without mutating original', () => {
+      const basePath = [TOKEN_A, TOKEN_B, TOKEN_C, TOKEN_D] as const;
+      const copy = [...basePath];
+
+      const shuffled = shufflePath(basePath, () => 0.42);
+
+      // Original is unchanged
+      expect(basePath).toEqual(copy);
+
+      // Shuffled path contains the same tokens (possibly in different order)
+      expect([...shuffled].sort()).toEqual([...basePath].sort());
     });
 
     it('respects custom slippage tolerance', async () => {

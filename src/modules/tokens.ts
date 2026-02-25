@@ -1,8 +1,8 @@
 import { z } from 'zod';
-import { CoralSwapClient } from '../client';
-import { Network } from '../types/common';
-import { Token, TokenList } from '../types/tokens';
-import { NetworkError, ValidationError } from '../errors';
+import { CoralSwapClient } from '@/client';
+import { Network } from '@/types/common';
+import { Token, TokenList } from '@/types/tokens';
+import { NetworkError, ValidationError } from '@/errors';
 
 // ---------------------------------------------------------------------------
 // Zod schemas — validates token list JSON against Stellar token list standard
@@ -97,7 +97,7 @@ export class TokenListModule {
     const result = TokenListSchema.safeParse(data);
     if (!result.success) {
       const issues = result.error.issues
-        .map((i) => `${i.path.join('.')}: ${i.message}`)
+        .map((i: z.ZodIssue) => `${i.path.join('.')}: ${i.message}`)
         .join('; ');
       throw new ValidationError(`Invalid token list schema: ${issues}`, {
         zodErrors: result.error.issues,
@@ -142,6 +142,28 @@ export class TokenListModule {
    */
   findByAddress(tokens: Token[], address: string): Token | undefined {
     return tokens.find((t) => t.address === address);
+  }
+
+  /**
+   * Filter tokens by a specific tag.
+   *
+   * @param tokens - Token array to filter.
+   * @param tag - The tag to look for (e.g. "stablecoin").
+   * @returns Tokens containing the specified tag.
+   */
+  filterByTag(tokens: Token[], tag: string): Token[] {
+    return tokens.filter((t) => t.tags?.includes(tag));
+  }
+
+  /**
+   * Filter tokens that match ALL specified tags.
+   *
+   * @param tokens - Token array to filter.
+   * @param tags - List of tags that must all be present.
+   * @returns Tokens containing all the specified tags.
+   */
+  filterByTags(tokens: Token[], tags: string[]): Token[] {
+    return tokens.filter((t) => tags.every((tag) => t.tags?.includes(tag)));
   }
 
   // -------------------------------------------------------------------------
