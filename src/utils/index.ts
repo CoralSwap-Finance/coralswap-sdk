@@ -18,6 +18,7 @@ export {
   sortTokens,
   truncateAddress,
   toScAddress,
+  getPairAddress,
 } from './addresses';
 
 export {
