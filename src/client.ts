@@ -14,6 +14,7 @@ import { RouterClient } from '@/contracts/router';
 import { LPTokenClient } from '@/contracts/lp-token';
 import { TokenListModule } from '@/modules/tokens';
 import { KeypairSigner } from '@/utils/signer';
+export { KeypairSigner };
 
 /**
  * Default signer implementation that wraps a Stellar Keypair.

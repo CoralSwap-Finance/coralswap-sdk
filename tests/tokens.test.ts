@@ -17,6 +17,7 @@ const VALID_TOKEN_LIST = {
       decimals: 7,
       network: 'testnet',
       logoURI: 'https://example.com/usdc.png',
+      tags: ['stablecoin', 'fiat-backed'],
     },
     {
       address: 'CBQHNAXSI55GX2GN6D67GK7BHVPSLJUGZQEU7WJ5LKR5PNUCGLIMAO4K',
@@ -24,6 +25,7 @@ const VALID_TOKEN_LIST = {
       symbol: 'wXLM',
       decimals: 7,
       network: 'testnet',
+      tags: ['native', 'wrapped'],
     },
     {
       address: 'CA1MAINNETADDRESS000000000000000000000000000000000000000',
@@ -31,6 +33,7 @@ const VALID_TOKEN_LIST = {
       symbol: 'USDC',
       decimals: 7,
       network: 'mainnet',
+      tags: ['stablecoin'],
     },
   ],
 };
@@ -163,6 +166,34 @@ describe('TokenListModule', () => {
     it('returns undefined for unknown address', () => {
       const all = mod.validate(VALID_TOKEN_LIST);
       expect(mod.findByAddress(all.tokens, 'UNKNOWN')).toBeUndefined();
+    });
+  });
+
+  describe('filterByTag', () => {
+    it('filters tokens by a single tag', () => {
+      const all = mod.validate(VALID_TOKEN_LIST);
+      const results = mod.filterByTag(all.tokens, 'stablecoin');
+      expect(results).toHaveLength(2);
+      expect(results.map((t) => t.symbol)).toContain('USDC');
+    });
+
+    it('returns empty array if tag not found', () => {
+      const all = mod.validate(VALID_TOKEN_LIST);
+      expect(mod.filterByTag(all.tokens, 'non-existent')).toHaveLength(0);
+    });
+  });
+
+  describe('filterByTags', () => {
+    it('filters tokens by multiple tags', () => {
+      const all = mod.validate(VALID_TOKEN_LIST);
+      const results = mod.filterByTags(all.tokens, ['stablecoin', 'fiat-backed']);
+      expect(results).toHaveLength(1);
+      expect(results[0].symbol).toBe('USDC');
+    });
+
+    it('returns empty array if any tag is missing', () => {
+      const all = mod.validate(VALID_TOKEN_LIST);
+      expect(mod.filterByTags(all.tokens, ['stablecoin', 'non-existent'])).toHaveLength(0);
     });
   });
 
