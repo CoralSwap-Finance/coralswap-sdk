@@ -68,6 +68,7 @@ export type { TWAPObservation, TWAPResult } from './modules';
 // Utilities
 export {
   toSorobanAmount,
+  parseTokenAmount,
   fromSorobanAmount,
   formatAmount,
   toBps,

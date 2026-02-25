@@ -1,5 +1,6 @@
 import {
   toSorobanAmount,
+  parseTokenAmount,
   fromSorobanAmount,
   formatAmount,
   toBps,
@@ -30,6 +31,33 @@ describe('Amount Utilities', () => {
 
     it('pads short decimals', () => {
       expect(toSorobanAmount('1.5', 7)).toBe(15000000n);
+    });
+  });
+
+  describe('parseTokenAmount', () => {
+    it('parses whole amounts', () => {
+      expect(parseTokenAmount('1', 7)).toBe(10000000n);
+    });
+
+    it('parses decimal amounts', () => {
+      expect(parseTokenAmount('1.5', 7)).toBe(15000000n);
+    });
+
+    it('parses negative amounts', () => {
+      expect(parseTokenAmount('-1.5', 7)).toBe(-15000000n);
+    });
+
+    it('trims whitespace', () => {
+      expect(parseTokenAmount(' 1.5 ', 7)).toBe(15000000n);
+    });
+
+    it('throws on invalid format', () => {
+      expect(() => parseTokenAmount('abc', 7)).toThrow('Invalid amount format');
+    });
+
+    it('throws on invalid decimals', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect(() => parseTokenAmount('1', -1 as any)).toThrow('Invalid decimals');
     });
   });
 

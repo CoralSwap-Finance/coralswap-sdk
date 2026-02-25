@@ -1,5 +1,6 @@
 export {
   toSorobanAmount,
+  parseTokenAmount,
   fromSorobanAmount,
   formatAmount,
   toBps,

@@ -8,12 +8,30 @@ import { PRECISION } from '../config';
  */
 
 /**
- * Convert a human-readable decimal string to i128 BigInt.
- *
- * @example toSorobanAmount("1.5", 7) => 15000000n
+ * Core implementation for parsing a decimal string into a BigInt with the
+ * given number of decimals. This is used by both `toSorobanAmount` and
+ * `parseTokenAmount` to keep behavior consistent.
  */
-export function toSorobanAmount(amount: string, decimals: number = 7): bigint {
-  const parts = amount.split('.');
+function parseDecimalString(amount: string, decimals: number): bigint {
+  if (!Number.isInteger(decimals) || decimals < 0) {
+    throw new Error('Invalid decimals');
+  }
+
+  const trimmed = amount.trim();
+  if (trimmed === '') {
+    throw new Error('Amount is required');
+  }
+
+  const isNegative = trimmed.startsWith('-');
+  const isPositive = trimmed.startsWith('+');
+  const sign = isNegative ? -1n : 1n;
+  const numeric = isNegative || isPositive ? trimmed.slice(1) : trimmed;
+
+  if (!/^\d+(\.\d+)?$/.test(numeric)) {
+    throw new Error('Invalid amount format');
+  }
+
+  const parts = numeric.split('.');
   const whole = parts[0] ?? '0';
   let frac = parts[1] ?? '';
 
@@ -23,7 +41,30 @@ export function toSorobanAmount(amount: string, decimals: number = 7): bigint {
     frac = frac.padEnd(decimals, '0');
   }
 
-  return BigInt(whole + frac);
+  const parsed = BigInt(whole + frac);
+  return sign * parsed;
+}
+
+/**
+ * Convert a human-readable decimal string to i128 BigInt.
+ *
+ * @example toSorobanAmount("1.5", 7) => 15000000n
+ */
+export function toSorobanAmount(amount: string, decimals: number = 7): bigint {
+  return parseDecimalString(amount, decimals);
+}
+
+/**
+ * Parse a human-readable token amount into the smallest unit BigInt.
+ *
+ * This is a general-purpose helper for converting values like "1.5" with a
+ * given token decimal count into the BigInt representation used for contract
+ * interactions.
+ *
+ * @example parseTokenAmount("1.5", 7) => 15000000n
+ */
+export function parseTokenAmount(amount: string, decimals: number): bigint {
+  return parseDecimalString(amount, decimals);
 }
 
 /**
