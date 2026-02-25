@@ -2,6 +2,7 @@ import {
   isValidPublicKey,
   isValidContractId,
   isValidAddress,
+  isNativeToken,
   sortTokens,
   truncateAddress,
   getPairAddress,
@@ -46,6 +47,33 @@ describe('Address Utilities', () => {
 
     it('rejects invalid addresses', () => {
       expect(isValidAddress('xyz')).toBe(false);
+    });
+  });
+
+  describe('isNativeToken', () => {
+    it('returns true for XLM symbol (case-insensitive)', () => {
+      expect(isNativeToken('XLM')).toBe(true);
+      expect(isNativeToken('xlm')).toBe(true);
+    });
+
+    it('returns true for generic native identifier', () => {
+      expect(isNativeToken('native')).toBe(true);
+      expect(isNativeToken(' NATIVE ')).toBe(true);
+    });
+
+    it('returns false for empty or whitespace-only input', () => {
+      expect(isNativeToken('')).toBe(false);
+      expect(isNativeToken('   ')).toBe(false);
+    });
+
+    it('returns false for real Stellar addresses', () => {
+      expect(isNativeToken(VALID_PUBLIC_KEY)).toBe(false);
+      expect(isNativeToken(VALID_CONTRACT)).toBe(false);
+    });
+
+    it('returns false for arbitrary asset identifiers', () => {
+      expect(isNativeToken('USDC')).toBe(false);
+      expect(isNativeToken('TOKEN:ISSUER')).toBe(false);
     });
   });
 

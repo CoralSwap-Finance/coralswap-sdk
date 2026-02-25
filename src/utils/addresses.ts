@@ -34,6 +34,26 @@ export function isValidAddress(address: string): boolean {
 }
 
 /**
+ * Determine whether a token identifier refers to the native XLM asset.
+ *
+ * Accepts common native identifiers like "XLM" or "native" (case-insensitive).
+ * Valid Stellar account or contract addresses are never treated as native.
+ */
+export function isNativeToken(identifier: string): boolean {
+  const normalized = identifier.trim();
+  if (!normalized) return false;
+
+  const upper = normalized.toUpperCase();
+
+  // If this looks like a real on-chain address, it is not the native asset.
+  if (isValidAddress(upper)) {
+    return false;
+  }
+
+  return upper === 'XLM' || upper === 'NATIVE';
+}
+
+/**
  * Sort two token addresses deterministically (for pair lookups).
  *
  * CoralSwap Factory sorts tokens: token0 < token1.

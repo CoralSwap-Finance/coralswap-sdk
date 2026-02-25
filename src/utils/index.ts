@@ -15,6 +15,7 @@ export {
   isValidPublicKey,
   isValidContractId,
   isValidAddress,
+  isNativeToken,
   sortTokens,
   truncateAddress,
   toScAddress,

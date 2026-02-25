@@ -17,6 +17,11 @@ type TxWithOptionalHash = SorobanRpc.Api.GetSuccessfulTransactionResponse & {
   id?: string;
 };
 
+type TxWithOptionalHash = SorobanRpc.Api.GetSuccessfulTransactionResponse & {
+  hash?: string;
+  id?: string;
+};
+
 // ---------------------------------------------------------------------------
 // Known event topic symbols emitted by CoralSwap Pair contracts
 // ---------------------------------------------------------------------------
