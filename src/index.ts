@@ -99,12 +99,14 @@ export {
   validateNonNegativeAmount,
   validateSlippage,
   validateDistinctTokens,
+  waitNextLedger,
 } from "@/utils";
 
 export type {
   RetryConfig,
   SimulationResult,
   SimulationResourceEstimate,
+  WaitNextLedgerOptions,
 } from "./utils";
 
 // Errors
