@@ -77,7 +77,7 @@ export class TransactionError extends CoralSwapSDKError {
  */
 export class DeadlineError extends CoralSwapSDKError {
   constructor(deadline: number) {
-    super("DEADLINE_EXCEEDED", `Transaction deadline exceeded: ${deadline}`, {
+    super("DEADLINE_EXCEEDED", `Transaction deadline exceeded (deadline: ${deadline})`, {
       deadline,
     });
     this.name = "DeadlineError";
@@ -96,7 +96,7 @@ export class SlippageError extends CoralSwapSDKError {
   ) {
     super(
       "SLIPPAGE_EXCEEDED",
-      `Slippage exceeded: expected ${expected}, got ${actual} (tolerance: ${toleranceBps}bps)`,
+      `Slippage tolerance exceeded. Expected ${expected}, got ${actual} (tolerance: ${toleranceBps} bps)`,
       {
         expected: expected.toString(),
         actual: actual.toString(),
@@ -115,7 +115,7 @@ export class InsufficientLiquidityError extends CoralSwapSDKError {
   constructor(pairAddress: string, details?: Record<string, unknown>) {
     super(
       "INSUFFICIENT_LIQUIDITY",
-      `Insufficient liquidity in pair ${pairAddress}`,
+      `Insufficient liquidity for pair ${pairAddress}`,
       { pairAddress, ...details },
     );
     this.name = "InsufficientLiquidityError";
@@ -127,7 +127,7 @@ export class InsufficientLiquidityError extends CoralSwapSDKError {
  */
 export class PairNotFoundError extends CoralSwapSDKError {
   constructor(tokenA: string, tokenB: string) {
-    super("PAIR_NOT_FOUND", `No pair found for tokens ${tokenA} / ${tokenB}`, {
+    super("PAIR_NOT_FOUND", `Pair not found for tokens ${tokenA} / ${tokenB}`, {
       tokenA,
       tokenB,
     });
@@ -160,7 +160,7 @@ export class FlashLoanError extends CoralSwapSDKError {
  */
 export class CircuitBreakerError extends CoralSwapSDKError {
   constructor(pairAddress: string) {
-    super("CIRCUIT_BREAKER", `Circuit breaker active on pair ${pairAddress}`, {
+    super("CIRCUIT_BREAKER", `Pool is paused for pair ${pairAddress}`, {
       pairAddress,
     });
     this.name = "CircuitBreakerError";
@@ -185,7 +185,8 @@ export class SignerError extends CoralSwapSDKError {
  */
 function extractPairAddress(err: unknown): string {
   if (err && typeof err === "object") {
-    const details = (err as any).details;
+    const details = (err as { details?: { pairAddress?: string; pair?: string } })
+      .details;
     if (details?.pairAddress) return details.pairAddress;
     if (details?.pair) return details.pair;
   }
@@ -207,7 +208,6 @@ function extractPairAddress(err: unknown): string {
  */
 function mapContractError(
   code: number,
-  message: string,
   err: unknown,
 ): CoralSwapSDKError | null {
   // Core pair contract errors (100-113)
@@ -245,13 +245,13 @@ function mapContractError(
     case 109:
       return new CircuitBreakerError(extractPairAddress(err));
     case 110:
-      return new ValidationError("Unauthorized", { contractErrorCode: code });
+      return new ValidationError("Unauthorized operation", { contractErrorCode: code });
     case 111:
       return new ValidationError("Invalid recipient", {
         contractErrorCode: code,
       });
     case 112:
-      return new ValidationError("Overflow", { contractErrorCode: code });
+      return new ValidationError("Arithmetic overflow", { contractErrorCode: code });
     case 113:
       return new ValidationError("K invariant violated", {
         contractErrorCode: code,
@@ -261,7 +261,7 @@ function mapContractError(
     case 300:
       return new PairNotFoundError("unknown", "unknown");
     case 301:
-      return new ValidationError("Invalid path", { contractErrorCode: code });
+      return new ValidationError("Invalid swap path", { contractErrorCode: code });
     case 302:
       return new SlippageError(0n, 0n, 0, { contractErrorCode: code });
     case 303:
@@ -295,24 +295,25 @@ export function mapError(err: unknown): CoralSwapSDKError {
   if (err instanceof CoralSwapSDKError) return err;
 
   const message = err instanceof Error ? err.message : String(err);
+  const normalizedMessage = message.toLowerCase();
 
   // Check for Soroban contract error codes: Error(Contract, #XXX)
   const contractErrorMatch = message.match(/Error\(Contract,\s*#?(\d+)\)/i);
   if (contractErrorMatch) {
     const errorCode = parseInt(contractErrorMatch[1], 10);
-    const mappedError = mapContractError(errorCode, message, err);
+    const mappedError = mapContractError(errorCode, err);
     if (mappedError) return mappedError;
   }
 
   // Extract deadline value from message - improved regex
   const deadlineMatch = message.match(/deadline[:\s]*[a-z]*[:\s]*(\d+)/i);
-  if (message.includes("EXPIRED") || message.includes("deadline")) {
+  if (message.includes("EXPIRED") || normalizedMessage.includes("deadline")) {
     const deadline = deadlineMatch ? parseInt(deadlineMatch[1], 10) : 0;
     return new DeadlineError(deadline);
   }
 
   // Extract slippage amounts from message
-  if (message.includes("slippage") || message.includes("INSUFFICIENT_OUTPUT")) {
+  if (normalizedMessage.includes("slippage") || message.includes("INSUFFICIENT_OUTPUT")) {
     const expectedMatch = message.match(/expected[:\s]*(\d+)/i);
     const actualMatch = message.match(/(?:got|actual)[:\s]*(\d+)/i);
     const toleranceMatch = message.match(/tolerance[:\s]*(\d+)/i);
@@ -326,7 +327,7 @@ export function mapError(err: unknown): CoralSwapSDKError {
 
   // Extract pair address for liquidity errors
   if (
-    message.includes("liquidity") ||
+    normalizedMessage.includes("liquidity") ||
     message.includes("INSUFFICIENT_LIQUIDITY")
   ) {
     return new InsufficientLiquidityError(extractPairAddress(err));
@@ -334,8 +335,8 @@ export function mapError(err: unknown): CoralSwapSDKError {
 
   // Circuit breaker / paused pool - check before other patterns
   if (
-    message.toLowerCase().includes("circuit") ||
-    message.toLowerCase().includes("paused")
+    normalizedMessage.includes("circuit") ||
+    normalizedMessage.includes("paused")
   ) {
     return new CircuitBreakerError(extractPairAddress(err));
   }
@@ -352,8 +353,8 @@ export function mapError(err: unknown): CoralSwapSDKError {
 
   // RPC-specific errors
   if (
-    message.includes("rate limit") ||
-    message.includes("too many requests") ||
+    normalizedMessage.includes("rate limit") ||
+    normalizedMessage.includes("too many requests") ||
     message.includes("RPC") ||
     message.includes("429")
   ) {
@@ -362,53 +363,53 @@ export function mapError(err: unknown): CoralSwapSDKError {
 
   // Signer errors
   if (
-    message.includes("signing") ||
-    message.includes("signer") ||
+    normalizedMessage.includes("signing") ||
+    normalizedMessage.includes("signer") ||
     message.includes("NO_SIGNER") ||
-    message.includes("private key")
+    normalizedMessage.includes("private key")
   ) {
     return new SignerError();
   }
 
   // Flash loan errors
   if (
-    message.includes("flash loan") ||
-    message.includes("flash_loan") ||
-    message.includes("reentrancy") ||
-    message.includes("callback")
+    normalizedMessage.includes("flash loan") ||
+    normalizedMessage.includes("flash_loan") ||
+    normalizedMessage.includes("reentrancy") ||
+    normalizedMessage.includes("callback")
   ) {
     return new FlashLoanError(message);
   }
 
   // Validation errors - be more specific to avoid false matches
   if (
-    (message.includes("invalid") && !message.includes("active")) ||
-    message.includes("validation") ||
-    message.includes("required") ||
-    message.includes("must be")
+    (normalizedMessage.includes("invalid") && !normalizedMessage.includes("active")) ||
+    normalizedMessage.includes("validation") ||
+    normalizedMessage.includes("required") ||
+    normalizedMessage.includes("must be")
   ) {
     return new ValidationError(message);
   }
 
   // Pair not found
   if (
-    message.includes("pair not found") ||
-    message.includes("no pair") ||
+    normalizedMessage.includes("pair not found") ||
+    normalizedMessage.includes("no pair") ||
     message.includes("PAIR_NOT_FOUND")
   ) {
     return new PairNotFoundError("unknown", "unknown");
   }
 
   // Simulation errors
-  if (message.includes("simulation") || message.includes("SIMULATION_FAILED")) {
+  if (normalizedMessage.includes("simulation") || message.includes("SIMULATION_FAILED")) {
     return new SimulationError(message);
   }
 
   // Transaction errors
   if (
-    message.includes("transaction") ||
+    normalizedMessage.includes("transaction") ||
     message.includes("TX_FAILED") ||
-    message.includes("tx failed")
+    normalizedMessage.includes("tx failed")
   ) {
     return new TransactionError(message);
   }
