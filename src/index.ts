@@ -97,7 +97,11 @@ export {
   validateDistinctTokens,
 } from './utils';
 
-export type { RetryConfig } from './utils';
+export type {
+  RetryConfig,
+  SimulationResult,
+  SimulationResourceEstimate,
+} from './utils';
 
 // Errors
 export {
