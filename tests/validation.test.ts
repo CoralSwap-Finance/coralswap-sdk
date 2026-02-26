@@ -4,6 +4,7 @@ import {
   validateNonNegativeAmount,
   validateSlippage,
   validateDistinctTokens,
+  isValidPath,
 } from '../src/utils/validation';
 import { ValidationError } from '../src/errors';
 
@@ -112,6 +113,23 @@ describe('Validation Guards', () => {
     it('throws on identical addresses', () => {
       expect(() => validateDistinctTokens(VALID_CONTRACT, VALID_CONTRACT)).toThrow(ValidationError);
       expect(() => validateDistinctTokens(VALID_CONTRACT, VALID_CONTRACT)).toThrow('must be different');
+    });
+  });
+
+  describe('isValidPath', () => {
+    it('returns false for paths with fewer than 2 tokens', () => {
+      expect(isValidPath([])).toBe(false);
+      expect(isValidPath(['A'])).toBe(false);
+    });
+
+    it('returns false when any adjacent tokens are identical', () => {
+      expect(isValidPath(['A', 'A'])).toBe(false);
+      expect(isValidPath(['A', 'B', 'B', 'C'])).toBe(false);
+    });
+
+    it('returns true for structurally valid paths', () => {
+      expect(isValidPath(['A', 'B'])).toBe(true);
+      expect(isValidPath(['A', 'B', 'C'])).toBe(true);
     });
   });
 });

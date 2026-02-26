@@ -10,7 +10,7 @@ export {
   safeDiv,
   minBigInt,
   maxBigInt,
-} from './amounts';
+} from "./amounts";
 
 export {
   isValidPublicKey,
@@ -28,7 +28,7 @@ export {
   getSimulationReturnValue,
   getResourceEstimate,
   exceedsBudget,
-} from './simulation';
+} from "./simulation";
 
 export type { SimulationResult, SimulationResourceEstimate } from './simulation';
 
@@ -38,7 +38,7 @@ export {
   sleep,
   RetryConfig,
   DEFAULT_RETRY_CONFIG,
-} from './retry';
+} from "./retry";
 
 export { Fraction, Percent, Rounding } from './math';
 
@@ -48,6 +48,7 @@ export {
   validateNonNegativeAmount,
   validateSlippage,
   validateDistinctTokens,
+  isValidPath,
 } from './validation';
 
 export { waitNextLedger } from './ledger';

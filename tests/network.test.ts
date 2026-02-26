@@ -1,8 +1,8 @@
-import { Keypair, SorobanRpc } from '@stellar/stellar-sdk';
-import { CoralSwapClient } from '../src/client';
-import { NetworkSwitcher } from '../src/contracts/switcher';
-import { Network } from '../src/types/common';
-import { NETWORK_CONFIGS } from '../src/config';
+import { Keypair, SorobanRpc } from "@stellar/stellar-sdk";
+import { CoralSwapClient } from "../src/client";
+import { NetworkSwitcher } from "../src/contracts/switcher";
+import { Network } from "../src/types/common";
+import { NETWORK_CONFIGS } from "../src/config";
 
 // Mock SorobanRpc.Server
 jest.mock('@stellar/stellar-sdk', () => {
@@ -19,82 +19,97 @@ jest.mock('@stellar/stellar-sdk', () => {
                 getTransaction: jest.fn(),
             })),
         },
+        Contract: jest.fn().mockImplementation((address) => ({
+            address,
+            call: jest.fn(),
+        })),
     };
 });
 
-describe('Network Switching', () => {
-    const TEST_SECRET = 'SB6K2AINTGNYBFX4M7TRPGSKQ5RKNOXXWB7UZUHRYOVTM7REDUGECKZU';
+describe("Network Switching", () => {
+  const TEST_SECRET =
+    "SB6K2AINTGNYBFX4M7TRPGSKQ5RKNOXXWB7UZUHRYOVTM7REDUGECKZU";
 
-    it('CoralSwapClient.setNetwork updates configuration correctly', () => {
-        const client = new CoralSwapClient({
-            network: Network.TESTNET,
-            secretKey: TEST_SECRET,
-        });
-
-        expect(client.network).toBe(Network.TESTNET);
-        expect(client.networkConfig.networkPassphrase).toBe(NETWORK_CONFIGS[Network.TESTNET].networkPassphrase);
-        const initialServer = client.server;
-
-        // Switch to Mainnet
-        client.setNetwork(Network.MAINNET);
-
-        expect(client.network).toBe(Network.MAINNET);
-        expect(client.networkConfig.networkPassphrase).toBe(NETWORK_CONFIGS[Network.MAINNET].networkPassphrase);
-        expect(client.server).not.toBe(initialServer);
-        expect((client.server as any).rpcUrl).toBe(NETWORK_CONFIGS[Network.MAINNET].rpcUrl);
+  it("CoralSwapClient.setNetwork updates configuration correctly", () => {
+    const client = new CoralSwapClient({
+      network: Network.TESTNET,
+      secretKey: TEST_SECRET,
     });
 
-    it('CoralSwapClient.setNetwork resets contract singletons', () => {
-        const client = new CoralSwapClient({
-            network: Network.TESTNET,
-            // Need factoryAddress in config for TESTNET if it's empty in config.ts, 
-            // but let's assume it's empty and we check if the cache is cleared.
-        });
+    expect(client.network).toBe(Network.TESTNET);
+    expect(client.networkConfig.networkPassphrase).toBe(
+      NETWORK_CONFIGS[Network.TESTNET].networkPassphrase,
+    );
+    const initialServer = client.server;
 
-        // Use valid contract IDs so Factory constructor does not throw
-        const factoryAddr1 = 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM';
-        const factoryAddr2 = 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4';
-        (client as any).networkConfig.factoryAddress = factoryAddr1;
+    // Switch to Mainnet
+    client.setNetwork(Network.MAINNET);
 
-        const factory1 = client.factory;
-        expect(factory1).toBeDefined();
+    expect(client.network).toBe(Network.MAINNET);
+    expect(client.networkConfig.networkPassphrase).toBe(
+      NETWORK_CONFIGS[Network.MAINNET].networkPassphrase,
+    );
+    expect(client.server).not.toBe(initialServer);
+    expect((client.server as any).rpcUrl).toBe(
+      NETWORK_CONFIGS[Network.MAINNET].rpcUrl,
+    );
+  });
 
-        client.setNetwork(Network.MAINNET);
-
-        // After reset, a new access creates a new instance with the new config
-        (client as any).networkConfig.factoryAddress = factoryAddr2;
-        const factory2 = client.factory;
-        expect(factory2).not.toBe(factory1);
+  it("CoralSwapClient.setNetwork resets contract singletons", () => {
+    const client = new CoralSwapClient({
+      network: Network.TESTNET,
+      // Need factoryAddress in config for TESTNET if it's empty in config.ts,
+      // but let's assume it's empty and we check if the cache is cleared.
     });
 
-    it('NetworkSwitcher wraps client.setNetwork correctly', async () => {
-        const client = new CoralSwapClient({
-            network: Network.TESTNET,
-            secretKey: TEST_SECRET,
-        });
+    // Mock factoryAddress with valid contract addresses
+    (client as any).networkConfig.factoryAddress =
+      "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4";
 
-        const switcher = new NetworkSwitcher(client);
+    const factory1 = client.factory;
+    expect(factory1).toBeDefined();
 
-        // Mock resolvePublicKey to avoid errors
-        client.resolvePublicKey = jest.fn().mockResolvedValue('test-pubkey');
+    client.setNetwork(Network.MAINNET);
 
-        await switcher.switchNetwork(Network.MAINNET);
+    // After reset, checking if the private field is null would be best,
+    // but we can check if a new access creates a new instance.
+    // However, since we can't easily check private fields in TS tests without casting,
+    // let's just verify properties of the new client are updated if we had different addresses.
 
-        expect(client.network).toBe(Network.MAINNET);
-        expect(client.resolvePublicKey).toHaveBeenCalled();
+    (client as any).networkConfig.factoryAddress =
+      "CAAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQC526";
+    const factory2 = client.factory;
+    expect(factory2).not.toBe(factory1);
+  });
+
+  it("NetworkSwitcher wraps client.setNetwork correctly", async () => {
+    const client = new CoralSwapClient({
+      network: Network.TESTNET,
+      secretKey: TEST_SECRET,
     });
 
-    it('supports custom RPC URL during network switch', () => {
-        const client = new CoralSwapClient({
-            network: Network.TESTNET,
-            secretKey: TEST_SECRET,
-        });
+    const switcher = new NetworkSwitcher(client);
 
-        const customRpc = 'https://my-custom-rpc.com';
-        client.setNetwork(Network.MAINNET, customRpc);
+    // Mock resolvePublicKey to avoid errors
+    client.resolvePublicKey = jest.fn().mockResolvedValue("test-pubkey");
 
-        expect(client.network).toBe(Network.MAINNET);
-        expect(client.networkConfig.rpcUrl).toBe(customRpc);
-        expect((client.server as any).rpcUrl).toBe(customRpc);
+    await switcher.switchNetwork(Network.MAINNET);
+
+    expect(client.network).toBe(Network.MAINNET);
+    expect(client.resolvePublicKey).toHaveBeenCalled();
+  });
+
+  it("supports custom RPC URL during network switch", () => {
+    const client = new CoralSwapClient({
+      network: Network.TESTNET,
+      secretKey: TEST_SECRET,
     });
+
+    const customRpc = "https://my-custom-rpc.com";
+    client.setNetwork(Network.MAINNET, customRpc);
+
+    expect(client.network).toBe(Network.MAINNET);
+    expect(client.networkConfig.rpcUrl).toBe(customRpc);
+    expect((client.server as any).rpcUrl).toBe(customRpc);
+  });
 });
