@@ -449,7 +449,7 @@ describe("LiquidityModule", () => {
     const TOKEN_A = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM";
     const TOKEN_B = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4";
     const TO_ADDRESS =
-      "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEKE4";
+      "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM";
 
     let module: LiquidityModule;
     let mockClient: jest.Mocked<CoralSwapClient>;
@@ -494,7 +494,7 @@ describe("LiquidityModule", () => {
         2000n,
         900n,
         1800n,
-        undefined, // deadline should be undefined since we didn't provide one
+        1234567890, // deadline should be from client since we didn't provide one
       );
       expect(mockClient.submitTransaction).toHaveBeenCalled();
       expect(result).toEqual({
@@ -679,7 +679,7 @@ describe("LiquidityModule", () => {
     const TOKEN_A = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM";
     const TOKEN_B = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4";
     const TO_ADDRESS =
-      "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEKE4";
+      "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM";
 
     let module: LiquidityModule;
     let mockClient: jest.Mocked<CoralSwapClient>;
@@ -722,7 +722,7 @@ describe("LiquidityModule", () => {
         500n,
         400n,
         800n,
-        undefined, // deadline should be undefined since we didn't provide one
+        1234567890, // deadline should be from client since we didn't provide one
       );
       expect(mockClient.submitTransaction).toHaveBeenCalled();
       expect(result).toEqual({
