@@ -1,4 +1,4 @@
-import { Network, Logger, Signer } from './types/common';
+import { Network, Logger, Signer } from '@/types/common';
 
 /**
  * Contract addresses per network deployment.
@@ -66,6 +66,14 @@ export const DEFAULTS = {
   multiSigThreshold: 2,
   multiSigSigners: 3,
 } as const;
+
+/**
+ * Standard default slippage tolerance expressed in basis points.
+ *
+ * This value is used when applications do not provide an explicit
+ * `slippageBps` or `defaultSlippageBps` override.
+ */
+export const DEFAULT_SLIPPAGE = DEFAULTS.slippageBps;
 
 /**
  * Precision constants for Soroban i128 math.

@@ -7,3 +7,4 @@ coverage/
 *.sh
 .DS_Store
 *.tsbuildinfo
+docs/

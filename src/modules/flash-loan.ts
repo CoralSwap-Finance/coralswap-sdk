@@ -1,12 +1,13 @@
-import { CoralSwapClient } from '../client';
+import { CoralSwapClient } from '@/client';
 import {
   FlashLoanRequest,
   FlashLoanResult,
   FlashLoanFeeEstimate,
-} from '../types/flash-loan';
-import { FlashLoanConfig } from '../types/pool';
-import { calculateRepayment, validateFeeFloor } from '../contracts/flash-receiver';
-import { FlashLoanError, TransactionError } from '../errors';
+} from '@/types/flash-loan';
+import { FlashLoanConfig } from '@/types/pool';
+import { calculateRepayment, validateFeeFloor } from '@/contracts/flash-receiver';
+import { FlashLoanError, TransactionError } from '@/errors';
+import { validateAddress, validatePositiveAmount } from '@/utils/validation';
 
 /**
  * Flash Loan module -- first-class flash loan support for CoralSwap.
@@ -30,6 +31,10 @@ export class FlashLoanModule {
     token: string,
     amount: bigint,
   ): Promise<FlashLoanFeeEstimate> {
+    validateAddress(pairAddress, 'pairAddress');
+    validateAddress(token, 'token');
+    validatePositiveAmount(amount, 'amount');
+
     const pair = this.client.pair(pairAddress);
     const config = await pair.getFlashLoanConfig();
 
@@ -59,6 +64,11 @@ export class FlashLoanModule {
    * on_flash_loan(sender, token, amount, fee, data) callback.
    */
   async execute(request: FlashLoanRequest): Promise<FlashLoanResult> {
+    validateAddress(request.pairAddress, 'pairAddress');
+    validateAddress(request.token, 'token');
+    validatePositiveAmount(request.amount, 'amount');
+    validateAddress(request.receiverAddress, 'receiverAddress');
+
     const pair = this.client.pair(request.pairAddress);
     const config = await pair.getFlashLoanConfig();
 

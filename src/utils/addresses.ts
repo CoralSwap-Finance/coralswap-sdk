@@ -1,4 +1,4 @@
-import { Address, StrKey } from '@stellar/stellar-sdk';
+import { Address, StrKey, hash, xdr } from '@stellar/stellar-sdk';
 
 /**
  * Address utilities for Stellar/Soroban address handling.
@@ -28,9 +28,42 @@ export function isValidContractId(address: string): boolean {
 
 /**
  * Validate any Stellar address (public key or contract).
+ *
+ * General-purpose address validator that handles both Stellar Public Keys (G...)
+ * and Soroban Contract IDs (C...), returning a boolean indicating validity.
+ *
+ * @param address - The address string to validate
+ * @returns true if the address is a valid Stellar public key or Soroban contract ID, false otherwise
+ *
+ * @example
+ * ```ts
+ * isValidAddress('GABC...'); // true for valid public key
+ * isValidAddress('CABC...'); // true for valid contract
+ * isValidAddress('invalid'); // false
+ * ```
  */
 export function isValidAddress(address: string): boolean {
   return isValidPublicKey(address) || isValidContractId(address);
+}
+
+/**
+ * Determine whether a token identifier refers to the native XLM asset.
+ *
+ * Accepts common native identifiers like "XLM" or "native" (case-insensitive).
+ * Valid Stellar account or contract addresses are never treated as native.
+ */
+export function isNativeToken(identifier: string): boolean {
+  const normalized = identifier.trim();
+  if (!normalized) return false;
+
+  const upper = normalized.toUpperCase();
+
+  // If this looks like a real on-chain address, it is not the native asset.
+  if (isValidAddress(upper)) {
+    return false;
+  }
+
+  return upper === 'XLM' || upper === 'NATIVE';
 }
 
 /**
@@ -39,7 +72,7 @@ export function isValidAddress(address: string): boolean {
  * CoralSwap Factory sorts tokens: token0 < token1.
  */
 export function sortTokens(tokenA: string, tokenB: string): [string, string] {
-  if (tokenA === tokenB) throw new Error('Identical tokens');
+  if (tokenA === tokenB) throw new Error("Identical tokens");
   return tokenA < tokenB ? [tokenA, tokenB] : [tokenB, tokenA];
 }
 
@@ -56,4 +89,43 @@ export function truncateAddress(address: string, chars: number = 4): string {
  */
 export function toScAddress(address: string): Address {
   return Address.fromString(address);
+}
+
+/**
+ * Derive the deterministic pair contract address off-chain.
+ *
+ * Mirrors the on-chain factory's CREATE2-style derivation:
+ * salt = sha256(token0_bytes || token1_bytes), where token0 < token1.
+ * Contract ID = sha256(HashIdPreimage(networkId, factory, salt)).
+ */
+export function getPairAddress(
+  factoryAddress: string,
+  tokenA: string,
+  tokenB: string,
+  networkPassphrase: string,
+): string {
+  const [token0, token1] = sortTokens(tokenA, tokenB);
+
+  const salt = hash(
+    Buffer.concat([
+      Address.fromString(token0).toBuffer(),
+      Address.fromString(token1).toBuffer(),
+    ]),
+  );
+
+  const networkId = hash(Buffer.from(networkPassphrase));
+
+  const preimage = xdr.HashIdPreimage.envelopeTypeContractId(
+    new xdr.HashIdPreimageContractId({
+      networkId,
+      contractIdPreimage: xdr.ContractIdPreimage.contractIdPreimageFromAddress(
+        new xdr.ContractIdPreimageFromAddress({
+          address: Address.fromString(factoryAddress).toScAddress(),
+          salt,
+        }),
+      ),
+    }),
+  );
+
+  return StrKey.encodeContract(hash(preimage.toXDR()));
 }

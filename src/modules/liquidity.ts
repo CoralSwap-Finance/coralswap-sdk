@@ -1,13 +1,19 @@
-import { CoralSwapClient } from '../client';
+import { CoralSwapClient } from '@/client';
 import {
   AddLiquidityRequest,
   RemoveLiquidityRequest,
   LiquidityResult,
   AddLiquidityQuote,
-} from '../types/liquidity';
-import { LPPosition } from '../types/pool';
-import { PRECISION } from '../config';
-import { TransactionError, ValidationError } from '../errors';
+} from '@/types/liquidity';
+import { LPPosition } from '@/types/pool';
+import { PRECISION } from '@/config';
+import { TransactionError, ValidationError } from '@/errors';
+import {
+  validateAddress,
+  validatePositiveAmount,
+  validateNonNegativeAmount,
+  validateDistinctTokens,
+} from '@/utils/validation';
 
 /**
  * Liquidity module -- manages LP positions in CoralSwap pools.
@@ -17,6 +23,7 @@ import { TransactionError, ValidationError } from '../errors';
  */
 export class LiquidityModule {
   private client: CoralSwapClient;
+  private lpTokenCache: Map<string, string> = new Map();
 
   constructor(client: CoralSwapClient) {
     this.client = client;
@@ -30,6 +37,11 @@ export class LiquidityModule {
     tokenB: string,
     amountADesired: bigint,
   ): Promise<AddLiquidityQuote> {
+    validateAddress(tokenA, 'tokenA');
+    validateAddress(tokenB, 'tokenB');
+    validateDistinctTokens(tokenA, tokenB);
+    validatePositiveAmount(amountADesired, 'amountADesired');
+
     const pairAddress = await this.client.getPairAddress(tokenA, tokenB);
 
     if (!pairAddress) {
@@ -77,6 +89,27 @@ export class LiquidityModule {
    * Execute an add-liquidity transaction via the Router.
    */
   async addLiquidity(request: AddLiquidityRequest): Promise<LiquidityResult> {
+    validateAddress(request.tokenA, 'tokenA');
+    validateAddress(request.tokenB, 'tokenB');
+    validateDistinctTokens(request.tokenA, request.tokenB);
+    validateAddress(request.to, 'to');
+    validatePositiveAmount(request.amountADesired, 'amountADesired');
+    validatePositiveAmount(request.amountBDesired, 'amountBDesired');
+    validateNonNegativeAmount(request.amountAMin, 'amountAMin');
+    validateNonNegativeAmount(request.amountBMin, 'amountBMin');
+    if (request.amountAMin > request.amountADesired) {
+      throw new ValidationError('amountAMin must not exceed amountADesired', {
+        amountAMin: request.amountAMin.toString(),
+        amountADesired: request.amountADesired.toString(),
+      });
+    }
+    if (request.amountBMin > request.amountBDesired) {
+      throw new ValidationError('amountBMin must not exceed amountBDesired', {
+        amountBMin: request.amountBMin.toString(),
+        amountBDesired: request.amountBDesired.toString(),
+      });
+    }
+
     const deadline = request.deadline ?? this.client.getDeadline();
 
     const op = this.client.router.buildAddLiquidity(
@@ -112,6 +145,14 @@ export class LiquidityModule {
    * Execute a remove-liquidity transaction via the Router.
    */
   async removeLiquidity(request: RemoveLiquidityRequest): Promise<LiquidityResult> {
+    validateAddress(request.tokenA, 'tokenA');
+    validateAddress(request.tokenB, 'tokenB');
+    validateDistinctTokens(request.tokenA, request.tokenB);
+    validateAddress(request.to, 'to');
+    validatePositiveAmount(request.liquidity, 'liquidity');
+    validateNonNegativeAmount(request.amountAMin, 'amountAMin');
+    validateNonNegativeAmount(request.amountBMin, 'amountBMin');
+
     const deadline = request.deadline ?? this.client.getDeadline();
 
     const op = this.client.router.buildRemoveLiquidity(
@@ -152,8 +193,13 @@ export class LiquidityModule {
     const pair = this.client.pair(pairAddress);
     const reserves = await pair.getReserves();
 
-    // Determine LP token address from pair state
-    const lpTokenAddress = pairAddress; // LP token is co-located in V1
+    // Retrieve LP token address from cache or fetch from pair contract
+    let lpTokenAddress = this.lpTokenCache.get(pairAddress);
+    if (!lpTokenAddress) {
+      lpTokenAddress = await pair.getLPTokenAddress();
+      this.lpTokenCache.set(pairAddress, lpTokenAddress);
+    }
+
     const lpClient = this.client.lpToken(lpTokenAddress);
 
     const [balance, totalSupply] = await Promise.all([

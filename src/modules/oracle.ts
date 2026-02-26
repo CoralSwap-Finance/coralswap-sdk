@@ -1,6 +1,6 @@
-import { CoralSwapClient } from '../client';
-import { PRECISION } from '../config';
-import { ValidationError, InsufficientLiquidityError } from '../errors';
+import { CoralSwapClient } from '@/client';
+import { PRECISION } from '@/config';
+import { ValidationError, InsufficientLiquidityError } from '@/errors';
 
 /**
  * TWAP Oracle data point from cumulative price accumulators.
