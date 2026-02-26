@@ -59,7 +59,7 @@ export interface FlashLoanConfig {
   /** True if flash loans are disabled for this pair */
   locked: boolean;
   /** Minimum absolute fee floor */
-  flashFeeFloor: number;
+  flashFeeFloor: bigint;
 }
 
 /**

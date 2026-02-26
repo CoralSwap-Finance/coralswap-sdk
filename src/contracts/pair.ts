@@ -11,29 +11,35 @@ import { withRetry, RetryOptions } from "@/utils/retry";
 import { Logger } from "@/types/common";
 
 /**
- * Helper function to extract value from ScMap by key.
+ * Helper function to parse an XDR struct (ScMap) into a Record map.
  */
-function getScMapValue(map: xdr.ScMapEntry[], key: string): xdr.ScVal {
+function parseScStruct(val: xdr.ScVal): Record<string, xdr.ScVal> {
+  const map = val.map();
   if (!map) {
-    throw new Error("Map is null");
+    throw new Error("Invalid XDR format: expected ScMap");
   }
+  const result: Record<string, xdr.ScVal> = {};
   for (const entry of map) {
     const k = entry.key();
     const tag = k.switch().name;
-    if (tag === "scvString" && k.str().toString() === key) {
-      return entry.val();
+    let keyStr = "";
+    if (tag === "scvString") {
+      keyStr = k.str().toString();
+    } else if (tag === "scvSymbol") {
+      keyStr = k.sym().toString();
+    } else {
+      continue;
     }
-    if (tag === "scvSymbol" && k.sym().toString() === key) {
-      return entry.val();
-    }
+    result[keyStr] = entry.val();
   }
-  throw new Error(`Missing field: ${key}`);
+  return result;
 }
 
 /**
  * Helper function to convert ScVal to number (u32).
  */
-function scValToU32(val: xdr.ScVal): number {
+function scValToU32(val: xdr.ScVal | undefined): number {
+  if (!val) throw new Error("Missing field");
   if (val.switch().name !== "scvU32") {
     throw new Error(`Expected u32, got ${val.switch().name}`);
   }
@@ -42,23 +48,21 @@ function scValToU32(val: xdr.ScVal): number {
 
 /**
  * Helper function to convert ScVal to bigint (i128).
- * Note: This is a simplified implementation that returns 0n as placeholder.
- * Full i128 parsing requires proper handling of Int128Parts structure.
- * TODO: Implement proper i128 conversion based on Stellar SDK documentation.
  */
-function scValToI128(val: xdr.ScVal): bigint {
+function scValToI128(val: xdr.ScVal | undefined): bigint {
+  if (!val) throw new Error("Missing field");
   if (val.switch().name !== "scvI128") {
     throw new Error(`Expected i128, got ${val.switch().name}`);
   }
-  // Placeholder: Return 0n for now
-  // Proper implementation would convert Int128Parts to bigint
-  return 0n;
+  const parts = val.i128();
+  return BigInt(parts.lo().toString()) + (BigInt(parts.hi().toString()) << 64n);
 }
 
 /**
  * Helper function to convert ScVal to number (u64).
  */
-function scValToU64(val: xdr.ScVal): number {
+function scValToU64(val: xdr.ScVal | undefined): number {
+  if (!val) throw new Error("Missing field");
   if (val.switch().name !== "scvU64") {
     throw new Error(`Expected u64, got ${val.switch().name}`);
   }
@@ -162,24 +166,19 @@ export class PairClient {
     const result = await this.simulateRead(op);
     if (!result) throw new Error("Failed to read fee state");
 
-    // Parse XDR response - result should be an ScMap with fee state fields
-    if (!result.map()) {
-      throw new Error("Invalid XDR format: expected ScMap");
-    }
-
-    const map = result.map()!;
+    const struct = parseScStruct(result);
 
     return {
-      priceLast: scValToI128(getScMapValue(map, "price_last")),
-      volAccumulator: scValToI128(getScMapValue(map, "vol_accumulator")),
-      lastUpdated: scValToU32(getScMapValue(map, "last_updated")),
-      feeCurrent: scValToU32(getScMapValue(map, "fee_current")),
-      feeMin: scValToU32(getScMapValue(map, "fee_min")),
-      feeMax: scValToU32(getScMapValue(map, "fee_max")),
-      emaAlpha: scValToU32(getScMapValue(map, "ema_alpha")),
-      feeLastChanged: scValToU32(getScMapValue(map, "fee_last_changed")),
-      emaDecayRate: scValToU32(getScMapValue(map, "ema_decay_rate")),
-      baselineFee: scValToU32(getScMapValue(map, "baseline_fee")),
+      priceLast: scValToI128(struct["price_last"]),
+      volAccumulator: scValToI128(struct["vol_accumulator"]),
+      lastUpdated: scValToU32(struct["last_updated"]),
+      feeCurrent: scValToU32(struct["fee_current"]),
+      feeMin: scValToU32(struct["fee_min"]),
+      feeMax: scValToU32(struct["fee_max"]),
+      emaAlpha: scValToU32(struct["ema_alpha"]),
+      feeLastChanged: scValToU32(struct["fee_last_changed"]),
+      emaDecayRate: scValToU32(struct["ema_decay_rate"]),
+      baselineFee: scValToU32(struct["baseline_fee"]),
     };
   }
 
@@ -191,19 +190,16 @@ export class PairClient {
     const result = await this.simulateRead(op);
     if (!result) throw new Error("Failed to read flash loan config");
 
-    // Parse XDR response - result should be an ScMap with flash config fields
-    if (!result.map()) {
-      throw new Error("Invalid XDR format: expected ScMap");
-    }
-
-    const map = result.map()!;
-    const lockedVal = getScMapValue(map, "locked");
-    const locked = lockedVal.switch().name === "scvBool" && lockedVal.b();
+    const struct = parseScStruct(result);
+    const lockedVal = struct["locked"];
+    if (!lockedVal) throw new Error("Missing field locked");
+    const locked =
+      lockedVal.switch().name === "scvBool" ? lockedVal.b() : false;
 
     return {
-      flashFeeBps: scValToU32(getScMapValue(map, "flash_fee_bps")),
+      flashFeeBps: scValToU32(struct["flash_fee_bps"]),
       locked,
-      flashFeeFloor: scValToU32(getScMapValue(map, "flash_fee_floor")),
+      flashFeeFloor: scValToI128(struct["flash_fee_floor"]),
     };
   }
 
@@ -295,23 +291,12 @@ export class PairClient {
     const result = await this.simulateRead(op);
     if (!result) throw new Error("Failed to read cumulative prices");
 
-    // Parse XDR response - result should be an ScMap with cumulative price fields
-    if (!result.map()) {
-      throw new Error("Invalid XDR format: expected ScMap");
-    }
-
-    const map = result.map()!;
+    const struct = parseScStruct(result);
 
     return {
-      price0CumulativeLast: scValToI128(
-        getScMapValue(map, "price0_cumulative_last"),
-      ),
-      price1CumulativeLast: scValToI128(
-        getScMapValue(map, "price1_cumulative_last"),
-      ),
-      blockTimestampLast: scValToU64(
-        getScMapValue(map, "block_timestamp_last"),
-      ),
+      price0CumulativeLast: scValToI128(struct["price0_cumulative_last"]),
+      price1CumulativeLast: scValToI128(struct["price1_cumulative_last"]),
+      blockTimestampLast: scValToU64(struct["block_timestamp_last"]),
     };
   }
 
