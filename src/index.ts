@@ -88,8 +88,16 @@ export {
   withRetry,
   isRetryable,
   sleep,
+  decodePairEvents,
 } from './utils';
-export type { RetryConfig } from './utils';
+export type {
+  RetryConfig,
+  PairEvent,
+  PairMintEvent,
+  PairBurnEvent,
+  PairSwapEvent,
+  PairSyncEvent,
+} from './utils';
 
 // Errors
 export {

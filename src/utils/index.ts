@@ -34,3 +34,12 @@ export {
   RetryConfig,
   DEFAULT_RETRY_CONFIG,
 } from './retry';
+
+export {
+  decodePairEvents,
+  PairEvent,
+  PairMintEvent,
+  PairBurnEvent,
+  PairSwapEvent,
+  PairSyncEvent,
+} from './events';
