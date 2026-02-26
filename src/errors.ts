@@ -5,6 +5,8 @@
  * error code for programmatic handling plus human-readable messages.
  */
 
+import { ErrorParser } from "./errors/parser";
+
 /**
  * Base error class for all SDK errors.
  */
@@ -94,9 +96,11 @@ export class SlippageError extends CoralSwapSDKError {
     toleranceBps: number,
     additionalDetails?: Record<string, unknown>,
   ) {
+    const message = additionalDetails?.message as string ||
+      `Slippage tolerance exceeded. Expected ${expected}, got ${actual} (tolerance: ${toleranceBps} bps)`;
     super(
       "SLIPPAGE_EXCEEDED",
-      `Slippage tolerance exceeded. Expected ${expected}, got ${actual} (tolerance: ${toleranceBps} bps)`,
+      message,
       {
         expected: expected.toString(),
         actual: actual.toString(),
@@ -113,9 +117,10 @@ export class SlippageError extends CoralSwapSDKError {
  */
 export class InsufficientLiquidityError extends CoralSwapSDKError {
   constructor(pairAddress: string, details?: Record<string, unknown>) {
+    const message = (details?.message as string) || `Insufficient liquidity for pair ${pairAddress}`;
     super(
       "INSUFFICIENT_LIQUIDITY",
-      `Insufficient liquidity for pair ${pairAddress}`,
+      message,
       { pairAddress, ...details },
     );
     this.name = "InsufficientLiquidityError";
@@ -210,72 +215,79 @@ function mapContractError(
   code: number,
   err: unknown,
 ): CoralSwapSDKError | null {
+  const message = ErrorParser.parseContractError(code);
+
   // Core pair contract errors (100-113)
   switch (code) {
-    case 100:
-      return new ValidationError("Invalid token pair", {
+    case 100: // AlreadyInitialized
+      return new ValidationError(message || "Already initialized", {
         contractErrorCode: code,
       });
-    case 101:
+    case 101: // ZeroAddress
+      return new ValidationError(message || "Zero address", {
+        contractErrorCode: code,
+      });
+    case 102: // IdenticalTokens
+      return new ValidationError(message || "Identical tokens", {
+        contractErrorCode: code,
+      });
+    case 103: // InsufficientLiquidityMinted
+    case 104: // InsufficientLiquidityBurned
+    case 106: // InsufficientLiquidity
       return new InsufficientLiquidityError(extractPairAddress(err), {
         contractErrorCode: code,
+        message,
       });
-    case 102:
-      return new SlippageError(0n, 0n, 0, { contractErrorCode: code });
-    case 103:
+    case 105: // InsufficientOutputAmount
+      return new SlippageError(0n, 0n, 0, {
+        contractErrorCode: code,
+        message,
+      });
+    case 107: // InvalidAmount
+    case 109: // InsufficientInputAmount
+      return new ValidationError(message || "Invalid amount", {
+        contractErrorCode: code,
+      });
+    case 108: // KInvariant
+      return new ValidationError(message || "K invariant violated", {
+        contractErrorCode: code,
+      });
+    case 110: // Locked
+      return new TransactionError(message || "Contract locked", undefined, {
+        contractErrorCode: code,
+      });
+    case 111: // Expired
       return new DeadlineError(0);
-    case 104:
-      return new ValidationError("Invalid amount", { contractErrorCode: code });
-    case 105:
-      return new ValidationError("Insufficient input amount", {
-        contractErrorCode: code,
-      });
-    case 106:
-      return new FlashLoanError("Reentrancy detected", {
-        contractErrorCode: code,
-      });
-    case 107:
-      return new FlashLoanError("Flash loan callback failed", {
-        contractErrorCode: code,
-      });
-    case 108:
-      return new FlashLoanError("Flash loan repayment insufficient", {
-        contractErrorCode: code,
-      });
-    case 109:
-      return new CircuitBreakerError(extractPairAddress(err));
-    case 110:
-      return new ValidationError("Unauthorized operation", { contractErrorCode: code });
-    case 111:
-      return new ValidationError("Invalid recipient", {
-        contractErrorCode: code,
-      });
-    case 112:
-      return new ValidationError("Arithmetic overflow", { contractErrorCode: code });
-    case 113:
-      return new ValidationError("K invariant violated", {
+    case 112: // ConstraintNotMet
+    case 113: // InvalidFee
+      return new ValidationError(message || "Constraint not met", {
         contractErrorCode: code,
       });
 
-    // Router contract errors (300-306)
-    case 300:
-      return new PairNotFoundError("unknown", "unknown");
-    case 301:
-      return new ValidationError("Invalid swap path", { contractErrorCode: code });
-    case 302:
-      return new SlippageError(0n, 0n, 0, { contractErrorCode: code });
-    case 303:
+    // Router contract errors (200-series based on parser.ts)
+    case 201: // Invalid swap path
+      return new ValidationError(message || "Invalid swap path", {
+        contractErrorCode: code,
+      });
+    case 202: // Insufficient output amount
+    case 203: // Excessive input amount
+      return new SlippageError(0n, 0n, 0, {
+        contractErrorCode: code,
+        message,
+      });
+    case 204: // Expired deadline
       return new DeadlineError(0);
-    case 304:
+    case 205: // Insufficient liquidity
       return new InsufficientLiquidityError(extractPairAddress(err), {
         contractErrorCode: code,
+        message,
       });
-    case 305:
-      return new ValidationError("Excessive input amount", {
-        contractErrorCode: code,
-      });
-    case 306:
-      return new ValidationError("Invalid token", { contractErrorCode: code });
+    case 206: // Pair not found
+      return new PairNotFoundError("unknown", "unknown");
+
+    // Handle legacy/alternate codes from existing map if needed
+    case 300:
+      return new PairNotFoundError("unknown", "unknown");
 
     default:
       return null;
@@ -298,9 +310,8 @@ export function mapError(err: unknown): CoralSwapSDKError {
   const normalizedMessage = message.toLowerCase();
 
   // Check for Soroban contract error codes: Error(Contract, #XXX)
-  const contractErrorMatch = message.match(/Error\(Contract,\s*#?(\d+)\)/i);
-  if (contractErrorMatch) {
-    const errorCode = parseInt(contractErrorMatch[1], 10);
+  const errorCode = ErrorParser.extractErrorCode(err);
+  if (errorCode !== null) {
     const mappedError = mapContractError(errorCode, err);
     if (mappedError) return mappedError;
   }
