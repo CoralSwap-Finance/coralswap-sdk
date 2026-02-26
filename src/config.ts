@@ -1,4 +1,5 @@
 import { Network, Logger, Signer } from '@/types/common';
+import { PollingStrategy } from '@/utils/polling';
 
 /**
  * Contract addresses per network deployment.
@@ -27,6 +28,11 @@ export interface CoralSwapConfig {
   defaultDeadlineSec?: number;
   maxRetries?: number;
   retryDelayMs?: number;
+  pollingStrategy?: PollingStrategy;
+  pollingIntervalMs?: number;
+  maxPollingAttempts?: number;
+  pollingBackoffFactor?: number;
+  maxPollingIntervalMs?: number;
 }
 
 /**
@@ -57,6 +63,11 @@ export const DEFAULTS = {
   deadlineSec: 1200,
   maxRetries: 3,
   retryDelayMs: 1000,
+  pollingStrategy: PollingStrategy.LINEAR,
+  pollingIntervalMs: 1000,
+  maxPollingAttempts: 30,
+  pollingBackoffFactor: 2,
+  maxPollingIntervalMs: 10000,
   flashFeeFloorBps: 5,
   feeMinBps: 10,
   feeMaxBps: 100,
