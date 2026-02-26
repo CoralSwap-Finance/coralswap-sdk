@@ -1,84 +1,69 @@
-/**
- * Retry utilities for transient RPC failures.
- *
- * Soroban RPC endpoints may experience intermittent issues.
- * These helpers provide configurable retry logic with exponential backoff.
- */
+import { Logger } from "@/types/common";
+import { DEFAULTS } from "@/config";
 
 /**
- * Retry configuration.
+ * Options for the retry policy.
  */
-export interface RetryConfig {
+export interface RetryOptions {
   maxRetries: number;
-  baseDelayMs: number;
-  maxDelayMs: number;
-  backoffMultiplier: number;
+  retryDelayMs: number;
+  maxRetryDelayMs: number;
 }
 
 /**
- * Default retry configuration.
- */
-export const DEFAULT_RETRY_CONFIG: RetryConfig = {
-  maxRetries: 3,
-  baseDelayMs: 1000,
-  maxDelayMs: 10000,
-  backoffMultiplier: 2,
-};
-
-/**
- * Execute a function with automatic retry on failure.
+ * Helper to execute an async function with exponential backoff retry.
+ *
+ * @param fn - The async function to execute
+ * @param options - Retry configuration
+ * @param logger - Optional logger for instrumentation
+ * @param label - A label for logging purposes
+ * @returns The result of the function
  */
 export async function withRetry<T>(
   fn: () => Promise<T>,
-  config: Partial<RetryConfig> = {},
+  options: RetryOptions,
+  logger?: Logger,
+  label: string = "RPC",
 ): Promise<T> {
-  const cfg = { ...DEFAULT_RETRY_CONFIG, ...config };
-  let lastError: Error | undefined;
-  let delay = cfg.baseDelayMs;
+  const { maxRetries, retryDelayMs, maxRetryDelayMs } = options;
+  let lastError: any;
 
-  for (let attempt = 0; attempt <= cfg.maxRetries; attempt++) {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
       return await fn();
-    } catch (err) {
-      lastError = err instanceof Error ? err : new Error(String(err));
+    } catch (err: any) {
+      lastError = err;
 
-      if (attempt === cfg.maxRetries) break;
+      // Determine if error is retryable (429, 503, or network timeout)
+      const status = err?.response?.status;
+      const isRetryable =
+        status === 429 ||
+        status === 503 ||
+        err?.code === "ECONNABORTED" ||
+        err?.code === "ETIMEDOUT" ||
+        err?.message?.includes("timeout");
 
-      if (!isRetryable(lastError)) throw lastError;
+      if (!isRetryable || attempt === maxRetries) {
+        throw err;
+      }
 
-      await sleep(delay);
-      delay = Math.min(delay * cfg.backoffMultiplier, cfg.maxDelayMs);
+      // Exponential backoff with jitter
+      const backoff = Math.min(
+        maxRetryDelayMs,
+        retryDelayMs * Math.pow(2, attempt),
+      );
+      const jitter = backoff * 0.15 * (Math.random() * 2 - 1);
+      const delay = Math.max(0, backoff + jitter);
+
+      logger?.debug(`${label}: retrying after ${Math.round(delay)}ms`, {
+        attempt: attempt + 1,
+        maxRetries,
+        error: err.message,
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, delay));
     }
   }
 
-  throw lastError ?? new Error('Retry exhausted');
-}
-
-/**
- * Determine if an error is retryable (transient network issues).
- */
-export function isRetryable(error: Error): boolean {
-  const retryablePatterns = [
-    'ECONNRESET',
-    'ECONNREFUSED',
-    'ETIMEDOUT',
-    'ENOTFOUND',
-    'socket hang up',
-    'network error',
-    '502',
-    '503',
-    '504',
-    'rate limit',
-    'too many requests',
-  ];
-
-  const msg = error.message.toLowerCase();
-  return retryablePatterns.some((p) => msg.includes(p.toLowerCase()));
-}
-
-/**
- * Sleep for a given number of milliseconds.
- */
-export function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  throw lastError;
 }

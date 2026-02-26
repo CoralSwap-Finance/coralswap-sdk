@@ -1,4 +1,13 @@
-import { Contract, SorobanRpc, TransactionBuilder, xdr, Address, nativeToScVal } from '@stellar/stellar-sdk';
+import {
+  Contract,
+  SorobanRpc,
+  TransactionBuilder,
+  xdr,
+  Address,
+  nativeToScVal,
+} from "@stellar/stellar-sdk";
+import { withRetry, RetryOptions } from "@/utils/retry";
+import { Logger } from "@/types/common";
 
 /**
  * Type-safe client for the CoralSwap Router contract.
@@ -10,15 +19,21 @@ export class RouterClient {
   private contract: Contract;
   private server: SorobanRpc.Server;
   private networkPassphrase: string;
+  private retryOptions: RetryOptions;
+  private logger?: Logger;
 
   constructor(
     contractAddress: string,
     rpcUrl: string,
     networkPassphrase: string,
+    retryOptions: RetryOptions,
+    logger?: Logger,
   ) {
     this.contract = new Contract(contractAddress);
     this.server = new SorobanRpc.Server(rpcUrl);
     this.networkPassphrase = networkPassphrase;
+    this.retryOptions = retryOptions;
+    this.logger = logger;
   }
 
   /**
@@ -33,13 +48,13 @@ export class RouterClient {
     deadline: number,
   ): xdr.Operation {
     return this.contract.call(
-      'swap_exact_in',
-      nativeToScVal(Address.fromString(sender), { type: 'address' }),
-      nativeToScVal(Address.fromString(tokenIn), { type: 'address' }),
-      nativeToScVal(Address.fromString(tokenOut), { type: 'address' }),
-      nativeToScVal(amountIn, { type: 'i128' }),
-      nativeToScVal(amountOutMin, { type: 'i128' }),
-      nativeToScVal(deadline, { type: 'u64' }),
+      "swap_exact_in",
+      nativeToScVal(Address.fromString(sender), { type: "address" }),
+      nativeToScVal(Address.fromString(tokenIn), { type: "address" }),
+      nativeToScVal(Address.fromString(tokenOut), { type: "address" }),
+      nativeToScVal(amountIn, { type: "i128" }),
+      nativeToScVal(amountOutMin, { type: "i128" }),
+      nativeToScVal(deadline, { type: "u64" }),
     );
   }
 
@@ -55,13 +70,13 @@ export class RouterClient {
     deadline: number,
   ): xdr.Operation {
     return this.contract.call(
-      'swap_exact_out',
-      nativeToScVal(Address.fromString(sender), { type: 'address' }),
-      nativeToScVal(Address.fromString(tokenIn), { type: 'address' }),
-      nativeToScVal(Address.fromString(tokenOut), { type: 'address' }),
-      nativeToScVal(amountOut, { type: 'i128' }),
-      nativeToScVal(amountInMax, { type: 'i128' }),
-      nativeToScVal(deadline, { type: 'u64' }),
+      "swap_exact_out",
+      nativeToScVal(Address.fromString(sender), { type: "address" }),
+      nativeToScVal(Address.fromString(tokenIn), { type: "address" }),
+      nativeToScVal(Address.fromString(tokenOut), { type: "address" }),
+      nativeToScVal(amountOut, { type: "i128" }),
+      nativeToScVal(amountInMax, { type: "i128" }),
+      nativeToScVal(deadline, { type: "u64" }),
     );
   }
 
@@ -79,15 +94,17 @@ export class RouterClient {
     deadline: number,
   ): xdr.Operation {
     const pathVal = xdr.ScVal.scvVec(
-      path.map((addr) => nativeToScVal(Address.fromString(addr), { type: 'address' })),
+      path.map((addr) =>
+        nativeToScVal(Address.fromString(addr), { type: "address" }),
+      ),
     );
     return this.contract.call(
-      'swap_exact_tokens_for_tokens',
-      nativeToScVal(Address.fromString(sender), { type: 'address' }),
+      "swap_exact_tokens_for_tokens",
+      nativeToScVal(Address.fromString(sender), { type: "address" }),
       pathVal,
-      nativeToScVal(amountIn, { type: 'i128' }),
-      nativeToScVal(amountOutMin, { type: 'i128' }),
-      nativeToScVal(deadline, { type: 'u64' }),
+      nativeToScVal(amountIn, { type: "i128" }),
+      nativeToScVal(amountOutMin, { type: "i128" }),
+      nativeToScVal(deadline, { type: "u64" }),
     );
   }
 
@@ -105,15 +122,15 @@ export class RouterClient {
     deadline: number,
   ): xdr.Operation {
     return this.contract.call(
-      'add_liquidity',
-      nativeToScVal(Address.fromString(sender), { type: 'address' }),
-      nativeToScVal(Address.fromString(tokenA), { type: 'address' }),
-      nativeToScVal(Address.fromString(tokenB), { type: 'address' }),
-      nativeToScVal(amountADesired, { type: 'i128' }),
-      nativeToScVal(amountBDesired, { type: 'i128' }),
-      nativeToScVal(amountAMin, { type: 'i128' }),
-      nativeToScVal(amountBMin, { type: 'i128' }),
-      nativeToScVal(deadline, { type: 'u64' }),
+      "add_liquidity",
+      nativeToScVal(Address.fromString(sender), { type: "address" }),
+      nativeToScVal(Address.fromString(tokenA), { type: "address" }),
+      nativeToScVal(Address.fromString(tokenB), { type: "address" }),
+      nativeToScVal(amountADesired, { type: "i128" }),
+      nativeToScVal(amountBDesired, { type: "i128" }),
+      nativeToScVal(amountAMin, { type: "i128" }),
+      nativeToScVal(amountBMin, { type: "i128" }),
+      nativeToScVal(deadline, { type: "u64" }),
     );
   }
 
@@ -130,14 +147,14 @@ export class RouterClient {
     deadline: number,
   ): xdr.Operation {
     return this.contract.call(
-      'remove_liquidity',
-      nativeToScVal(Address.fromString(sender), { type: 'address' }),
-      nativeToScVal(Address.fromString(tokenA), { type: 'address' }),
-      nativeToScVal(Address.fromString(tokenB), { type: 'address' }),
-      nativeToScVal(liquidity, { type: 'i128' }),
-      nativeToScVal(amountAMin, { type: 'i128' }),
-      nativeToScVal(amountBMin, { type: 'i128' }),
-      nativeToScVal(deadline, { type: 'u64' }),
+      "remove_liquidity",
+      nativeToScVal(Address.fromString(sender), { type: "address" }),
+      nativeToScVal(Address.fromString(tokenA), { type: "address" }),
+      nativeToScVal(Address.fromString(tokenB), { type: "address" }),
+      nativeToScVal(liquidity, { type: "i128" }),
+      nativeToScVal(amountAMin, { type: "i128" }),
+      nativeToScVal(amountBMin, { type: "i128" }),
+      nativeToScVal(deadline, { type: "u64" }),
     );
   }
 
@@ -146,9 +163,9 @@ export class RouterClient {
    */
   async getDynamicFee(tokenA: string, tokenB: string): Promise<number> {
     const op = this.contract.call(
-      'get_dynamic_fee',
-      nativeToScVal(Address.fromString(tokenA), { type: 'address' }),
-      nativeToScVal(Address.fromString(tokenB), { type: 'address' }),
+      "get_dynamic_fee",
+      nativeToScVal(Address.fromString(tokenA), { type: "address" }),
+      nativeToScVal(Address.fromString(tokenB), { type: "address" }),
     );
     const result = await this.simulateRead(op);
     if (!result) return 30;
@@ -164,29 +181,43 @@ export class RouterClient {
     amountIn: bigint,
   ): Promise<bigint> {
     const op = this.contract.call(
-      'quote',
-      nativeToScVal(Address.fromString(tokenIn), { type: 'address' }),
-      nativeToScVal(Address.fromString(tokenOut), { type: 'address' }),
-      nativeToScVal(amountIn, { type: 'i128' }),
+      "quote",
+      nativeToScVal(Address.fromString(tokenIn), { type: "address" }),
+      nativeToScVal(Address.fromString(tokenOut), { type: "address" }),
+      nativeToScVal(amountIn, { type: "i128" }),
     );
     const result = await this.simulateRead(op);
-    if (!result) throw new Error('Failed to get quote');
-    return BigInt(result.i128().lo().toString()) + (BigInt(result.i128().hi().toString()) << 64n);
+    if (!result) throw new Error("Failed to get quote");
+    return (
+      BigInt(result.i128().lo().toString()) +
+      (BigInt(result.i128().hi().toString()) << 64n)
+    );
   }
 
   private async simulateRead(op: xdr.Operation): Promise<xdr.ScVal | null> {
-    const account = await this.server.getAccount(
-      'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF',
+    const account = await withRetry(
+      () =>
+        this.server.getAccount(
+          "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+        ),
+      this.retryOptions,
+      this.logger,
+      "RouterClient_getAccount",
     );
     const tx = new TransactionBuilder(account, {
-      fee: '100',
+      fee: "100",
       networkPassphrase: this.networkPassphrase,
     })
       .addOperation(op)
       .setTimeout(30)
       .build();
 
-    const sim = await this.server.simulateTransaction(tx);
+    const sim = await withRetry(
+      () => this.server.simulateTransaction(tx),
+      this.retryOptions,
+      this.logger,
+      "RouterClient_simulateTransaction",
+    );
     if (SorobanRpc.Api.isSimulationSuccess(sim) && sim.result) {
       return sim.result.retval;
     }

@@ -35,6 +35,8 @@ export interface CoralSwapConfig {
   maxRetries?: number;
   /** Delay in milliseconds between retry attempts */
   retryDelayMs?: number;
+  /** Maximum delay in milliseconds between retry attempts (cap for exponential backoff) */
+  maxRetryDelayMs?: number;
 }
 
 /**
@@ -65,6 +67,7 @@ export const DEFAULTS = {
   deadlineSec: 1200,
   maxRetries: 3,
   retryDelayMs: 1000,
+  maxRetryDelayMs: 10000,
   flashFeeFloorBps: 5,
   feeMinBps: 10,
   feeMaxBps: 100,
