@@ -1,4 +1,4 @@
-import { Network } from './common';
+import { Network } from "./common";
 
 /**
  * A single token entry in a Stellar token list.
@@ -24,8 +24,11 @@ export interface Token {
  * Semantic version of a token list.
  */
 export interface TokenListVersion {
+  /** Major version, incremented for breaking changes */
   major: number;
+  /** Minor version, incremented for added tokens */
   minor: number;
+  /** Patch version, incremented for minor token updates */
   patch: number;
 }
 

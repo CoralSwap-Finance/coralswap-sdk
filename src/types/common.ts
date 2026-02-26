@@ -2,58 +2,62 @@
  * Supported Soroban networks for CoralSwap deployment.
  */
 export enum Network {
-  TESTNET = 'testnet',
-  MAINNET = 'mainnet',
+  TESTNET = "testnet",
+  MAINNET = "mainnet",
 }
 
 /**
  * Trade direction for swap operations.
  */
 export enum TradeType {
-  EXACT_IN = 'EXACT_IN',
-  EXACT_OUT = 'EXACT_OUT',
+  EXACT_IN = "EXACT_IN",
+  EXACT_OUT = "EXACT_OUT",
 }
 
 /**
  * Contract identifiers within the CoralSwap protocol.
  */
 export enum ContractType {
-  FACTORY = 'factory',
-  PAIR = 'pair',
-  ROUTER = 'router',
-  LP_TOKEN = 'lp_token',
-  FLASH_RECEIVER = 'flash_receiver',
+  FACTORY = "factory",
+  PAIR = "pair",
+  ROUTER = "router",
+  LP_TOKEN = "lp_token",
+  FLASH_RECEIVER = "flash_receiver",
 }
 
 /**
  * Governance action types requiring multi-sig approval.
  */
 export enum ActionType {
-  PAUSE = 'pause',
-  UNPAUSE = 'unpause',
-  SET_FEE_PARAMS = 'set_fee_params',
-  SET_FLASH_FEE = 'set_flash_fee',
-  UPGRADE = 'upgrade',
-  ROTATE_SIGNER = 'rotate_signer',
+  PAUSE = "pause",
+  UNPAUSE = "unpause",
+  SET_FEE_PARAMS = "set_fee_params",
+  SET_FLASH_FEE = "set_flash_fee",
+  UPGRADE = "upgrade",
+  ROTATE_SIGNER = "rotate_signer",
 }
 
 /**
  * Transaction submission status.
  */
 export enum TxStatus {
-  PENDING = 'pending',
-  SUCCESS = 'success',
-  FAILED = 'failed',
-  TIMEOUT = 'timeout',
+  PENDING = "pending",
+  SUCCESS = "success",
+  FAILED = "failed",
+  TIMEOUT = "timeout",
 }
 
 /**
  * Result wrapper for all SDK operations.
  */
 export interface Result<T> {
+  /** True if the operation was successful */
   success: boolean;
+  /** The returned payload if successful */
   data?: T;
+  /** Error details if the operation failed */
   error?: CoralSwapError;
+  /** Transaction hash if a transaction was submitted */
   txHash?: string;
 }
 
@@ -61,8 +65,11 @@ export interface Result<T> {
  * Structured error from SDK operations.
  */
 export interface CoralSwapError {
+  /** Unique error code identifier */
   code: string;
+  /** Human-readable error message */
   message: string;
+  /** Additional diagnostic information */
   details?: Record<string, unknown>;
 }
 
