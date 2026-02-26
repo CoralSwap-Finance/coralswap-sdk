@@ -1,6 +1,6 @@
-import { CoralSwapClient } from '@/client';
-import { PRECISION } from '@/config';
-import { ValidationError, InsufficientLiquidityError } from '@/errors';
+import { CoralSwapClient } from "@/client";
+import { PRECISION } from "@/config";
+import { ValidationError, InsufficientLiquidityError } from "@/errors";
 
 /**
  * TWAP Oracle data point from cumulative price accumulators.
@@ -42,6 +42,11 @@ export class OracleModule {
 
   /**
    * Read the current cumulative price observation from a pair.
+   *
+   * @param pairAddress - The address of the pair contract
+   * @returns The current cumulative price observation
+   * @example
+   * const obs = await client.oracle.observe('C...');
    */
   async observe(pairAddress: string): Promise<TWAPObservation> {
     const pair = this.client.pair(pairAddress);
@@ -71,6 +76,13 @@ export class OracleModule {
    *
    * Requires at least two observations separated by time. Call observe()
    * at different times to collect data, then compute the TWAP.
+   *
+   * @param startObs - The earlier observation
+   * @param endObs - The later observation
+   * @returns An object containing computed TWAP prices
+   * @throws {ValidationError} If the end observation time is not after the start observation time
+   * @example
+   * const twap = client.oracle.computeTWAP(obs1, obs2);
    */
   computeTWAP(
     startObs: TWAPObservation,
@@ -79,10 +91,13 @@ export class OracleModule {
     const timeElapsed = endObs.blockTimestampLast - startObs.blockTimestampLast;
 
     if (timeElapsed <= 0) {
-      throw new ValidationError('End observation must be after start observation', {
-        startTimestamp: startObs.blockTimestampLast,
-        endTimestamp: endObs.blockTimestampLast,
-      });
+      throw new ValidationError(
+        "End observation must be after start observation",
+        {
+          startTimestamp: startObs.blockTimestampLast,
+          endTimestamp: endObs.blockTimestampLast,
+        },
+      );
     }
 
     const price0TWAP =
@@ -99,8 +114,13 @@ export class OracleModule {
   /**
    * Get the TWAP for a pair using cached observations.
    *
-   * If insufficient observations exist, takes a new one and throws
-   * if still insufficient (caller must wait and retry).
+   * If insufficient observations exist, takes a new one and returns null
+   * (caller must wait and retry).
+   *
+   * @param pairAddress - The address of the pair contract
+   * @returns The TWAP result or null if minimum 2 observations aren't met
+   * @example
+   * const twap = await client.oracle.getTWAP('C...');
    */
   async getTWAP(pairAddress: string): Promise<TWAPResult | null> {
     // Take a fresh observation
@@ -120,7 +140,10 @@ export class OracleModule {
 
     const pair = this.client.pair(pairAddress);
     const tokens = await pair.getTokens();
-    const { price0TWAP, price1TWAP, timeWindow } = this.computeTWAP(startObs, endObs);
+    const { price0TWAP, price1TWAP, timeWindow } = this.computeTWAP(
+      startObs,
+      endObs,
+    );
 
     return {
       pairAddress,
@@ -136,6 +159,12 @@ export class OracleModule {
 
   /**
    * Get the current spot price from reserves (not TWAP).
+   *
+   * @param pairAddress - The address of the pair contract
+   * @returns Spot price ratios for both tokens
+   * @throws {InsufficientLiquidityError} If reserves are zero
+   * @example
+   * const spot = await client.oracle.getSpotPrice('C...');
    */
   async getSpotPrice(pairAddress: string): Promise<{
     price0Per1: bigint;
@@ -156,6 +185,10 @@ export class OracleModule {
 
   /**
    * Clear cached observations for a pair or all pairs.
+   *
+   * @param pairAddress - Optional specific pair to clear, clears all if omitted
+   * @example
+   * client.oracle.clearCache('C...');
    */
   clearCache(pairAddress?: string): void {
     if (pairAddress) {
@@ -167,6 +200,11 @@ export class OracleModule {
 
   /**
    * Get cached observation count for a pair.
+   *
+   * @param pairAddress - The address of the pair contract
+   * @returns Number of cached observations
+   * @example
+   * const count = client.oracle.getObservationCount('C...');
    */
   getObservationCount(pairAddress: string): number {
     return this.observationCache.get(pairAddress)?.length ?? 0;

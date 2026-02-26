@@ -4,16 +4,21 @@ import {
   TransactionBuilder,
   Transaction,
   xdr,
-} from '@stellar/stellar-sdk';
-import { CoralSwapConfig, NetworkConfig, NETWORK_CONFIGS, DEFAULTS } from '@/config';
-import { Network, Result, Logger, Signer } from '@/types/common';
-import { SignerError } from '@/errors';
-import { FactoryClient } from '@/contracts/factory';
-import { PairClient } from '@/contracts/pair';
-import { RouterClient } from '@/contracts/router';
-import { LPTokenClient } from '@/contracts/lp-token';
-import { TokenListModule } from '@/modules/tokens';
-import { KeypairSigner } from '@/utils/signer';
+} from "@stellar/stellar-sdk";
+import {
+  CoralSwapConfig,
+  NetworkConfig,
+  NETWORK_CONFIGS,
+  DEFAULTS,
+} from "@/config";
+import { Network, Result, Logger, Signer } from "@/types/common";
+import { SignerError } from "@/errors";
+import { FactoryClient } from "@/contracts/factory";
+import { PairClient } from "@/contracts/pair";
+import { RouterClient } from "@/contracts/router";
+import { LPTokenClient } from "@/contracts/lp-token";
+import { TokenListModule } from "@/modules/tokens";
+import { KeypairSigner } from "@/utils/signer";
 export { KeypairSigner };
 
 /**
@@ -47,6 +52,11 @@ export class CoralSwapClient {
    * @param config - SDK configuration. Provide `secretKey` for the built-in
    *   KeypairSigner, or pass a `signer` implementing the {@link Signer}
    *   interface for external wallets (Freighter, Albedo, etc.).
+   * @example
+   * const client = new CoralSwapClient({
+   *   network: Network.TESTNET,
+   *   secretKey: 'S...',
+   * });
    */
   constructor(config: CoralSwapConfig) {
     this.config = {
@@ -160,6 +170,8 @@ export class CoralSwapClient {
    *
    * @param network - The target network.
    * @param rpcUrl - Optional override for the RPC URL.
+   * @example
+   * client.setNetwork(Network.MAINNET);
    */
   setNetwork(network: Network, rpcUrl?: string): void {
     this.network = network;
@@ -176,12 +188,15 @@ export class CoralSwapClient {
 
     // Refresh signer if using built-in KeypairSigner
     if (this.config.secretKey) {
-      const kpSigner = new KeypairSigner(this.config.secretKey, this.networkConfig.networkPassphrase);
+      const kpSigner = new KeypairSigner(
+        this.config.secretKey,
+        this.networkConfig.networkPassphrase,
+      );
       this.signer = kpSigner;
       this._publicKeyCache = kpSigner.publicKeySync;
     }
 
-    this.logger?.info('setNetwork: network switched', {
+    this.logger?.info("setNetwork: network switched", {
       network: this.network,
       rpcUrl: this.networkConfig.rpcUrl,
     });
@@ -214,6 +229,12 @@ export class CoralSwapClient {
 
   /**
    * Build, simulate, sign and submit a transaction.
+   *
+   * @param operations - Array of Soroban operations to include
+   * @param source - Optional source account override
+   * @returns Resolves with transaction hash and ledger or an error
+   * @example
+   * const result = await client.submitTransaction([op]);
    */
   async submitTransaction(
     operations: xdr.Operation[],
@@ -375,6 +396,12 @@ export class CoralSwapClient {
 
   /**
    * Simulate a transaction without submitting (dry-run).
+   *
+   * @param operations - Array of operations to simulate
+   * @param source - Optional source account override
+   * @returns Simulation response directly from the RPC
+   * @example
+   * const sim = await client.simulateTransaction([op]);
    */
   async simulateTransaction(
     operations: xdr.Operation[],

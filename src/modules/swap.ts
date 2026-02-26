@@ -1,6 +1,6 @@
-import { CoralSwapClient } from '@/client';
-import { PairClient } from '@/contracts/pair';
-import { TradeType } from '@/types/common';
+import { CoralSwapClient } from "@/client";
+import { PairClient } from "@/contracts/pair";
+import { TradeType } from "@/types/common";
 import {
   SwapRequest,
   SwapQuote,
@@ -8,20 +8,20 @@ import {
   HopResult,
   MultiHopSwapRequest,
   MultiHopSwapQuote,
-} from '@/types/swap';
-import { PRECISION, DEFAULTS } from '@/config';
+} from "@/types/swap";
+import { PRECISION, DEFAULTS } from "@/config";
 import {
   TransactionError,
   ValidationError,
   InsufficientLiquidityError,
   PairNotFoundError,
-} from '../errors';
+} from "../errors";
 import {
   validateAddress,
   validatePositiveAmount,
   validateSlippage,
   validateDistinctTokens,
-} from '@/utils/validation';
+} from "@/utils/validation";
 
 /**
  * Swap module -- builds, quotes, and executes token swaps.
@@ -46,13 +46,20 @@ export class SwapModule {
    * If `request.path` is provided with 3+ tokens, calculates a multi-hop
    * quote by chaining getAmountOut across each hop.
    * Falls back to direct swap for a 2-token path or no path.
+   *
+   * @param request - The swap request configuration
+   * @returns The standard swap quote
+   * @throws {ValidationError} If inputs are invalid or path has <2 tokens
+   * @example
+   * const quote = await client.swap.getQuote({ tokenIn: 'C...', tokenOut: 'C...', amount: 100n, tradeType: TradeType.EXACT_IN });
    */
   async getQuote(request: SwapRequest): Promise<SwapQuote> {
-    validatePositiveAmount(request.amount, 'amount');
-    validateAddress(request.tokenIn, 'tokenIn');
-    validateAddress(request.tokenOut, 'tokenOut');
+    validatePositiveAmount(request.amount, "amount");
+    validateAddress(request.tokenIn, "tokenIn");
+    validateAddress(request.tokenOut, "tokenOut");
     validateDistinctTokens(request.tokenIn, request.tokenOut);
-    if (request.slippageBps !== undefined) validateSlippage(request.slippageBps);
+    if (request.slippageBps !== undefined)
+      validateSlippage(request.slippageBps);
 
     const path = this.resolvePath(request);
 
@@ -75,13 +82,20 @@ export class SwapModule {
    * For multi-hop paths, invokes the router's swap_exact_tokens_for_tokens
    * with the full path vector. For direct swaps, uses swap_exact_in /
    * swap_exact_out as before.
+   *
+   * @param request - The swap request configuration
+   * @returns Receipt containing the transaction hash and swap details
+   * @throws {TransactionError} If the execution on-chain fails
+   * @example
+   * const result = await client.swap.execute({ tokenIn: 'C...', tokenOut: 'C...', amount: 100n, tradeType: TradeType.EXACT_IN });
    */
   async execute(request: SwapRequest): Promise<SwapResult> {
-    validatePositiveAmount(request.amount, 'amount');
-    validateAddress(request.tokenIn, 'tokenIn');
-    validateAddress(request.tokenOut, 'tokenOut');
+    validatePositiveAmount(request.amount, "amount");
+    validateAddress(request.tokenIn, "tokenIn");
+    validateAddress(request.tokenOut, "tokenOut");
     validateDistinctTokens(request.tokenIn, request.tokenOut);
-    if (request.slippageBps !== undefined) validateSlippage(request.slippageBps);
+    if (request.slippageBps !== undefined)
+      validateSlippage(request.slippageBps);
 
     const path = this.resolvePath(request);
     const quote = await this.getQuote(request);
@@ -150,20 +164,24 @@ export class SwapModule {
    * @throws {ValidationError} If path has fewer than 3 tokens or trade type
    *   is not EXACT_IN.
    * @throws {PairNotFoundError} If any intermediate pair does not exist.
+   * @example
+   * const quote = await client.swap.getMultiHopQuote({ path: ['A', 'B', 'C'], amount: 100n, tradeType: TradeType.EXACT_IN });
    */
-  async getMultiHopQuote(request: MultiHopSwapRequest): Promise<MultiHopSwapQuote> {
+  async getMultiHopQuote(
+    request: MultiHopSwapRequest,
+  ): Promise<MultiHopSwapQuote> {
     const { path } = request;
 
     if (path.length < 3) {
       throw new ValidationError(
-        'Multi-hop path must contain at least 3 tokens',
+        "Multi-hop path must contain at least 3 tokens",
         { path },
       );
     }
 
     if (request.tradeType !== TradeType.EXACT_IN) {
       throw new ValidationError(
-        'Multi-hop routing only supports EXACT_IN trade type',
+        "Multi-hop routing only supports EXACT_IN trade type",
         { tradeType: request.tradeType },
       );
     }
@@ -172,13 +190,19 @@ export class SwapModule {
 
     const totalFeeAmount = hops.reduce((acc, h) => acc + h.feeAmount, 0n);
     const totalFeeBps = hops.reduce((acc, h) => acc + h.feeBps, 0);
-    const compoundImpactBps = this.compoundPriceImpact(hops.map((h) => h.priceImpactBps));
+    const compoundImpactBps = this.compoundPriceImpact(
+      hops.map((h) => h.priceImpactBps),
+    );
 
     const amountIn = hops[0].amountIn;
     const amountOut = hops[hops.length - 1].amountOut;
 
-    const slippageBps = request.slippageBps ?? this.client.config.defaultSlippageBps ?? DEFAULTS.slippageBps;
-    const amountOutMin = amountOut - (amountOut * BigInt(slippageBps)) / PRECISION.BPS_DENOMINATOR;
+    const slippageBps =
+      request.slippageBps ??
+      this.client.config.defaultSlippageBps ??
+      DEFAULTS.slippageBps;
+    const amountOutMin =
+      amountOut - (amountOut * BigInt(slippageBps)) / PRECISION.BPS_DENOMINATOR;
 
     return {
       tokenIn: path[0],
@@ -206,6 +230,8 @@ export class SwapModule {
    * @throws {ValidationError} If path has fewer than 3 tokens.
    * @throws {PairNotFoundError} If any intermediate pair does not exist.
    * @throws {TransactionError} If the on-chain transaction fails.
+   * @example
+   * const result = await client.swap.executeMultiHop({ path: ['A', 'B', 'C'], amount: 100n, tradeType: TradeType.EXACT_IN });
    */
   async executeMultiHop(request: MultiHopSwapRequest): Promise<SwapResult> {
     const quote = await this.getMultiHopQuote(request);
@@ -222,7 +248,7 @@ export class SwapModule {
 
     if (!result.success) {
       throw new TransactionError(
-        `Multi-hop swap failed: ${result.error?.message ?? 'Unknown error'}`,
+        `Multi-hop swap failed: ${result.error?.message ?? "Unknown error"}`,
         result.txHash,
       );
     }
@@ -239,6 +265,16 @@ export class SwapModule {
 
   /**
    * Calculate output amount for exact-in swap (Uniswap V2 formula with dynamic fee).
+   *
+   * @param amountIn - Input amount
+   * @param reserveIn - Reserve of input token in the pool
+   * @param reserveOut - Reserve of output token in the pool
+   * @param feeBps - Fee in basis points
+   * @returns Maximum output amount
+   * @throws {ValidationError} If input amount is <= 0
+   * @throws {InsufficientLiquidityError} If reserves are 0
+   * @example
+   * const out = client.swap.getAmountOut(100n, 1000n, 1000n, 30);
    */
   getAmountOut(
     amountIn: bigint,
@@ -267,6 +303,16 @@ export class SwapModule {
 
   /**
    * Calculate input amount for exact-out swap.
+   *
+   * @param amountOut - Output amount
+   * @param reserveIn - Reserve of input token in the pool
+   * @param reserveOut - Reserve of output token in the pool
+   * @param feeBps - Fee in basis points
+   * @returns Minimum input amount required
+   * @throws {ValidationError} If output amount is <= 0
+   * @throws {InsufficientLiquidityError} If reserves are 0 or output amount >= reserveOut
+   * @example
+   * const req = client.swap.getAmountIn(100n, 1000n, 1000n, 30);
    */
   getAmountIn(
     amountOut: bigint,
