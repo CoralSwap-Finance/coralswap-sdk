@@ -12,7 +12,7 @@ import { FactoryClient } from '@/contracts/factory';
 import { PairClient } from '@/contracts/pair';
 import { RouterClient } from '@/contracts/router';
 import { LPTokenClient } from '@/contracts/lp-token';
-import { TokenListModule } from '@/modules/tokens';
+import { TokenListModule, SwapModule, LiquidityModule, RouterModule } from '@/modules';
 import { KeypairSigner } from '@/utils/signer';
 export { KeypairSigner };
 
@@ -203,6 +203,27 @@ export class CoralSwapClient {
    */
   tokens(): TokenListModule {
     return new TokenListModule(this);
+  }
+
+  /**
+   * Create a SwapModule for token swaps.
+   */
+  swap(): SwapModule {
+    return new SwapModule(this);
+  }
+
+  /**
+   * Create a LiquidityModule for LP operations.
+   */
+  liquidity(): LiquidityModule {
+    return new LiquidityModule(this);
+  }
+
+  /**
+   * Create a RouterModule for off-chain routing.
+   */
+  routing(): RouterModule {
+    return new RouterModule(this);
   }
 
   /**
