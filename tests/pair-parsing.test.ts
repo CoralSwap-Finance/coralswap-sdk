@@ -13,6 +13,8 @@ describe("PairClient Parsing", () => {
   beforeEach(() => {
     client = new PairClient(PAIR_ADDRESS, RPC_URL, NETWORK_PASSPHRASE, {
       maxRetries: 1,
+      baseDelayMs: 100,
+      maxDelayMs: 1000,
       retryDelayMs: 100,
       maxRetryDelayMs: 1000,
     });
@@ -22,7 +24,7 @@ describe("PairClient Parsing", () => {
       accountId: () =>
         "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
       sequenceNumber: () => "1",
-      incrementSequenceNumber: () => {},
+      incrementSequenceNumber: () => { },
     });
 
     mockSimulateTransaction = jest.spyOn(

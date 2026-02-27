@@ -218,80 +218,75 @@ function mapContractError(
   const message = ErrorParser.parseContractError(code);
 
   // Core pair contract errors (100-113)
-  switch (code) {
-    case 100: // AlreadyInitialized
-      return new ValidationError(message || "Already initialized", {
-        contractErrorCode: code,
-      });
-    case 101: // ZeroAddress
-      return new ValidationError(message || "Zero address", {
-        contractErrorCode: code,
-      });
-    case 102: // IdenticalTokens
-      return new ValidationError(message || "Identical tokens", {
-        contractErrorCode: code,
-      });
-    case 103: // InsufficientLiquidityMinted
-    case 104: // InsufficientLiquidityBurned
-    case 106: // InsufficientLiquidity
-      return new InsufficientLiquidityError(extractPairAddress(err), {
-        contractErrorCode: code,
-        message,
-      });
-    case 105: // InsufficientOutputAmount
-      return new SlippageError(0n, 0n, 0, {
-        contractErrorCode: code,
-        message,
-      });
-    case 107: // InvalidAmount
-    case 109: // InsufficientInputAmount
-      return new ValidationError(message || "Invalid amount", {
-        contractErrorCode: code,
-      });
-    case 108: // KInvariant
-      return new ValidationError(message || "K invariant violated", {
-        contractErrorCode: code,
-      });
-    case 110: // Locked
-      return new TransactionError(message || "Contract locked", undefined, {
-        contractErrorCode: code,
-      });
-    case 111: // Expired
-      return new DeadlineError(0);
-    case 112: // ConstraintNotMet
-    case 113: // InvalidFee
-      return new ValidationError(message || "Constraint not met", {
-        contractErrorCode: code,
-      });
-
-    // Router contract errors (200-series based on parser.ts)
-    case 201: // Invalid swap path
-      return new ValidationError(message || "Invalid swap path", {
-        contractErrorCode: code,
-      });
-    case 202: // Insufficient output amount
-    case 203: // Excessive input amount
-      return new SlippageError(0n, 0n, 0, {
-        contractErrorCode: code,
-        message,
-      });
-    case 204: // Expired deadline
-      return new DeadlineError(0);
-    case 205: // Insufficient liquidity
-      return new InsufficientLiquidityError(extractPairAddress(err), {
-        contractErrorCode: code,
-        message,
-      });
-    case 206: // Pair not found
-      return new PairNotFoundError("unknown", "unknown");
-
-    // Handle legacy/alternate codes from existing map if needed
-    case 300:
-      return new PairNotFoundError("unknown", "unknown");
-
-    default:
-      return null;
+  if (code >= 100 && code <= 119) {
+    switch (code) {
+      case 101: // Insufficient liquidity
+        return new InsufficientLiquidityError(extractPairAddress(err), {
+          contractErrorCode: code,
+          message,
+        });
+      case 102: // Slippage exceeded
+        return new SlippageError(0n, 0n, 0, {
+          contractErrorCode: code,
+          message,
+        });
+      case 103: // Deadline exceeded
+        return new DeadlineError(0);
+      case 106: // Reentrancy detected
+      case 107: // Flash loan callback failed
+      case 108: // Flash loan repayment insufficient
+        return new FlashLoanError(message || "Flash loan error", {
+          contractErrorCode: code,
+        });
+      case 109: // Circuit breaker
+        return new CircuitBreakerError(extractPairAddress(err));
+      default:
+        // 100, 104, 105, 110, 111, 112, 113 are validation errors
+        return new ValidationError(message || "Validation error", {
+          contractErrorCode: code,
+        });
+    }
   }
+
+  // Router contract errors (300-306)
+  if (code >= 300 && code <= 319) {
+    switch (code) {
+      case 300: // Pair not found
+        return new PairNotFoundError("unknown", "unknown");
+      case 302: // Slippage exceeded
+        return new SlippageError(0n, 0n, 0, {
+          contractErrorCode: code,
+          message,
+        });
+      case 303: // Deadline exceeded
+        return new DeadlineError(0);
+      case 304: // Insufficient liquidity
+        return new InsufficientLiquidityError(extractPairAddress(err), {
+          contractErrorCode: code,
+          message,
+        });
+      default:
+        // 301, 305, 306 are validation errors
+        return new ValidationError(message || "Validation error", {
+          contractErrorCode: code,
+        });
+    }
+  }
+
+  // Factory contract errors (400-series)
+  if (code >= 400 && code <= 419) {
+    if (code === 401) {
+      // Unauthorized caller
+      return new ValidationError(message || "Unauthorized caller", {
+        contractErrorCode: code,
+      });
+    }
+    return new ValidationError(message || "Factory error", {
+      contractErrorCode: code,
+    });
+  }
+
+  return null;
 }
 
 /**

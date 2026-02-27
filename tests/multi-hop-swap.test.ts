@@ -246,6 +246,7 @@ describe('Multi-hop swap routing', () => {
     });
 
     it('throws PairNotFoundError when a pair in the path does not exist', async () => {
+      const TOKEN_D = 'GDULNI7CP3QNPLXUDIXWLAX633PGS5QUOH5BWM2W6XLBEH5GUVMPXUPL';
       await expect(
         swap.getQuote({
           tokenIn: TOKEN_A,

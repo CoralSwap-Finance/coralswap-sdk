@@ -82,7 +82,7 @@ describe('FeeModule', () => {
             expect(feeAmount).toBe(30n);
         });
 
-        it('returns zero fee for zero amount', async () => {
+        it('returns zero fee for a small amount (flooring)', async () => {
             const client = createMockClient({ feeBps: 30 });
             const module = new FeeModule(client);
 

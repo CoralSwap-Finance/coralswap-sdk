@@ -21,6 +21,7 @@ import {
   validatePositiveAmount,
   validateSlippage,
   validateDistinctTokens,
+  isValidPath,
 } from '@/utils/validation';
 import { resolveTokenIdentifier } from '@/utils/addresses';
 
@@ -125,21 +126,21 @@ export class SwapModule {
       op =
         request.tradeType === TradeType.EXACT_IN
           ? this.client.router.buildSwapExactIn(
-              request.to ?? this.client.publicKey,
-              tokenIn,
-              tokenOut,
-              quote.amountIn,
-              quote.amountOutMin,
-              quote.deadline,
-            )
+            request.to ?? this.client.publicKey,
+            tokenIn,
+            tokenOut,
+            quote.amountIn,
+            quote.amountOutMin,
+            quote.deadline,
+          )
           : this.client.router.buildSwapExactOut(
-              request.to ?? this.client.publicKey,
-              tokenIn,
-              tokenOut,
-              quote.amountOut,
-              quote.amountIn,
-              quote.deadline,
-            );
+            request.to ?? this.client.publicKey,
+            tokenIn,
+            tokenOut,
+            quote.amountOut,
+            quote.amountIn,
+            quote.deadline,
+          );
     }
 
     const result = await this.client.submitTransaction([op]);

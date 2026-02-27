@@ -3,16 +3,21 @@ import { CoralSwapClient } from "../src/client";
 import { PairClient } from "../src/contracts/pair";
 import { PRECISION } from "../src/config";
 import { ValidationError, TransactionError } from "../src/errors";
+import { Network } from "../src/types/common";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 /**
+ * Helper to call the private sqrt method on LiquidityModule for testing.
+ */
+function sqrtOf(module: LiquidityModule, value: bigint): bigint {
+  return (module as any).sqrt(value);
+}
+
+/**
  * Build a mock CoralSwapClient with overridable factory methods.
- *
- * By default `getPairAddress` returns `null` (simulating "first LP" scenario).
- * Pass overrides to configure reserves, tokens, and LP total supply.
  */
 function createMockClient(
   overrides: {
@@ -22,6 +27,7 @@ function createMockClient(
     token0?: string;
     token1?: string;
     totalSupply?: bigint;
+    submitSuccess?: boolean;
   } = {},
 ): CoralSwapClient {
   const {
@@ -31,26 +37,43 @@ function createMockClient(
     token0 = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
     token1 = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4",
     totalSupply = 0n,
+    submitSuccess = true,
   } = overrides;
 
+  const mockPair = {
+    getReserves: jest.fn().mockResolvedValue({ reserve0, reserve1 }),
+    getTokens: jest.fn().mockResolvedValue({ token0, token1 }),
+    getLPTokenAddress: jest.fn().mockResolvedValue("CA...LP"),
+  };
+
+  const mockLPToken = {
+    totalSupply: jest.fn().mockResolvedValue(totalSupply),
+    balance: jest.fn().mockResolvedValue(0n),
+  };
+
+  const mockRouter = {
+    buildAddLiquidity: jest.fn().mockReturnValue({}),
+    buildRemoveLiquidity: jest.fn().mockReturnValue({}),
+  };
+
+  const mockFactory = {
+    getAllPairs: jest.fn().mockResolvedValue([]),
+  };
+
   return {
+    network: Network.TESTNET,
     getPairAddress: jest.fn().mockResolvedValue(pairAddress),
-    pair: jest.fn().mockReturnValue({
-      getReserves: jest.fn().mockResolvedValue({ reserve0, reserve1 }),
-      getTokens: jest.fn().mockResolvedValue({ token0, token1 }),
-    }),
-    lpToken: jest.fn().mockReturnValue({
-      totalSupply: jest.fn().mockResolvedValue(totalSupply),
-      balance: jest.fn().mockResolvedValue(0n),
+    pair: jest.fn().mockReturnValue(mockPair),
+    lpToken: jest.fn().mockReturnValue(mockLPToken),
+    router: mockRouter,
+    factory: mockFactory,
+    getDeadline: jest.fn().mockReturnValue(1234567890),
+    submitTransaction: jest.fn().mockResolvedValue({
+      success: submitSuccess,
+      txHash: '0xabc123',
+      data: { ledger: 100 },
     }),
   } as unknown as CoralSwapClient;
-}
-
-/**
- * Access the private `sqrt` method via type coercion.
- */
-function sqrtOf(module: LiquidityModule, value: bigint): bigint {
-  return (module as any).sqrt(value);
 }
 
 // ---------------------------------------------------------------------------
@@ -111,7 +134,6 @@ describe("LiquidityModule", () => {
     it("floors non-perfect square: sqrt(10n) returns 3n", () => {
       expect(sqrtOf(module, 10n)).toBe(3n);
     });
-
     it("throws ValidationError for negative input", () => {
       expect(() => sqrtOf(module, -1n)).toThrow(ValidationError);
       expect(() => sqrtOf(module, -1n)).toThrow(

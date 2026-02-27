@@ -13,7 +13,7 @@ const mockTx = {
 // Mock TransactionBuilder
 jest.mock('@stellar/stellar-sdk', () => {
   const actual = jest.requireActual('@stellar/stellar-sdk');
-  
+
   const MockTransactionBuilder = jest.fn().mockImplementation(() => ({
     addOperation: jest.fn().mockReturnThis(),
     setTimeout: jest.fn().mockReturnThis(),
@@ -468,6 +468,8 @@ describe('CoralSwapClient', () => {
         secretKey: TEST_SECRET,
         maxRetries: 1,
         retryDelayMs: 10,
+        maxPollingAttempts: 1,
+        pollingIntervalMs: 10,
       });
 
       const mockGetAccount = jest.fn().mockResolvedValue(mockAccount);

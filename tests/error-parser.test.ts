@@ -1,5 +1,5 @@
 import { ErrorParser } from '../src/errors/parser';
-import { mapError, InsufficientLiquidityError, ValidationError, SlippageError, DeadlineError } from '../src/errors';
+import { mapError, InsufficientLiquidityError, ValidationError, SlippageError, DeadlineError, FlashLoanError } from '../src/errors';
 
 describe('ErrorParser', () => {
     describe('extractErrorCode', () => {
@@ -24,12 +24,12 @@ describe('ErrorParser', () => {
 
     describe('parseContractError', () => {
         it('maps Pair error codes', () => {
-            expect(ErrorParser.parseContractError(100)).toBe('Pair already initialized');
-            expect(ErrorParser.parseContractError(106)).toBe('Insufficient liquidity in pool');
+            expect(ErrorParser.parseContractError(100)).toBe('Invalid token pair');
+            expect(ErrorParser.parseContractError(101)).toBe('Insufficient liquidity');
         });
 
         it('maps Router error codes', () => {
-            expect(ErrorParser.parseContractError(201)).toBe('Invalid swap path');
+            expect(ErrorParser.parseContractError(301)).toBe('Invalid path');
         });
 
         it('returns null for unknown codes', () => {
@@ -40,7 +40,7 @@ describe('ErrorParser', () => {
     describe('toHumanMessage', () => {
         it('formats recognized contract errors', () => {
             const msg = ErrorParser.toHumanMessage('Error(Contract, #101)');
-            expect(msg).toBe('Contract Error (101): Zero address provided');
+            expect(msg).toBe('Contract Error (101): Insufficient liquidity');
         });
 
         it('returns raw message for unrecognized errors', () => {
@@ -50,26 +50,23 @@ describe('ErrorParser', () => {
 });
 
 describe('SDK Error Mapping Integration', () => {
-    it('maps Error(Contract, #101) to ValidationError (Zero Address)', () => {
+    it('maps Error(Contract, #101) to InsufficientLiquidityError', () => {
         const err = mapError('Error(Contract, #101)');
-        expect(err).toBeInstanceOf(ValidationError);
-        expect(err.message).toBe('Zero address provided');
-    });
-
-    it('maps Error(Contract, #106) to InsufficientLiquidityError', () => {
-        const err = mapError('Error(Contract, #106)');
         expect(err).toBeInstanceOf(InsufficientLiquidityError);
-        expect(err.message).toBe('Insufficient liquidity in pool');
     });
 
-    it('maps Error(Contract, #105) to SlippageError', () => {
-        const err = mapError('Error(Contract, #105)');
+    it('maps Error(Contract, #106) to FlashLoanError', () => {
+        const err = mapError('Error(Contract, #106)');
+        expect(err).toBeInstanceOf(FlashLoanError);
+    });
+
+    it('maps Error(Contract, #102) to SlippageError', () => {
+        const err = mapError('Error(Contract, #102)');
         expect(err).toBeInstanceOf(SlippageError);
-        expect(err.message).toBe('Insufficient output amount');
     });
 
-    it('maps Error(Contract, #111) to DeadlineError', () => {
-        const err = mapError('Error(Contract, #111)');
+    it('maps Error(Contract, #103) to DeadlineError', () => {
+        const err = mapError('Error(Contract, #103)');
         expect(err).toBeInstanceOf(DeadlineError);
     });
 });

@@ -43,7 +43,7 @@ export interface FlashLoanFeeEstimate {
   /** Estimated fee amount */
   feeAmount: bigint;
   /** Minimum fee floor in basis points */
-  feeFloor: number;
+  feeFloor: bigint;
 }
 
 /**

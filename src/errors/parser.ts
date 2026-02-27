@@ -6,41 +6,40 @@
 
 /** Error codes for Pair contracts (100-119) */
 export const PAIR_ERROR_MAP: Record<number, string> = {
-    100: 'Pair already initialized',
-    101: 'Zero address provided',
-    102: 'Identical tokens provided',
-    103: 'Insufficient liquidity minted',
-    104: 'Insufficient liquidity burned',
-    105: 'Insufficient output amount',
-    106: 'Insufficient liquidity in pool',
-    107: 'Invalid amount',
-    108: 'K invariant violated',
-    109: 'Insufficient input amount',
-    110: 'Contract is locked (reentrancy guard)',
-    111: 'Transaction expired (deadline exceeded)',
-    112: 'Constraint not met',
-    113: 'Invalid fee configuration',
+    100: 'Invalid token pair',
+    101: 'Insufficient liquidity',
+    102: 'Slippage exceeded',
+    103: 'Deadline exceeded',
+    104: 'Invalid amount',
+    105: 'Insufficient input amount',
+    106: 'Reentrancy detected',
+    107: 'Flash loan callback failed',
+    108: 'Flash loan repayment insufficient',
+    109: 'Circuit breaker',
+    110: 'Unauthorized',
+    111: 'Invalid recipient',
+    112: 'Overflow',
+    113: 'K invariant violated',
 };
 
-/** Error codes for Router contract (200-219) */
+/** Error codes for Router contract (300-319) */
 export const ROUTER_ERROR_MAP: Record<number, string> = {
-    200: 'Router already initialized',
-    201: 'Invalid swap path',
-    202: 'Insufficient output amount',
-    203: 'Excessive input amount',
-    204: 'Expired deadline',
-    205: 'Insufficient liquidity',
-    206: 'Pair not found',
-    207: 'Identical tokens',
+    300: 'Pair not found',
+    301: 'Invalid path',
+    302: 'Slippage exceeded',
+    303: 'Deadline exceeded',
+    304: 'Insufficient liquidity',
+    305: 'Excessive input amount',
+    306: 'Invalid token',
 };
 
-/** Error codes for Factory contract (300-319) */
+/** Error codes for Factory contract (400-419) */
 export const FACTORY_ERROR_MAP: Record<number, string> = {
-    300: 'Factory already initialized',
-    301: 'Unauthorized caller',
-    302: 'Pair already exists',
-    303: 'Zero address provided',
-    304: 'Invalid fee configuration',
+    400: 'Factory already initialized',
+    401: 'Unauthorized caller',
+    402: 'Pair already exists',
+    403: 'Zero address provided',
+    404: 'Invalid fee configuration',
 };
 
 /**
@@ -56,8 +55,8 @@ export class ErrorParser {
      */
     static parseContractError(code: number): string | null {
         if (code >= 100 && code < 120) return PAIR_ERROR_MAP[code] || null;
-        if (code >= 200 && code < 220) return ROUTER_ERROR_MAP[code] || null;
-        if (code >= 300 && code < 320) return FACTORY_ERROR_MAP[code] || null;
+        if (code >= 300 && code < 320) return ROUTER_ERROR_MAP[code] || null;
+        if (code >= 400 && code < 420) return FACTORY_ERROR_MAP[code] || null;
         return null;
     }
 

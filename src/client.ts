@@ -16,6 +16,7 @@ import { TokenListModule } from '@/modules/tokens';
 import { FactoryModule } from '@/modules/factory';
 import { KeypairSigner } from '@/utils/signer';
 import { TransactionPoller, PollingStrategy, PollingOptions } from '@/utils/polling';
+import { withRetry as utilWithRetry, RetryOptions } from '@/utils/retry';
 export { KeypairSigner, PollingStrategy, PollingOptions };
 
 /**
@@ -42,6 +43,7 @@ export class CoralSwapClient {
   private _factory: FactoryClient | null = null;
   private _router: RouterClient | null = null;
   private _factoryModule: FactoryModule | null = null;
+  private _poller: TransactionPoller | null = null;
   private readonly logger?: Logger;
 
   /**
@@ -55,10 +57,10 @@ export class CoralSwapClient {
   private async withRetry<T>(fn: () => Promise<T>, label: string): Promise<T> {
     const options: RetryOptions = {
       maxRetries: this.config.maxRetries ?? DEFAULTS.maxRetries,
-      retryDelayMs: this.config.retryDelayMs ?? DEFAULTS.retryDelayMs,
-      maxRetryDelayMs: this.config.maxRetryDelayMs ?? DEFAULTS.maxRetryDelayMs,
+      baseDelayMs: this.config.baseDelayMs ?? this.config.retryDelayMs ?? DEFAULTS.baseDelayMs,
+      maxDelayMs: this.config.maxDelayMs ?? this.config.maxRetryDelayMs ?? DEFAULTS.maxDelayMs,
     };
-    return withRetry(fn, options, this.logger, label);
+    return utilWithRetry(fn, options, this.logger, label);
   }
 
   /**
@@ -488,6 +490,8 @@ export class CoralSwapClient {
   private getRetryOptions(): RetryOptions {
     return {
       maxRetries: this.config.maxRetries ?? DEFAULTS.maxRetries,
+      baseDelayMs: this.config.baseDelayMs ?? this.config.retryDelayMs ?? DEFAULTS.baseDelayMs,
+      maxDelayMs: this.config.maxDelayMs ?? this.config.maxRetryDelayMs ?? DEFAULTS.maxDelayMs,
       retryDelayMs: this.config.retryDelayMs ?? DEFAULTS.retryDelayMs,
       maxRetryDelayMs: this.config.maxRetryDelayMs ?? DEFAULTS.maxRetryDelayMs,
     };

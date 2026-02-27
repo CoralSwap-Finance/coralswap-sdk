@@ -104,7 +104,7 @@ export class FlashLoanModule {
       );
     }
 
-    if (!validateFeeFloor(config.flashFeeBps, config.flashFeeFloor)) {
+    if (!validateFeeFloor(config.flashFeeBps, Number(config.flashFeeFloor))) {
       throw new FlashLoanError("Flash loan fee below protocol floor", {
         feeBps: config.flashFeeBps,
         feeFloor: config.flashFeeFloor,

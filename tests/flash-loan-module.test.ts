@@ -115,7 +115,7 @@ describe("FlashLoanModule", () => {
     const mockConfig: FlashLoanConfig = {
       flashFeeBps: 9,
       locked: false,
-      flashFeeFloor: 100,
+      flashFeeFloor: 100n,
     };
 
     it("returns fee based on flashFeeBps when fee > floor", async () => {
@@ -135,7 +135,7 @@ describe("FlashLoanModule", () => {
       expect(estimate.amount).toBe(amount);
       expect(estimate.feeBps).toBe(9);
       expect(estimate.feeAmount).toBe(900n);
-      expect(estimate.feeFloor).toBe(100);
+      expect(estimate.feeFloor).toBe(100n);
     });
 
     it("returns flashFeeFloor when calculated fee < floor", async () => {
@@ -152,7 +152,7 @@ describe("FlashLoanModule", () => {
       // Floor = 100
       // Actual fee = max(0, 100) = 100
       expect(estimate.feeAmount).toBe(100n);
-      expect(estimate.feeFloor).toBe(100);
+      expect(estimate.feeFloor).toBe(100n);
     });
 
     it("throws when config.locked is true", async () => {
@@ -179,7 +179,7 @@ describe("FlashLoanModule", () => {
       ).rejects.toThrow("Flash loans are currently disabled for this pair");
     });
 
-    it("handles zero amount correctly", async () => {
+    it("handles small amount correctly", async () => {
       mockPairClient.getFlashLoanConfig.mockResolvedValue(mockConfig);
 
       await expect(
@@ -195,7 +195,7 @@ describe("FlashLoanModule", () => {
       const highFeeConfig: FlashLoanConfig = {
         flashFeeBps: 100, // 1%
         locked: false,
-        flashFeeFloor: 10,
+        flashFeeFloor: 10n,
       };
       mockPairClient.getFlashLoanConfig.mockResolvedValue(highFeeConfig);
 
@@ -217,7 +217,7 @@ describe("FlashLoanModule", () => {
       const config: FlashLoanConfig = {
         flashFeeBps: 9,
         locked: false,
-        flashFeeFloor: 100,
+        flashFeeFloor: 100n,
       };
       mockPairClient.getFlashLoanConfig.mockResolvedValue(config);
 
@@ -231,7 +231,7 @@ describe("FlashLoanModule", () => {
       const config: FlashLoanConfig = {
         flashFeeBps: 9,
         locked: true,
-        flashFeeFloor: 100,
+        flashFeeFloor: 100n,
       };
       mockPairClient.getFlashLoanConfig.mockResolvedValue(config);
 
@@ -264,7 +264,7 @@ describe("FlashLoanModule", () => {
   describe("getMaxBorrowable()", () => {
     const mockTokens = {
       token0: TEST_TOKEN_ADDRESS,
-      token1: "CTOKEN1ADDRESSFORTEST1234567890ABCDEFGHIJKLMNOPQRST",
+      token1: "GDLMWRV6Z25R2R4P6XG6Y77J3V6E5X6G5X6G5X6G5X6G5X6G5X6G5X6G",
     };
 
     it("returns reserve - 1% margin for token0", async () => {
@@ -366,7 +366,7 @@ describe("FlashLoanModule", () => {
       const config: FlashLoanConfig = {
         flashFeeBps: 9,
         locked: false,
-        flashFeeFloor: 100,
+        flashFeeFloor: 100n,
       };
       mockPairClient.getFlashLoanConfig.mockResolvedValue(config);
 
@@ -391,7 +391,7 @@ describe("FlashLoanModule", () => {
     const mockConfig: FlashLoanConfig = {
       flashFeeBps: 9,
       locked: false,
-      flashFeeFloor: 5,
+      flashFeeFloor: 5n,
     };
 
     const mockOperation = {} as xdr.Operation;
@@ -427,7 +427,7 @@ describe("FlashLoanModule", () => {
       const badConfig: FlashLoanConfig = {
         flashFeeBps: 3, // Below floor of 5
         locked: false,
-        flashFeeFloor: 5,
+        flashFeeFloor: 5n,
       };
       mockPairClient.getFlashLoanConfig.mockResolvedValue(badConfig);
 

@@ -46,6 +46,11 @@ function buildMockClient(
       return p ? p.address : null;
     }),
     config: { defaultSlippageBps: 50 },
+    networkConfig: {
+      rpcUrl: 'http://localhost:8000',
+      networkPassphrase: 'Test Network',
+    },
+    network: 'TESTNET',
     getDeadline: jest.fn().mockReturnValue(9999999999),
   };
 }
