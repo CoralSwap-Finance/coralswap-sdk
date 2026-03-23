@@ -3,6 +3,7 @@ export {
   parseTokenAmount,
   fromSorobanAmount,
   formatAmount,
+  formatLargeNumber,
   toBps,
   applyBps,
   percentDiff,
