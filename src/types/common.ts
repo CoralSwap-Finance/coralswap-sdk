@@ -4,6 +4,7 @@
 export enum Network {
   TESTNET = "testnet",
   MAINNET = "mainnet",
+  STAGING = "staging",
 }
 
 /**

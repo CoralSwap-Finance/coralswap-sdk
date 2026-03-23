@@ -61,6 +61,13 @@ export const NETWORK_CONFIGS: Record<Network, NetworkConfig> = {
     routerAddress: "",
     sorobanTimeout: 30,
   },
+  [Network.STAGING]: {
+    rpcUrl: "https://soroban-testnet.stellar.org",
+    networkPassphrase: "Test SDF Network ; September 2015",
+    factoryAddress: "",
+    routerAddress: "",
+    sorobanTimeout: 30,
+  },
 };
 
 /**
