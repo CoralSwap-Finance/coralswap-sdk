@@ -36,6 +36,7 @@ export {
   NetworkConfig,
   NETWORK_CONFIGS,
   DEFAULTS,
+  DEFAULT_SLIPPAGE,
   PRECISION,
 } from "@/config";
 
