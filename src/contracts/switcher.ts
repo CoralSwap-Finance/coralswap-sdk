@@ -17,8 +17,13 @@ export class NetworkSwitcher {
     /**
      * Switch the entire SDK context to a new network.
      *
+     * Re-initialises the RPC server, contract client singletons, and signer
+     * for the target network. Also resolves and caches the public key for the
+     * new network environment.
+     *
      * @param network - The target network (TESTNET, MAINNET).
-     * @param rpcUrl - Optional custom RPC endpoint.
+     * @param rpcUrl - Optional custom RPC endpoint override.
+     * @returns Resolves when the network switch and key resolution are complete.
      */
     async switchNetwork(network: Network, rpcUrl?: string): Promise<void> {
         this.client.setNetwork(network, rpcUrl);
@@ -29,7 +34,9 @@ export class NetworkSwitcher {
     }
 
     /**
-     * Get the current network status.
+     * Get the current network the client is connected to.
+     *
+     * @returns The active {@link Network} value.
      */
     get currentNetwork(): Network {
         return this.client.network;

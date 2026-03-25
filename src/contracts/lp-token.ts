@@ -23,6 +23,15 @@ export class LPTokenClient {
   private logger?: Logger;
   readonly address: string;
 
+  /**
+   * Create a new LPTokenClient.
+   *
+   * @param contractAddress - The Soroban contract address of the LP token.
+   * @param rpcUrl - The Soroban RPC endpoint URL.
+   * @param networkPassphrase - The Stellar network passphrase.
+   * @param retryOptions - Retry policy for RPC calls.
+   * @param logger - Optional logger for debug/error output.
+   */
   constructor(
     contractAddress: string,
     rpcUrl: string,
@@ -40,6 +49,9 @@ export class LPTokenClient {
 
   /**
    * Query the LP token balance for an address.
+   *
+   * @param owner - The Stellar address to query.
+   * @returns The LP token balance as a BigInt (i128).
    */
   async balance(owner: string): Promise<bigint> {
     const op = this.contract.call(
@@ -56,6 +68,8 @@ export class LPTokenClient {
 
   /**
    * Query the total supply of LP tokens.
+   *
+   * @returns The total minted LP token supply as a BigInt (i128).
    */
   async totalSupply(): Promise<bigint> {
     const op = this.contract.call("total_supply");
@@ -69,6 +83,10 @@ export class LPTokenClient {
 
   /**
    * Query the allowance for a spender on an owner's balance.
+   *
+   * @param owner - The address that owns the tokens.
+   * @param spender - The address approved to spend on behalf of `owner`.
+   * @returns The approved allowance as a BigInt (i128).
    */
   async allowance(owner: string, spender: string): Promise<bigint> {
     const op = this.contract.call(
@@ -86,6 +104,12 @@ export class LPTokenClient {
 
   /**
    * Build an approve operation for LP token spending.
+   *
+   * @param owner - The address granting the allowance.
+   * @param spender - The address being approved to spend.
+   * @param amount - The allowance amount (i128).
+   * @param expirationLedger - The ledger sequence number at which the approval expires.
+   * @returns An XDR operation ready to be included in a transaction.
    */
   buildApprove(
     owner: string,
@@ -104,6 +128,11 @@ export class LPTokenClient {
 
   /**
    * Build a transfer operation for LP tokens.
+   *
+   * @param from - The address sending LP tokens.
+   * @param to - The address receiving LP tokens.
+   * @param amount - The amount to transfer (i128).
+   * @returns An XDR operation ready to be included in a transaction.
    */
   buildTransfer(from: string, to: string, amount: bigint): xdr.Operation {
     return this.contract.call(
@@ -116,6 +145,8 @@ export class LPTokenClient {
 
   /**
    * Query token metadata (name, symbol, decimals).
+   *
+   * @returns The LP token's human-readable name, ticker symbol, and decimal precision.
    */
   async metadata(): Promise<{
     name: string;
@@ -141,6 +172,14 @@ export class LPTokenClient {
     };
   }
 
+  /**
+   * Simulate a read-only contract call and return the return value.
+   *
+   * Uses a well-known zero-balance account as the source so no funds are required.
+   *
+   * @param op - The XDR operation to simulate.
+   * @returns The `ScVal` return value, or `null` if simulation produced no result.
+   */
   private async simulateRead(op: xdr.Operation): Promise<xdr.ScVal | null> {
     const account = await withRetry(
       () =>

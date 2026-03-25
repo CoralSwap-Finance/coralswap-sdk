@@ -5,29 +5,56 @@ export enum Rounding {
   ROUND_UP,
 }
 
+/**
+ * Arbitrary-precision rational number backed by BigInt numerator and denominator.
+ *
+ * Used throughout the SDK for fee calculations, price ratios, and slippage
+ * arithmetic where floating-point precision is unacceptable.
+ */
 export class Fraction {
   public readonly numerator: bigint;
   public readonly denominator: bigint;
 
+  /**
+   * Create a new Fraction.
+   *
+   * @param numerator - The numerator value (BigInt, number, or numeric string).
+   * @param denominator - The denominator value (default `1`).
+   */
   constructor(numerator: bigint | number | string, denominator: bigint | number | string = 1n) {
     this.numerator = BigInt(numerator);
     this.denominator = BigInt(denominator);
   }
 
-  // performs floor division
+  /**
+   * Integer quotient (floor division) of numerator / denominator.
+   */
   public get quotient(): bigint {
     return this.numerator / this.denominator;
   }
 
-  // remainder after floor division
+  /**
+   * Remainder after floor division as a new Fraction with the same denominator.
+   */
   public get remainder(): Fraction {
     return new Fraction(this.numerator % this.denominator, this.denominator);
   }
 
+  /**
+   * Return the multiplicative inverse (denominator / numerator).
+   *
+   * @returns A new Fraction with numerator and denominator swapped.
+   */
   public invert(): Fraction {
     return new Fraction(this.denominator, this.numerator);
   }
 
+  /**
+   * Add another value to this fraction.
+   *
+   * @param other - A Fraction, BigInt, number, or numeric string to add.
+   * @returns A new Fraction representing the sum.
+   */
   public add(other: Fraction | bigint | number | string): Fraction {
     const otherParsed = other instanceof Fraction ? other : new Fraction(BigInt(other));
     if (this.denominator === otherParsed.denominator) {
@@ -39,6 +66,12 @@ export class Fraction {
     );
   }
 
+  /**
+   * Subtract another value from this fraction.
+   *
+   * @param other - A Fraction, BigInt, number, or numeric string to subtract.
+   * @returns A new Fraction representing the difference.
+   */
   public sub(other: Fraction | bigint | number | string): Fraction {
     const otherParsed = other instanceof Fraction ? other : new Fraction(BigInt(other));
     if (this.denominator === otherParsed.denominator) {
@@ -50,6 +83,12 @@ export class Fraction {
     );
   }
 
+  /**
+   * Multiply this fraction by another value.
+   *
+   * @param other - A Fraction, BigInt, number, or numeric string to multiply by.
+   * @returns A new Fraction representing the product.
+   */
   public multiply(other: Fraction | bigint | number | string): Fraction {
     const otherParsed = other instanceof Fraction ? other : new Fraction(BigInt(other));
     return new Fraction(
@@ -58,6 +97,12 @@ export class Fraction {
     );
   }
 
+  /**
+   * Divide this fraction by another value.
+   *
+   * @param other - A Fraction, BigInt, number, or numeric string to divide by.
+   * @returns A new Fraction representing the quotient.
+   */
   public divide(other: Fraction | bigint | number | string): Fraction {
     const otherParsed = other instanceof Fraction ? other : new Fraction(BigInt(other));
     return new Fraction(
@@ -66,6 +111,15 @@ export class Fraction {
     );
   }
 
+  /**
+   * Format the fraction to a given number of significant digits.
+   *
+   * @param significantDigits - Number of significant digits in the output (must be >= 0).
+   * @param _format - Formatting options (currently unused, reserved for future locale support).
+   * @param rounding - Rounding mode to apply (default: `ROUND_HALF_UP`).
+   * @returns A decimal string with the requested significant digits.
+   * @throws {Error} If `significantDigits` is negative.
+   */
   public toSignificant(
     significantDigits: number,
     _format: { groupSeparator?: string } = { groupSeparator: '' },
@@ -265,6 +319,15 @@ export class Fraction {
     }
   }
 
+  /**
+   * Format the fraction to a fixed number of decimal places.
+   *
+   * @param decimalPlaces - Number of digits after the decimal point (must be >= 0).
+   * @param _format - Formatting options (currently unused, reserved for future locale support).
+   * @param rounding - Rounding mode to apply (default: `ROUND_HALF_UP`).
+   * @returns A decimal string with exactly `decimalPlaces` digits after the decimal point.
+   * @throws {Error} If `decimalPlaces` is negative.
+   */
   public toFixed(
     decimalPlaces: number,
     _format: { groupSeparator?: string } = { groupSeparator: '' },
@@ -295,6 +358,14 @@ export class Fraction {
     return isNegative ? '-' + result : result;
   }
 
+  /**
+   * Perform integer division with the specified rounding mode.
+   *
+   * @param numerator - The dividend.
+   * @param denominator - The divisor.
+   * @param rounding - Rounding mode to apply.
+   * @returns The rounded quotient as a BigInt.
+   */
   private divideWithRounding(numerator: bigint, denominator: bigint, rounding: Rounding): bigint {
     const quotient = numerator / denominator;
     const remainder = numerator % denominator;
@@ -327,9 +398,23 @@ export class Fraction {
   }
 }
 
+/**
+ * A {@link Fraction} that represents a percentage value.
+ *
+ * `toSignificant` and `toFixed` automatically multiply by 100 so the output
+ * is expressed as a human-readable percentage (e.g. `0.3` → `"30%"`).
+ */
 export class Percent extends Fraction {
   private static ONE_HUNDRED = new Fraction(100n);
 
+  /**
+   * Format the percentage to a given number of significant digits.
+   *
+   * @param significantDigits - Number of significant digits (default: `5`).
+   * @param format - Formatting options (reserved for future locale support).
+   * @param rounding - Rounding mode (default: `ROUND_HALF_UP`).
+   * @returns A string like `"0.30000"` representing the percentage value.
+   */
   public toSignificant(
     significantDigits: number = 5,
     format?: { groupSeparator?: string },
@@ -338,6 +423,14 @@ export class Percent extends Fraction {
     return this.multiply(Percent.ONE_HUNDRED).toSignificant(significantDigits, format, rounding);
   }
 
+  /**
+   * Format the percentage to a fixed number of decimal places.
+   *
+   * @param decimalPlaces - Digits after the decimal point (default: `2`).
+   * @param format - Formatting options (reserved for future locale support).
+   * @param rounding - Rounding mode (default: `ROUND_HALF_UP`).
+   * @returns A string like `"0.30"` representing the percentage value.
+   */
   public toFixed(
     decimalPlaces: number = 2,
     format?: { groupSeparator?: string },
