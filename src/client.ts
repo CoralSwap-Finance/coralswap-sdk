@@ -6,7 +6,7 @@ import {
   xdr,
 } from '@stellar/stellar-sdk';
 import { CoralSwapConfig, NetworkConfig, NETWORK_CONFIGS, DEFAULTS } from '@/config';
-import { Network, Result, Logger, Signer } from '@/types/common';
+import { Network, Result, Logger, Signer, SimulateTransactionOptions, SimulateTransactionResult } from '@/types/common';
 import { SignerError } from '@/errors';
 import { FactoryClient } from '@/contracts/factory';
 import { PairClient } from '@/contracts/pair';
@@ -16,6 +16,7 @@ import { TokenListModule } from '@/modules/tokens';
 import { FactoryModule } from '@/modules/factory';
 import { KeypairSigner } from '@/utils/signer';
 import { TransactionPoller, PollingStrategy, PollingOptions } from '@/utils/polling';
+import { buildSimulationResult } from '@/utils/simulation';
 export { KeypairSigner, PollingStrategy, PollingOptions };
 
 /**
@@ -187,12 +188,14 @@ export class CoralSwapClient {
    * Create a PairClient for a specific pair contract address.
    */
   pair(pairAddress: string): PairClient {
+    const sourceAccount = this._publicKeyCache ?? this.config.publicKey;
     return new PairClient(
       pairAddress,
       this.networkConfig.rpcUrl,
       this.networkConfig.networkPassphrase,
       this.getRetryOptions(),
       this.logger,
+      sourceAccount,
     );
   }
 
@@ -404,28 +407,98 @@ export class CoralSwapClient {
   /**
    * Simulate a transaction without submitting (dry-run).
    *
+   * **Legacy form** — returns the raw `SorobanRpc.Api.SimulateTransactionResponse`
+   * for backward compatibility.
+   *
    * @param operations - Array of operations to simulate
-   * @param source - Optional source account override
-   * @returns Simulation response directly from the RPC
+   * @param source - Optional source account public key override
+   * @returns Raw simulation response from the RPC
    * @example
    * const sim = await client.simulateTransaction([op]);
+   * if (SorobanRpc.Api.isSimulationSuccess(sim)) { ... }
    */
   async simulateTransaction(
     operations: xdr.Operation[],
     source?: string,
-  ): Promise<SorobanRpc.Api.SimulateTransactionResponse> {
+  ): Promise<SorobanRpc.Api.SimulateTransactionResponse>;
+
+  /**
+   * Simulate a transaction without submitting (enhanced dry-run).
+   *
+   * **Enhanced form** — pass a {@link SimulateTransactionOptions} object as
+   * the second argument to receive a fully-typed {@link SimulateTransactionResult}
+   * with decoded events, auth entries, resource estimates, and the raw response.
+   *
+   * @param operations - Array of operations to simulate
+   * @param options - Simulation environment options (source account, timeout, fee)
+   * @returns Typed `SimulateTransactionResult` with all relevant simulation data
+   *
+   * @example
+   * // Basic enhanced dry-run using the configured signer's account
+   * const result = await client.simulateTransaction([op], {});
+   * if (result.success) {
+   *   console.log('Return value:', result.returnValue);
+   *   console.log('CPU instructions:', result.cost?.cpuInsns);
+   *   console.log('Min resource fee:', result.minResourceFee);
+   *   console.log('Events emitted:', result.events.length);
+   * }
+   *
+   * @example
+   * // Debug a contract call as a custom source account
+   * const result = await client.simulateTransaction([op], {
+   *   source: 'GABC...XYZ',
+   *   timeoutSec: 60,
+   * });
+   * if (!result.success) {
+   *   console.error('Simulation failed:', result.error);
+   * }
+   *
+   * @example
+   * // Inspect authorization entries before signing
+   * const result = await client.simulateTransaction([op], {});
+   * console.log('Auth required:', result.auth.length);
+   */
+  async simulateTransaction(
+    operations: xdr.Operation[],
+    options: SimulateTransactionOptions,
+  ): Promise<SimulateTransactionResult>;
+
+  // Unified implementation — handles both call forms.
+  async simulateTransaction(
+    operations: xdr.Operation[],
+    sourceOrOptions?: string | SimulateTransactionOptions,
+  ): Promise<SorobanRpc.Api.SimulateTransactionResponse | SimulateTransactionResult> {
+    // Distinguish enhanced form (options object) from legacy form (string or undefined).
+    const isEnhanced =
+      sourceOrOptions !== undefined && typeof sourceOrOptions !== 'string';
+
+    const source =
+      typeof sourceOrOptions === 'string'
+        ? sourceOrOptions
+        : (sourceOrOptions as SimulateTransactionOptions | undefined)?.source;
+
+    const timeoutSec = isEnhanced
+      ? ((sourceOrOptions as SimulateTransactionOptions).timeoutSec ??
+          this.networkConfig.sorobanTimeout)
+      : 30; // preserve the original hardcoded value for the legacy path
+
+    const fee = isEnhanced
+      ? ((sourceOrOptions as SimulateTransactionOptions).fee ?? '100')
+      : '100';
+
     const sourceKey = source ?? this.publicKey;
 
-    this.logger?.debug("simulateTransaction (dry-run): fetching account", {
+    this.logger?.debug('simulateTransaction (dry-run): fetching account', {
       sourceKey,
+      enhanced: isEnhanced,
     });
     const account = await this.withRetry(
       () => this.server.getAccount(sourceKey),
-      "simulateTransaction_getAccount",
+      'simulateTransaction_getAccount',
     );
 
     let builder = new TransactionBuilder(account, {
-      fee: "100",
+      fee,
       networkPassphrase: this.networkConfig.networkPassphrase,
     });
 
@@ -433,17 +506,25 @@ export class CoralSwapClient {
       builder = builder.addOperation(op);
     }
 
-    const tx = builder.setTimeout(30).build();
+    const tx = builder.setTimeout(timeoutSec).build();
 
-    this.logger?.debug("simulateTransaction (dry-run): simulating", {
+    this.logger?.debug('simulateTransaction (dry-run): simulating', {
       sourceKey,
       operationCount: operations.length,
+      enhanced: isEnhanced,
     });
     const sim = await this.withRetry(
       () => this.server.simulateTransaction(tx),
-      "simulateTransaction_simulate",
+      'simulateTransaction_simulate',
     );
-    this.logger?.debug("simulateTransaction (dry-run): completed");
+    this.logger?.debug('simulateTransaction (dry-run): completed', {
+      success: SorobanRpc.Api.isSimulationSuccess(sim),
+      enhanced: isEnhanced,
+    });
+
+    if (isEnhanced) {
+      return buildSimulationResult(sim);
+    }
     return sim;
   }
 

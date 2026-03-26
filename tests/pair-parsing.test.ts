@@ -6,21 +6,28 @@ describe("PairClient Parsing", () => {
   const NETWORK_PASSPHRASE = "Test SDF Network ; September 2015";
   const PAIR_ADDRESS =
     "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM";
+  const MOCK_ACCOUNT = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
 
   let client: PairClient;
   let mockSimulateTransaction: jest.SpyInstance;
 
   beforeEach(() => {
-    client = new PairClient(PAIR_ADDRESS, RPC_URL, NETWORK_PASSPHRASE, {
-      maxRetries: 1,
-      retryDelayMs: 100,
-      maxRetryDelayMs: 1000,
-    });
+    client = new PairClient(
+      PAIR_ADDRESS,
+      RPC_URL,
+      NETWORK_PASSPHRASE,
+      {
+        maxRetries: 1,
+        retryDelayMs: 100,
+        maxRetryDelayMs: 1000,
+      },
+      undefined,
+      MOCK_ACCOUNT,
+    );
 
     // Mock getAccount to avoid actual network calls
     (client as any).server.getAccount = jest.fn().mockResolvedValue({
-      accountId: () =>
-        "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+      accountId: () => MOCK_ACCOUNT,
       sequenceNumber: () => "1",
       incrementSequenceNumber: () => {},
     });
@@ -243,6 +250,20 @@ describe("PairClient Parsing", () => {
       expect(prices.price0CumulativeLast).toBe(123456789n);
       expect(prices.price1CumulativeLast).toBe(987654321n);
       expect(prices.blockTimestampLast).toBe(1625000000);
+    });
+  });
+
+  describe("simulateRead() sourceAccount", () => {
+    it("throws a descriptive error when no sourceAccount is configured", async () => {
+      const clientWithoutAccount = new PairClient(
+        PAIR_ADDRESS,
+        RPC_URL,
+        NETWORK_PASSPHRASE,
+        { maxRetries: 1, retryDelayMs: 100, maxRetryDelayMs: 1000 },
+      );
+      await expect(clientWithoutAccount.getReserves()).rejects.toThrow(
+        "simulateRead requires a sourceAccount",
+      );
     });
   });
 });

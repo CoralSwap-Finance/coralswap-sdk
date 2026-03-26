@@ -113,3 +113,91 @@ describe("Network Switching", () => {
     expect((client.server as any).rpcUrl).toBe(customRpc);
   });
 });
+
+describe("Staging Network Configuration", () => {
+  const TEST_SECRET =
+    "SB6K2AINTGNYBFX4M7TRPGSKQ5RKNOXXWB7UZUHRYOVTM7REDUGECKZU";
+
+  it("STAGING is a valid Network enum value", () => {
+    expect(Network.STAGING).toBe("staging");
+  });
+
+  it("NETWORK_CONFIGS contains a STAGING entry", () => {
+    const staging = NETWORK_CONFIGS[Network.STAGING];
+    expect(staging).toBeDefined();
+  });
+
+  it("STAGING config has the same shape as TESTNET and MAINNET", () => {
+    const staging = NETWORK_CONFIGS[Network.STAGING];
+    const testnet = NETWORK_CONFIGS[Network.TESTNET];
+
+    // Verify all required keys exist
+    const requiredKeys: (keyof typeof testnet)[] = [
+      "rpcUrl",
+      "networkPassphrase",
+      "factoryAddress",
+      "routerAddress",
+      "sorobanTimeout",
+    ];
+
+    for (const key of requiredKeys) {
+      expect(staging).toHaveProperty(key);
+    }
+  });
+
+  it("STAGING config has valid rpcUrl", () => {
+    const staging = NETWORK_CONFIGS[Network.STAGING];
+    expect(typeof staging.rpcUrl).toBe("string");
+    expect(staging.rpcUrl.length).toBeGreaterThan(0);
+    expect(staging.rpcUrl).toMatch(/^https?:\/\//);
+  });
+
+  it("STAGING config has valid networkPassphrase", () => {
+    const staging = NETWORK_CONFIGS[Network.STAGING];
+    expect(typeof staging.networkPassphrase).toBe("string");
+    expect(staging.networkPassphrase.length).toBeGreaterThan(0);
+  });
+
+  it("STAGING config has a positive sorobanTimeout", () => {
+    const staging = NETWORK_CONFIGS[Network.STAGING];
+    expect(staging.sorobanTimeout).toBeGreaterThan(0);
+  });
+
+  it("CoralSwapClient can be initialized with STAGING network", () => {
+    const client = new CoralSwapClient({
+      network: Network.STAGING,
+      secretKey: TEST_SECRET,
+    });
+
+    expect(client.network).toBe(Network.STAGING);
+    expect(client.networkConfig).toEqual(NETWORK_CONFIGS[Network.STAGING]);
+  });
+
+  it("can switch from TESTNET to STAGING", () => {
+    const client = new CoralSwapClient({
+      network: Network.TESTNET,
+      secretKey: TEST_SECRET,
+    });
+
+    client.setNetwork(Network.STAGING);
+
+    expect(client.network).toBe(Network.STAGING);
+    expect(client.networkConfig.rpcUrl).toBe(
+      NETWORK_CONFIGS[Network.STAGING].rpcUrl,
+    );
+  });
+
+  it("can switch from STAGING to MAINNET", () => {
+    const client = new CoralSwapClient({
+      network: Network.STAGING,
+      secretKey: TEST_SECRET,
+    });
+
+    client.setNetwork(Network.MAINNET);
+
+    expect(client.network).toBe(Network.MAINNET);
+    expect(client.networkConfig.rpcUrl).toBe(
+      NETWORK_CONFIGS[Network.MAINNET].rpcUrl,
+    );
+  });
+});

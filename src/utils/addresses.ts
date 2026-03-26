@@ -1,4 +1,4 @@
-import { Address, StrKey, hash, xdr } from "@stellar/stellar-sdk";
+import { Address, Asset, StrKey, hash, xdr } from "@stellar/stellar-sdk";
 
 /**
  * Address utilities for Stellar/Soroban address handling.

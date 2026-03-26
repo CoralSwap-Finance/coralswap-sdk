@@ -24,6 +24,9 @@ export class Fraction {
   constructor(numerator: bigint | number | string, denominator: bigint | number | string = 1n) {
     this.numerator = BigInt(numerator);
     this.denominator = BigInt(denominator);
+    if (this.denominator <= 0n) {
+      throw new Error("Fraction denominator must be > 0");
+    }
   }
 
   /**

@@ -8,6 +8,14 @@ describe('Fraction', () => {
     expect(f.denominator).toBe(2n);
   });
 
+  it('throws on zero denominator', () => {
+    expect(() => new Fraction(1n, 0n)).toThrow('Fraction denominator must be > 0');
+  });
+
+  it('throws on negative denominator', () => {
+    expect(() => new Fraction(1n, -1n)).toThrow('Fraction denominator must be > 0');
+  });
+
   it('add', () => {
     const f1 = new Fraction(1, 2);
     const f2 = new Fraction(1, 4);

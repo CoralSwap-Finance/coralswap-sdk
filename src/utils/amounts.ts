@@ -388,9 +388,10 @@ export function percentDiff(a: bigint, b: bigint): number {
  * - Essential for preventing silent overflow bugs in financial calculations
  */
 export function safeMul(a: bigint, b: bigint): bigint {
+  if (a === 0n || b === 0n) return 0n;
   const result = a * b;
-  if (a !== 0n && result / a !== b) {
-    throw new Error("Multiplication overflow");
+  if (result / a !== b) {
+    throw new Error("Overflow in safeMul");
   }
   return result;
 }
@@ -488,4 +489,99 @@ export function minBigInt(a: bigint, b: bigint): bigint {
  */
 export function maxBigInt(a: bigint, b: bigint): bigint {
   return a > b ? a : b;
+}
+
+/**
+ * Suffix thresholds used by {@link formatLargeNumber} to abbreviate values.
+ *
+ * Each entry maps a human-readable suffix to its corresponding BigInt
+ * threshold.  Entries are ordered from largest to smallest so the first
+ * match wins.
+ */
+const LARGE_NUMBER_SUFFIXES: ReadonlyArray<{ threshold: bigint; suffix: string; divisor: bigint }> = [
+  { threshold: 1_000_000_000_000n, suffix: "T", divisor: 1_000_000_000_000n },
+  { threshold: 1_000_000_000n,     suffix: "B", divisor: 1_000_000_000n },
+  { threshold: 1_000_000n,         suffix: "M", divisor: 1_000_000n },
+  { threshold: 1_000n,             suffix: "K", divisor: 1_000n },
+];
+
+/**
+ * Format a large BigInt value into a human-readable string with an appropriate
+ * suffix (K, M, B, T) based on its magnitude.
+ *
+ * Values below 1,000 are returned as plain strings without a suffix.
+ * Negative values are supported and prefixed with a minus sign.
+ *
+ * @param value - The BigInt value to format
+ * @param precision - The number of decimal places to include (default: 1).
+ *   Must be a non-negative integer.  Trailing zeros are preserved so the
+ *   output width is predictable.
+ * @returns A formatted string such as `"1.5K"`, `"2.3M"`, or `"999"`
+ * @throws {Error} If precision is not a non-negative integer
+ *
+ * @example
+ * // Thousands
+ * formatLargeNumber(1500n)       // => "1.5K"
+ * formatLargeNumber(1500n, 0)    // => "1K"
+ * formatLargeNumber(1500n, 2)    // => "1.50K"
+ *
+ * @example
+ * // Millions
+ * formatLargeNumber(2500000n)    // => "2.5M"
+ *
+ * @example
+ * // Billions
+ * formatLargeNumber(1230000000n) // => "1.2B"
+ *
+ * @example
+ * // Trillions
+ * formatLargeNumber(5_000_000_000_000n) // => "5.0T"
+ *
+ * @example
+ * // Below 1,000 — no suffix
+ * formatLargeNumber(42n)         // => "42"
+ *
+ * @example
+ * // Negative values
+ * formatLargeNumber(-2500000n)   // => "-2.5M"
+ *
+ * @example
+ * // Zero
+ * formatLargeNumber(0n)          // => "0"
+ *
+ * @remarks
+ * - Decimal places are truncated, not rounded, consistent with other
+ *   formatting utilities in this module.
+ * - The function operates entirely on BigInt arithmetic to avoid
+ *   floating-point precision issues with very large numbers.
+ */
+export function formatLargeNumber(value: bigint, precision: number = 1): string {
+  if (!Number.isInteger(precision) || precision < 0) {
+    throw new Error("Precision must be a non-negative integer");
+  }
+
+  const isNegative = value < 0n;
+  const abs = isNegative ? -value : value;
+
+  for (const { threshold, suffix, divisor } of LARGE_NUMBER_SUFFIXES) {
+    if (abs >= threshold) {
+      const precisionMultiplier = 10n ** BigInt(precision);
+      const scaled = (abs * precisionMultiplier) / divisor;
+      const wholePart = scaled / precisionMultiplier;
+      const fracPart = scaled % precisionMultiplier;
+
+      const sign = isNegative ? "-" : "";
+
+      if (precision === 0) {
+        return `${sign}${wholePart}${suffix}`;
+      }
+
+      const fracStr = fracPart.toString().padStart(precision, "0");
+      return `${sign}${wholePart}.${fracStr}${suffix}`;
+    }
+  }
+
+  // Below 1,000 — return plain string without suffix
+  const sign = isNegative ? "-" : "";
+  return `${sign}${abs.toString()}`;
 }
