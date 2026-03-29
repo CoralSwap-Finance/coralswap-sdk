@@ -1,5 +1,5 @@
 import { xdr, Address, nativeToScVal } from '@stellar/stellar-sdk';
-import { EventParser, EVENT_TOPICS } from '../src/utils/events';
+import { EventParser, EVENT_TOPICS, decodeEventsFromXdr } from '../src/utils/events';
 import {
   SwapEvent,
   LiquidityEvent,
@@ -374,5 +374,157 @@ describe('EventParser', () => {
       const diag = makeDiagnosticEvent('swap', xdr.ScVal.scvVoid());
       expect(() => parser.parseStrict([diag])).toThrow();
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// decodeEventsFromXdr utility tests
+// ---------------------------------------------------------------------------
+
+describe('decodeEventsFromXdr', () => {
+  const swapData = scMap([
+    ['sender', addressVal(ADDR_SENDER)],
+    ['token_in', addressVal(ADDR_TOKEN_A)],
+    ['token_out', addressVal(ADDR_TOKEN_B)],
+    ['amount_in', i128Val(1000000n)],
+    ['amount_out', i128Val(980000n)],
+    ['fee_bps', u32Val(30)],
+  ]);
+
+  const mintData = scMap([
+    ['sender', addressVal(ADDR_SENDER)],
+    ['amount_a', i128Val(500000n)],
+    ['amount_b', i128Val(600000n)],
+    ['liquidity', i128Val(547722n)],
+  ]);
+
+  const burnData = scMap([
+    ['sender', addressVal(ADDR_SENDER)],
+    ['amount_a', i128Val(150000n)],
+    ['amount_b', i128Val(200000n)],
+    ['liquidity', i128Val(173205n)],
+    ['to', addressVal(ADDR_SENDER)],
+  ]);
+
+  const syncData = scMap([
+    ['reserve0', i128Val(5000000n)],
+    ['reserve1', i128Val(6000000n)],
+  ]);
+
+  it('decodes a single swap event', () => {
+    const events = [makeDiagnosticEvent(EVENT_TOPICS.SWAP, swapData)];
+    const result = decodeEventsFromXdr(events);
+
+    expect(result).toHaveLength(1);
+    const swap = result[0] as SwapEvent;
+    expect(swap.type).toBe('swap');
+    expect(swap.sender).toBe(ADDR_SENDER);
+    expect(swap.amountIn).toBe(1000000n);
+    expect(swap.amountOut).toBe(980000n);
+  });
+
+  it('decodes a single mint event', () => {
+    const events = [makeDiagnosticEvent(EVENT_TOPICS.MINT, mintData)];
+    const result = decodeEventsFromXdr(events);
+
+    expect(result).toHaveLength(1);
+    const mint = result[0] as MintEvent;
+    expect(mint.type).toBe('mint');
+    expect(mint.sender).toBe(ADDR_SENDER);
+    expect(mint.amountA).toBe(500000n);
+    expect(mint.amountB).toBe(600000n);
+    expect(mint.liquidity).toBe(547722n);
+  });
+
+  it('decodes a single burn event', () => {
+    const events = [makeDiagnosticEvent(EVENT_TOPICS.BURN, burnData)];
+    const result = decodeEventsFromXdr(events);
+
+    expect(result).toHaveLength(1);
+    const burn = result[0] as BurnEvent;
+    expect(burn.type).toBe('burn');
+    expect(burn.sender).toBe(ADDR_SENDER);
+    expect(burn.amountA).toBe(150000n);
+    expect(burn.amountB).toBe(200000n);
+    expect(burn.liquidity).toBe(173205n);
+  });
+
+  it('decodes a single sync event', () => {
+    const events = [makeDiagnosticEvent(EVENT_TOPICS.SYNC, syncData)];
+    const result = decodeEventsFromXdr(events);
+
+    expect(result).toHaveLength(1);
+    const sync = result[0] as SyncEvent;
+    expect(sync.type).toBe('sync');
+    expect(sync.reserve0).toBe(5000000n);
+    expect(sync.reserve1).toBe(6000000n);
+  });
+
+  it('decodes multiple events from a single transaction', () => {
+    const events = [
+      makeDiagnosticEvent(EVENT_TOPICS.SWAP, swapData),
+      makeDiagnosticEvent(EVENT_TOPICS.SYNC, syncData),
+      makeDiagnosticEvent(EVENT_TOPICS.MINT, mintData),
+      makeDiagnosticEvent(EVENT_TOPICS.BURN, burnData),
+    ];
+    const result = decodeEventsFromXdr(events);
+
+    expect(result).toHaveLength(4);
+    expect(result[0].type).toBe('swap');
+    expect(result[1].type).toBe('sync');
+    expect(result[2].type).toBe('mint');
+    expect(result[3].type).toBe('burn');
+  });
+
+  it('attaches txHash and ledger when provided', () => {
+    const events = [makeDiagnosticEvent(EVENT_TOPICS.SWAP, swapData)];
+    const result = decodeEventsFromXdr(events, {}, 'tx_hash_123', 54321);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].txHash).toBe('tx_hash_123');
+    expect(result[0].ledger).toBe(54321);
+  });
+
+  it('filters by contractId when option is provided', () => {
+    const OTHER_CONTRACT = 'CBQHNAXSI55GX2GN6D67GK7BHVPSLJUGZQEU7WJ5LKR5PNUCGLIMAO4K';
+    const events = [makeDiagnosticEvent(EVENT_TOPICS.SWAP, swapData)];
+
+    const result = decodeEventsFromXdr(events, { contractId: OTHER_CONTRACT });
+    expect(result).toHaveLength(0);
+
+    const resultMatching = decodeEventsFromXdr(events, { contractId: CONTRACT_ADDR });
+    expect(resultMatching).toHaveLength(1);
+  });
+
+  it('throws in strict mode for malformed event data', () => {
+    const events = [makeDiagnosticEvent(EVENT_TOPICS.SWAP, xdr.ScVal.scvVoid())];
+    expect(() => decodeEventsFromXdr(events, { strict: true })).toThrow();
+  });
+
+  it('silently skips malformed events in non-strict mode', () => {
+    const events = [
+      makeDiagnosticEvent(EVENT_TOPICS.SWAP, xdr.ScVal.scvVoid()),
+      makeDiagnosticEvent(EVENT_TOPICS.SYNC, syncData),
+    ];
+    const result = decodeEventsFromXdr(events, { strict: false });
+
+    expect(result).toHaveLength(1);
+    expect(result[0].type).toBe('sync');
+  });
+
+  it('returns empty array for empty input', () => {
+    const result = decodeEventsFromXdr([]);
+    expect(result).toHaveLength(0);
+  });
+
+  it('skips unknown event topics', () => {
+    const events = [
+      makeDiagnosticEvent('unknown_event', xdr.ScVal.scvVoid()),
+      makeDiagnosticEvent(EVENT_TOPICS.SWAP, swapData),
+    ];
+    const result = decodeEventsFromXdr(events);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].type).toBe('swap');
   });
 });

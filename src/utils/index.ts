@@ -58,3 +58,11 @@ export {
 
 export { waitNextLedger } from './ledger';
 export type { WaitNextLedgerOptions } from './ledger';
+
+export {
+  EventParser,
+  EVENT_TOPICS,
+  decodeEvents,
+  decodeEventsFromXdr,
+} from './events';
+export type { DecodeEventsOptions } from './events';

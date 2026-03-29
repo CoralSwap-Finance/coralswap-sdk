@@ -440,3 +440,103 @@ export class EventParser {
     };
   }
 }
+
+// ---------------------------------------------------------------------------
+// decodeEvents utility
+// ---------------------------------------------------------------------------
+
+export interface DecodeEventsOptions {
+  contractId?: string;
+  strict?: boolean;
+}
+
+/**
+ * Decode Pair contract events from a successful Soroban transaction response.
+ *
+ * This utility extracts and parses Swap, Mint, Burn, and Sync events (among
+ * others) from the transaction result meta XDR into strongly-typed objects.
+ *
+ * @param response - A successful transaction response from Soroban RPC.
+ * @param options - Optional configuration for filtering and parsing behavior.
+ * @param options.contractId - If provided, only events from this contract are decoded.
+ * @param options.strict - If true, throws on malformed event data. Defaults to false.
+ * @returns Array of typed CoralSwapEvent objects.
+ *
+ * @example
+ * ```ts
+ * import { decodeEvents } from '@coralswap/sdk';
+ *
+ * const events = decodeEvents(txResponse);
+ * for (const event of events) {
+ *   if (event.type === 'swap') {
+ *     console.log(`Swapped ${event.amountIn} for ${event.amountOut}`);
+ *   }
+ * }
+ * ```
+ *
+ * @example
+ * ```ts
+ * // Filter events from a specific pair contract
+ * const pairEvents = decodeEvents(txResponse, {
+ *   contractId: 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC',
+ * });
+ * ```
+ */
+export function decodeEvents(
+  response: SorobanRpc.Api.GetSuccessfulTransactionResponse,
+  options: DecodeEventsOptions = {},
+): CoralSwapEvent[] {
+  const contractIds = options.contractId ? [options.contractId] : [];
+  const parser = new EventParser(contractIds);
+
+  const meta = response.resultMetaXdr;
+  const v3 = meta.v3();
+  const diagnosticEvents = v3.sorobanMeta()?.diagnosticEvents() ?? [];
+  const tx = response as TxWithOptionalHash;
+  const txHash = tx.hash ?? tx.id ?? "";
+  const ledger = response.ledger ?? 0;
+
+  if (options.strict) {
+    return parser.parseStrict(diagnosticEvents, txHash, ledger);
+  }
+  return parser.parse(diagnosticEvents, txHash, ledger);
+}
+
+/**
+ * Decode Pair contract events from raw XDR diagnostic events.
+ *
+ * Use this when you have direct access to the DiagnosticEvent array from
+ * transaction simulation or result meta, rather than the full transaction
+ * response.
+ *
+ * @param events - Array of xdr.DiagnosticEvent from transaction result meta.
+ * @param options - Optional configuration for filtering and parsing behavior.
+ * @param options.contractId - If provided, only events from this contract are decoded.
+ * @param options.strict - If true, throws on malformed event data. Defaults to false.
+ * @param txHash - Transaction hash to attach to parsed events.
+ * @param ledger - Ledger sequence number.
+ * @returns Array of typed CoralSwapEvent objects.
+ *
+ * @example
+ * ```ts
+ * import { decodeEventsFromXdr } from '@coralswap/sdk';
+ *
+ * const meta = txResponse.resultMetaXdr.v3();
+ * const diagnosticEvents = meta.sorobanMeta()?.diagnosticEvents() ?? [];
+ * const events = decodeEventsFromXdr(diagnosticEvents);
+ * ```
+ */
+export function decodeEventsFromXdr(
+  events: xdr.DiagnosticEvent[],
+  options: DecodeEventsOptions = {},
+  txHash = "",
+  ledger = 0,
+): CoralSwapEvent[] {
+  const contractIds = options.contractId ? [options.contractId] : [];
+  const parser = new EventParser(contractIds);
+
+  if (options.strict) {
+    return parser.parseStrict(events, txHash, ledger);
+  }
+  return parser.parse(events, txHash, ledger);
+}

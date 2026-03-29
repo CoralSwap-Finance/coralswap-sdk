@@ -109,6 +109,10 @@ export {
   validateDistinctTokens,
 
   isValidPath,
+  EventParser,
+  EVENT_TOPICS,
+  decodeEvents,
+  decodeEventsFromXdr,
 } from './utils';
 
 
@@ -117,6 +121,7 @@ export type {
   SimulationResult,
   SimulationResourceEstimate,
   WaitNextLedgerOptions,
+  DecodeEventsOptions,
 } from "./utils";
 
 // Errors
