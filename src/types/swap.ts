@@ -24,6 +24,8 @@ export interface SwapRequest {
   deadline?: number;
   /** Optional recipient address */
   to?: string;
+  /** Optional pre-fetched quote to execute against without re-fetching reserves */
+  quote?: SwapQuote;
 }
 
 /**

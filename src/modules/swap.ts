@@ -109,7 +109,7 @@ export class SwapModule {
 
     const rawPath = this.resolvePath(request);
     const path = rawPath.map((t) => resolveTokenIdentifier(t, passphrase));
-    const quote = await this.getQuote(request);
+    const quote = request.quote ?? await this.getQuote(request);
 
     let op: import("@stellar/stellar-sdk").xdr.Operation;
 
@@ -196,7 +196,7 @@ export class SwapModule {
         : await this.computeHops(request.amount, path);
 
     const totalFeeAmount = hops.reduce((acc, h) => acc + h.feeAmount, 0n);
-    const totalFeeBps = hops.reduce((acc, h) => acc + h.feeBps, 0);
+    const totalFeeBps = this.computeCompoundedFeeBps(hops.map((h) => h.feeBps));
     const compoundImpactBps = this.compoundPriceImpact(
       hops.map((h) => h.priceImpactBps),
     );
@@ -460,7 +460,7 @@ export class SwapModule {
 
     // Aggregate totals
     const totalFeeAmount = hops.reduce((acc, h) => acc + h.feeAmount, 0n);
-    const totalFeeBps = hops.reduce((acc, h) => acc + h.feeBps, 0);
+    const totalFeeBps = this.computeCompoundedFeeBps(hops.map((h) => h.feeBps));
 
     // Compound price impact: 1 - product(1 - impact_i)
     const compoundImpactBps = this.compoundPriceImpact(
@@ -646,6 +646,21 @@ export class SwapModule {
       product *= 1 - bps / 10000;
     }
     return Math.round((1 - product) * 10000);
+  }
+
+  /**
+   * Compound fees across all hops and return effective fee in basis points.
+   */
+  computeCompoundedFeeBps(feesBps: number[]): number {
+    let remainingRatio = 10000n;
+
+    for (const feeBps of feesBps) {
+      remainingRatio =
+        (remainingRatio * (PRECISION.BPS_DENOMINATOR - BigInt(feeBps))) /
+        PRECISION.BPS_DENOMINATOR;
+    }
+
+    return Number(PRECISION.BPS_DENOMINATOR - remainingRatio);
   }
 
   /**
