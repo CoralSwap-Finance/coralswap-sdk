@@ -259,6 +259,30 @@ export class PairClient {
   }
 
   /**
+   * Build a mint_with_one_token operation.
+   *
+   * @param sender - The address providing liquidity and receiving LP tokens.
+   * @param token - The token address to deposit.
+   * @param amount - The amount of the single token to deposit (i128).
+   * @param minLpOut - The minimum acceptable LP tokens to receive (slippage guard).
+   * @returns An XDR operation ready to be included in a transaction.
+   */
+  buildMintWithOneToken(
+    sender: string,
+    token: string,
+    amount: bigint,
+    minLpOut: bigint,
+  ): xdr.Operation {
+    return this.contract.call(
+      "mint_with_one_token",
+      nativeToScVal(Address.fromString(sender), { type: "address" }),
+      nativeToScVal(Address.fromString(token), { type: "address" }),
+      nativeToScVal(amount, { type: "i128" }),
+      nativeToScVal(minLpOut, { type: "i128" }),
+    );
+  }
+
+  /**
    * Build a deposit (add liquidity) operation.
    *
    * @param sender - The address providing liquidity and receiving LP tokens.
