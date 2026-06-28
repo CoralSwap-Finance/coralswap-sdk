@@ -348,6 +348,45 @@ try {
 | Testable       | Pure math functions, mockable contract clients |
 | Resilient      | Built-in retry with exponential backoff        |
 
+## Integration Tests
+
+The integration suite runs the full add-liquidity → swap → remove-liquidity lifecycle against real testnet contracts.
+
+### Running locally
+
+1. Fund a testnet account at [https://friendbot.stellar.org](https://friendbot.stellar.org).
+2. Deploy (or note the addresses of) two SEP-41 tokens on testnet.
+3. Export the required environment variables:
+
+```bash
+export STELLAR_TESTNET=true
+export TEST_KEYPAIR=S...          # funded testnet secret key
+export TEST_TOKEN_A=C...          # contract address of token A
+export TEST_TOKEN_B=C...          # contract address of token B
+# optional — defaults to https://soroban-testnet.stellar.org
+export TEST_RPC_URL=https://...
+```
+
+4. Run:
+
+```bash
+npm run test:integration
+```
+
+The tests are idempotent — if the pair already exists it is reused, so you can run the suite multiple times without conflicts.
+
+### CI
+
+Integration tests run automatically on pull requests to `main` via `.github/workflows/integration.yml`. The job is marked `continue-on-error` for fork PRs (which cannot access repository secrets), so they will not block merges from external contributors.
+
+Add the following secrets to your repository (Settings → Secrets → Actions):
+
+| Secret | Description |
+|---|---|
+| `TEST_KEYPAIR` | Funded testnet secret key |
+| `TEST_TOKEN_A` | Testnet token A contract address |
+| `TEST_TOKEN_B` | Testnet token B contract address |
+
 ## License
 
 MIT

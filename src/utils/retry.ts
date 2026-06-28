@@ -1,10 +1,11 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import { Logger } from "@/types/common";
+
 import { DEFAULTS } from "@/config";
+
+
 
 export class CircuitOpenError extends Error {
   readonly label: string;
-
   constructor(label: string) {
     super(`Circuit is open for operation ${label}`);
     this.name = "CircuitOpenError";
@@ -17,7 +18,6 @@ export class DeadlineError extends Error {
   readonly deadlineMs: number;
   readonly nowMs: number;
   readonly pastDeadlineMs: number;
-
   constructor(deadlineMs: number, nowMs: number = Date.now()) {
     const pastDeadlineMs = Math.max(0, nowMs - deadlineMs);
     super(`Retry deadline exceeded by ${pastDeadlineMs}ms`);
@@ -28,7 +28,6 @@ export class DeadlineError extends Error {
     Object.setPrototypeOf(this, new.target.prototype);
   }
 }
-
 
 export type CircuitState = "closed" | "open" | "half-open";
 
@@ -41,7 +40,6 @@ export class CircuitBreaker {
   private readonly label: string;
   private failureThreshold: number;
   private cooldownMs: number;
-
   private consecutiveFailures: number = 0;
   private openedAtMs: number | null = null;
   private halfOpenInFlight: boolean = false;
@@ -54,12 +52,8 @@ export class CircuitBreaker {
 
   setOptions(options?: CircuitBreakerOptions): void {
     if (!options) return;
-    if (typeof options.failureThreshold === "number") {
-      this.failureThreshold = options.failureThreshold;
-    }
-    if (typeof options.cooldownMs === "number") {
-      this.cooldownMs = options.cooldownMs;
-    }
+    if (typeof options.failureThreshold === "number") this.failureThreshold = options.failureThreshold;
+    if (typeof options.cooldownMs === "number") this.cooldownMs = options.cooldownMs;
   }
 
   getState(nowMs: number = Date.now()): CircuitState {
@@ -70,13 +64,9 @@ export class CircuitBreaker {
 
   beforeRequest(nowMs: number = Date.now()): void {
     const state = this.getState(nowMs);
-    if (state === "open") {
-      throw new CircuitOpenError(this.label);
-    }
+    if (state === "open") throw new CircuitOpenError(this.label);
     if (state === "half-open") {
-      if (this.halfOpenInFlight) {
-        throw new CircuitOpenError(this.label);
-      }
+      if (this.halfOpenInFlight) throw new CircuitOpenError(this.label);
       this.halfOpenInFlight = true;
     }
   }
@@ -90,23 +80,15 @@ export class CircuitBreaker {
   onFailure(nowMs: number = Date.now()): void {
     this.halfOpenInFlight = false;
     this.consecutiveFailures += 1;
-    if (this.consecutiveFailures >= this.failureThreshold) {
-      this.openedAtMs = nowMs;
-    }
+    if (this.consecutiveFailures >= this.failureThreshold) this.openedAtMs = nowMs;
   }
 }
 
 const circuitBreakersByLabel = new Map<string, CircuitBreaker>();
 
-export function getCircuitBreaker(
-  label: string,
-  options?: CircuitBreakerOptions,
-): CircuitBreaker {
+export function getCircuitBreaker(label: string, options?: CircuitBreakerOptions): CircuitBreaker {
   const existing = circuitBreakersByLabel.get(label);
-  if (existing) {
-    existing.setOptions(options);
-    return existing;
-  }
+  if (existing) { existing.setOptions(options); return existing; }
   const created = new CircuitBreaker(label, options);
   circuitBreakersByLabel.set(label, created);
   return created;
@@ -120,31 +102,34 @@ export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export function isRetryable(err: any): boolean {
-  const status = err?.response?.status;
+export function isRetryable(err: unknown): boolean {
+  const status = (err as { response?: { status?: number } })?.response?.status;
   if (status === 429 || status === 503) return true;
-
-  const code = err?.code;
+  const code = (err as { code?: string })?.code;
   if (code === "ECONNABORTED" || code === "ETIMEDOUT") return true;
-
-  const message = (err?.message ?? String(err ?? "")).toLowerCase();
-  if (message.includes("timeout")) return true;
-  if (message.includes("socket hang up")) return true;
-  if (message.includes("429") || message.includes("too many requests")) return true;
-  if (message.includes("503") || message.includes("service unavailable")) return true;
-  return false;
+  const message = ((err as { message?: string })?.message ?? String(err ?? "")).toLowerCase();
+  return (
+    message.includes("timeout") ||
+    message.includes("socket hang up") ||
+    message.includes("429") ||
+    message.includes("too many requests") ||
+    message.includes("503") ||
+    message.includes("service unavailable") ||
+    message.includes("econnreset") ||
+    message.includes("enotfound")
+  );
 }
 
-/**
- * Options for the retry policy.
- */
 export interface RetryOptions {
   maxRetries: number;
-  retryDelayMs?: number;
-  maxRetryDelayMs?: number;
+  /** Primary delay field (used by tests) */
   baseDelayMs?: number;
+  /** Legacy alias for baseDelayMs */
+  retryDelayMs?: number;
   backoffMultiplier?: number;
   maxDelayMs?: number;
+  /** Legacy alias for maxDelayMs */
+  maxRetryDelayMs?: number;
   deadlineMs?: number;
   circuitBreaker?: CircuitBreakerOptions;
 }
@@ -158,24 +143,18 @@ export interface RetryConfig {
 }
 
 export const DEFAULT_RETRY_CONFIG: RetryConfig = {
-  maxRetries: DEFAULTS.maxRetries,
-  baseDelayMs: DEFAULTS.retryDelayMs,
+  maxRetries: 3,
+  baseDelayMs: 1000,
   backoffMultiplier: 2,
-  maxDelayMs: 30_000,
+  maxDelayMs: DEFAULTS.maxRetryDelayMs,
 };
 
 function normalizeRetryConfig(options: RetryOptions): RetryConfig {
-  const baseDelayMs =
-    options.baseDelayMs ?? options.retryDelayMs ?? DEFAULT_RETRY_CONFIG.baseDelayMs;
-  const backoffMultiplier = options.backoffMultiplier ?? 2;
-  const maxDelayMs =
-    options.maxDelayMs ?? options.maxRetryDelayMs ?? DEFAULT_RETRY_CONFIG.maxDelayMs;
-
   return {
     maxRetries: options.maxRetries,
-    baseDelayMs,
-    backoffMultiplier,
-    maxDelayMs,
+    baseDelayMs: options.baseDelayMs ?? options.retryDelayMs ?? DEFAULT_RETRY_CONFIG.baseDelayMs,
+    backoffMultiplier: options.backoffMultiplier ?? 2,
+    maxDelayMs: options.maxDelayMs ?? options.maxRetryDelayMs ?? DEFAULT_RETRY_CONFIG.maxDelayMs,
     circuitBreaker: options.circuitBreaker,
   };
 }
@@ -198,12 +177,11 @@ export async function withRetry<T>(
 ): Promise<T> {
   const config = normalizeRetryConfig(options);
   const breaker = getCircuitBreaker(label, config.circuitBreaker);
-
   const breakerStateAtStart = breaker.getState();
   const maxRetries = breakerStateAtStart === "half-open" ? 0 : config.maxRetries;
 
   breaker.beforeRequest();
-  let lastError: any;
+  let lastError: unknown;
 
   try {
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -214,30 +192,23 @@ export async function withRetry<T>(
         const result = await fn();
         breaker.onSuccess();
         return result;
-      } catch (err: any) {
+      } catch (err: unknown) {
         lastError = err;
+        if (!isRetryable(err) || attempt === maxRetries) throw err;
 
-        const retryable = isRetryable(err);
-        if (!retryable || attempt === maxRetries) {
-          throw err;
-        }
-
-        const rawBackoff =
-          config.baseDelayMs * Math.pow(config.backoffMultiplier, attempt);
-        const backoff = Math.min(config.maxDelayMs, rawBackoff);
-        const jitter = backoff * 0.15 * (Math.random() * 2 - 1);
-        const delay = Math.min(config.maxDelayMs, Math.max(0, backoff + jitter));
+        const rawBackoff = config.baseDelayMs * Math.pow(config.backoffMultiplier, attempt);
+        const delay = Math.min(config.maxDelayMs, rawBackoff);
 
         logger?.debug(`${label}: retrying after ${Math.round(delay)}ms`, {
           attempt: attempt + 1,
           maxRetries,
-          error: err.message,
+          error: (err as Error).message,
         });
 
         await sleep(delay);
       }
     }
-  } catch (err: any) {
+  } catch (err: unknown) {
     breaker.onFailure();
     throw err;
   }

@@ -207,7 +207,7 @@ export class TaxReportingModule {
 
     const response = await this.client.server.getEvents(request);
     if (!response || !Array.isArray(response.events)) return [];
-    return response.events as RawEvent[];
+    return response.events as unknown as RawEvent[];
   }
 }
 

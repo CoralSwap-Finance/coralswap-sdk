@@ -1,4 +1,6 @@
 import { TradeType } from "./common";
+import type { DeviationResult } from "../modules/price-feed";
+import type { PriceFeed } from "../modules/price-feed";
 
 /**
  * Filter parameters for querying historical swap events.
@@ -93,7 +95,6 @@ export interface SwapRequest {
   tradeType: TradeType;
   /** Optional explicit routing path. Tokens are Soroban contract addresses. */
   path?: string[];
-  /** Optional slippage tolerance in basis points */
   slippageBps?: number;
   /** Optional deadline as Unix timestamp */
   deadline?: number;
@@ -101,19 +102,23 @@ export interface SwapRequest {
   to?: string;
   /** Optional pre-fetched quote to execute against without re-fetching reserves */
   quote?: SwapQuote;
+  /**
+   * Optional price feed for pre-execution deviation check.
+   *
+   * When provided, `execute()` compares the realised execution price
+   * against the oracle price and attaches a `DeviationResult` to the
+   * returned `SwapResult`.
+   */
+  priceFeed?: PriceFeed;
 }
 
 /**
  * Per-hop calculation result used internally during multi-hop routing.
  */
 export interface HopResult {
-  /** The address of the input token for this hop */
   tokenIn: string;
-  /** The address of the output token for this hop */
   tokenOut: string;
-  /** The input amount for this hop */
   amountIn: bigint;
-  /** The output amount for this hop */
   amountOut: bigint;
   /** Fee charged on this hop in basis points. */
   feeBps: number;
@@ -165,14 +170,55 @@ export interface SwapResult {
   ledger: number;
   /** Unix timestamp of the transaction */
   timestamp: number;
+  /**
+   * Price deviation check result, populated when a `priceFeed` was
+   * provided in the `SwapRequest`.
+   *
+   * Callers should inspect `isWithinBounds` before submitting a large
+   * swap to avoid unfavourable execution.
+   */
+  deviation?: DeviationResult;
 }
 
 /**
- * Request parameters for a multi-hop swap.
+ * RedStone oracle price feed payload.
  *
- * Unlike SwapRequest, `path` is required and must contain 3+ token addresses
- * describing the routing path (e.g. [tokenA, tokenB, tokenC]).
+ * The payload is the raw bytes produced by the RedStone SDK's
+ * `DataPackagesWrapper` and contains signed price data for one or more
+ * feed symbols (e.g. "USDC", "XLM").
  */
+export interface RedStonePayload {
+  /** Raw payload bytes (hex-encoded or Uint8Array). */
+  data: string | Uint8Array;
+  /** Unix timestamp (ms) when the payload was signed by RedStone nodes. */
+  timestampMs: number;
+  /** Prices keyed by feed symbol, expressed as USD value × 10^8. */
+  prices: Record<string, bigint>;
+}
+
+/**
+ * Price guard configuration set by the admin.
+ */
+export interface PriceGuardConfig {
+  /** Minimum swap size in USD (× 10^8) that triggers the guard. */
+  minGuardedAmountUsd: bigint;
+  /** Maximum allowed deviation between execution price and oracle price, in bps. */
+  maxDeviationBps: number;
+  /** Maximum age of a RedStone payload before it is considered stale, in ms. Default: 5 min. */
+  maxPayloadAgeMs: number;
+}
+
+/**
+ * Request parameters for a price-guarded swap.
+ */
+export interface SwapWithPriceGuardRequest extends SwapRequest {
+  /**
+   * Optional RedStone payload. Required when the swap size exceeds
+   * `PriceGuardConfig.minGuardedAmountUsd`.
+   */
+  redstonePayload?: RedStonePayload;
+}
+
 export interface MultiHopSwapRequest {
   /** Ordered token addresses describing the route (minimum 3). */
   path: string[];

@@ -1,6 +1,5 @@
 import { Trade, TradeFilter } from '../types/trade';
 import { UnifiedOrder, OrderSummary } from '../types/order-book';
-import { OracleModule } from './oracle';
 import { CoralSwapClient } from '@/client';
 
 // Mock data for open orders
@@ -81,7 +80,7 @@ export async function getOpenOrders(address: string): Promise<UnifiedOrder[]> {
 
 export async function getOrderSummary(
   address: string,
-  client: CoralSwapClient,
+  _client: CoralSwapClient,
 ): Promise<OrderSummary> {
   const openOrders = await getOpenOrders(address);
 

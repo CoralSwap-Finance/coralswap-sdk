@@ -302,7 +302,7 @@ export class StakingModule {
     // Enforce cooldown period
     const cooldownStatus = await this.getCooldownStatus(publicKey, lpTokenAddress);
     if (cooldownStatus.isInCooldown) {
-      throw new CooldownError(cooldownStatus.cooldownEnd);
+      throw new CooldownError(BigInt(cooldownStatus.cooldownEnd));
     }
 
     // Validate unstake amount does not exceed staked balance

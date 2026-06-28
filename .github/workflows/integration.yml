@@ -1,0 +1,30 @@
+name: Integration Tests
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  integration:
+    name: Testnet integration
+    runs-on: ubuntu-latest
+    # Allow fork PRs to fail (they won't have the secrets)
+    continue-on-error: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - run: npm ci
+
+      - name: Run integration tests
+        env:
+          STELLAR_TESTNET: 'true'
+          TEST_KEYPAIR: ${{ secrets.TEST_KEYPAIR }}
+          TEST_TOKEN_A: ${{ secrets.TEST_TOKEN_A }}
+          TEST_TOKEN_B: ${{ secrets.TEST_TOKEN_B }}
+        run: npm run test:integration

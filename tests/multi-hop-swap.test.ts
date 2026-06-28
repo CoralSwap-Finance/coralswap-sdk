@@ -43,7 +43,6 @@ function buildMockClient(
 
   return {
     config: { defaultSlippageBps: 50 },
-    networkConfig: { networkPassphrase: 'Test SDF Network ; September 2015' },
     getDeadline: jest.fn().mockReturnValue(9999999999),
     getPairAddress: jest.fn().mockImplementation(async (tokenA: string, tokenB: string) => {
       return lookupKey(tokenA, tokenB);
@@ -58,7 +57,7 @@ function buildMockClient(
       buildSwapExactOut: jest.fn().mockReturnValue('op_exact_out'),
       buildSwapExactTokensForTokens: jest.fn().mockReturnValue('op_multi_hop'),
     },
-    publicKey: 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAUESE',
+    publicKey: 'GTEST_SENDER',
     submitTransaction: jest.fn().mockResolvedValue({
       success: true,
       txHash: 'MOCK_TX_HASH',
@@ -71,9 +70,9 @@ function buildMockClient(
 // Token / pair fixtures
 // ---------------------------------------------------------------------------
 
-const TOKEN_A = 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM';
-const TOKEN_B = 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4';
-const TOKEN_C = 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M';
+const TOKEN_A = 'GAAA';
+const TOKEN_B = 'GBBB';
+const TOKEN_C = 'GCCC';
 
 // Balanced pools with 30bps fee
 const RESERVE = 1_000_000_000n;
@@ -145,7 +144,7 @@ describe('Multi-hop swap routing', () => {
     });
 
     it('throws PairNotFoundError if a pair does not exist in the path', async () => {
-      const TOKEN_D = 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4';
+      const TOKEN_D = 'GDDD';
       await expect(
         swap.computeHops(1_000_000n, [TOKEN_A, TOKEN_B, TOKEN_D]),
       ).rejects.toBeInstanceOf(PairNotFoundError);
@@ -249,10 +248,10 @@ describe('Multi-hop swap routing', () => {
       await expect(
         swap.getQuote({
           tokenIn: TOKEN_A,
-          tokenOut: 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4',
+          tokenOut: 'GDDD',
           amount: 1_000_000n,
           tradeType: TradeType.EXACT_IN,
-          path: [TOKEN_A, TOKEN_B, 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4'],
+          path: [TOKEN_A, TOKEN_B, 'GDDD'],
         }),
       ).rejects.toBeInstanceOf(PairNotFoundError);
     });

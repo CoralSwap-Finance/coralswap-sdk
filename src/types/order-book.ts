@@ -8,7 +8,7 @@ export interface UnifiedOrder {
   tokenOut: string;
   status: "open" | "filled" | "cancelled";
   createdAt: Date;
-  details: Record<string, any>;
+  details: Record<string, unknown>;
 }
 
 export interface OrderSummary {

@@ -6,8 +6,17 @@ import {
   nativeToScVal,
 } from '@stellar/stellar-sdk';
 import { CoralSwapClient } from '@/client';
-import { OrderStatus, LimitOrderState } from '@/types/limit-orders';
+import {
+  OrderStatus,
+  LimitOrderState,
+  CancelResult,
+  LimitOrderParams,
+  LimitOrderDetails,
+  PlaceLimitOrderResult,
+} from '@/types/limit-orders';
 import { withRetry, RetryOptions } from '@/utils/retry';
+import { OrderNotFoundError, InvalidOperationError, ValidationError } from '@/errors';
+import { validateAddress, validatePositiveAmount } from '@/utils/validation';
 export function scValToString(val: xdr.ScVal | undefined): string {
   if (!val) throw new Error("Missing field");
   const tag = val.switch().name;
@@ -31,6 +40,47 @@ export function scValToOptionalNumber(val: xdr.ScVal | undefined): number | unde
   if (!val) return undefined;
   if (val.switch().name === 'scvVoid') return undefined;
   return scValToNumber(val);
+}
+
+export function scValToBigInt(val: xdr.ScVal | undefined): bigint {
+  if (!val) throw new Error("Missing field");
+  const tag = val.switch().name;
+  if (tag === 'scvI128') {
+    const parts = val.i128();
+    const lo = BigInt(parts.lo().toString());
+    const hi = BigInt(parts.hi().toString());
+    const loUnsigned = lo < 0n ? lo + (1n << 64n) : lo;
+    return (hi << 64n) + loUnsigned;
+  }
+  if (tag === 'scvU64') return val.u64().toBigInt();
+  if (tag === 'scvI64') return BigInt(val.i64().toBigInt());
+  if (tag === 'scvU32') return BigInt(val.u32());
+  if (tag === 'scvI32') return BigInt(val.i32());
+  throw new Error(`Expected bigint type, got ${tag}`);
+}
+
+export function parseCancelResult(result: xdr.ScVal): { refundedAmount: bigint; filledAmount: bigint } {
+  if (result.switch().name !== 'scvMap') {
+    throw new Error("Invalid cancel result: expected ScMap");
+  }
+  const map = result.map();
+  if (!map) throw new Error("Invalid cancel result: expected ScMap");
+
+  const fields: Record<string, xdr.ScVal> = {};
+  for (const entry of map) {
+    const k = entry.key();
+    const tag = k.switch().name;
+    let keyStr = '';
+    if (tag === 'scvString') keyStr = k.str().toString();
+    else if (tag === 'scvSymbol') keyStr = k.sym().toString();
+    else continue;
+    fields[keyStr] = entry.val();
+  }
+
+  const refundedAmount = scValToBigInt(fields['refunded_amount'] ?? fields['refundedAmount']);
+  const filledAmount = scValToBigInt(fields['filled_amount'] ?? fields['filledAmount']);
+
+  return { refundedAmount, filledAmount };
 }
 
 export function parseOrderStatus(result: xdr.ScVal): OrderStatus {
@@ -66,6 +116,61 @@ export function parseOrderStatus(result: xdr.ScVal): OrderStatus {
     fillPercent,
     executionPrice,
     filledAt,
+  };
+}
+
+export function scValToStringVec(val: xdr.ScVal | undefined): string[] {
+  if (!val) throw new Error("Missing field");
+  if (val.switch().name !== 'scvVec') throw new Error("Expected Vec");
+  const vec = val.vec();
+  if (!vec) return [];
+  return vec.map((v) => scValToString(v));
+}
+
+export function parseOrderDetails(result: xdr.ScVal): LimitOrderDetails {
+  const map = result.map();
+  if (!map) throw new Error("Invalid order details: expected ScMap");
+
+  const fields: Record<string, xdr.ScVal> = {};
+  for (const entry of map) {
+    const k = entry.key();
+    const tag = k.switch().name;
+    let keyStr = '';
+    if (tag === 'scvString') keyStr = k.str().toString();
+    else if (tag === 'scvSymbol') keyStr = k.sym().toString();
+    else continue;
+    fields[keyStr] = entry.val();
+  }
+
+  const id = scValToString(fields['id']);
+
+  const stateStr = scValToString(fields['state']).toLowerCase();
+  if (!['open', 'partial', 'filled', 'cancelled', 'expired'].includes(stateStr)) {
+    throw new Error(`Invalid order state: ${stateStr}`);
+  }
+
+  const fillPercent = scValToNumber(fields['fill_percent'] ?? fields['fillPercent']);
+  if (fillPercent < 0 || fillPercent > 100) {
+    throw new Error(`Invalid fillPercent: ${fillPercent}`);
+  }
+
+  const executionPrice = scValToOptionalNumber(fields['execution_price'] ?? fields['executionPrice']);
+  const filledAt = scValToOptionalNumber(fields['filled_at'] ?? fields['filledAt']);
+  const amountFilled = scValToBigInt(fields['amount_filled'] ?? fields['amountFilled']);
+  const amountRemaining = scValToBigInt(fields['amount_remaining'] ?? fields['amountRemaining']);
+  const createdAt = scValToNumber(fields['created_at'] ?? fields['createdAt']);
+
+  return {
+    id,
+    status: {
+      state: stateStr as LimitOrderState,
+      fillPercent,
+      executionPrice,
+      filledAt,
+    },
+    amountFilled,
+    amountRemaining,
+    createdAt,
   };
 }
 
@@ -163,5 +268,237 @@ export class LimitOrderModule {
       active = false;
       clearInterval(timer);
     };
+  }
+
+  async cancelLimitOrder(orderId: string, signer?: string): Promise<CancelResult> {
+    if (!orderId || typeof orderId !== 'string') {
+      throw new Error('orderId must be a non-empty string');
+    }
+
+    const status = await this.getLimitOrderStatus(orderId);
+
+    if (status.state === 'cancelled') {
+      throw new OrderNotFoundError(orderId);
+    }
+
+    if (status.state === 'filled') {
+      throw new InvalidOperationError(`Order ${orderId} is already filled`);
+    }
+
+    if (status.state === 'expired') {
+      throw new InvalidOperationError(`Order ${orderId} has expired`);
+    }
+
+    const cancelSigner = signer ?? this.client.publicKey;
+
+    const op = this.contract.call(
+      'cancel',
+      nativeToScVal(orderId, { type: 'string' }),
+      nativeToScVal(cancelSigner, { type: 'address' }),
+    );
+
+    const source = this.client.publicKey;
+    const account = await withRetry(
+      () => this.server.getAccount(source),
+      this.retryOptions,
+      undefined,
+      'LimitOrderModule_cancel_getAccount',
+    );
+
+    const tx = new TransactionBuilder(account, {
+      fee: '100',
+      networkPassphrase: this.networkPassphrase,
+    })
+      .addOperation(op)
+      .setTimeout(30)
+      .build();
+
+    const sim = await withRetry(
+      () => this.server.simulateTransaction(tx),
+      this.retryOptions,
+      undefined,
+      'LimitOrderModule_cancel_simulate',
+    );
+
+    if (!SorobanRpc.Api.isSimulationSuccess(sim) || !sim.result) {
+      throw new Error(
+        `Failed to cancel order ${orderId}: simulation did not succeed`,
+      );
+    }
+
+    const { refundedAmount, filledAmount } = parseCancelResult(sim.result.retval);
+
+    const submitResult = await this.client.submitTransaction([op]);
+
+    if (!submitResult.success || !submitResult.data) {
+      throw new Error(
+        `Failed to cancel order ${orderId}: ${submitResult.error?.message ?? 'Unknown error'}`,
+      );
+    }
+
+    return {
+      refundedAmount,
+      filledAmount,
+      refundTxHash: submitResult.data.txHash,
+    };
+  }
+
+  async placeLimitOrder(params: LimitOrderParams, signer?: string): Promise<PlaceLimitOrderResult> {
+    if (!params.targetPrice || params.targetPrice <= 0) {
+      throw new ValidationError('targetPrice must be positive', { targetPrice: params.targetPrice });
+    }
+    if (params.targetPrice > 1_000_000) {
+      throw new ValidationError('targetPrice exceeds maximum allowed range (1,000,000)', {
+        targetPrice: params.targetPrice,
+      });
+    }
+    if (!params.expiry || params.expiry <= Math.floor(Date.now() / 1000)) {
+      throw new ValidationError('expiry must be a Unix timestamp in the future', {
+        expiry: params.expiry,
+      });
+    }
+
+    validateAddress(params.tokenIn, 'tokenIn');
+    validateAddress(params.tokenOut, 'tokenOut');
+    validateAddress(params.pairAddress, 'pairAddress');
+    validatePositiveAmount(params.amountIn, 'amountIn');
+
+    const orderSigner = signer ?? this.client.publicKey;
+
+    const op = this.contract.call(
+      'create_order',
+      nativeToScVal(params.tokenIn, { type: 'address' }),
+      nativeToScVal(params.tokenOut, { type: 'address' }),
+      nativeToScVal(params.amountIn, { type: 'i128' }),
+      xdr.ScVal.scvString(String(params.targetPrice)),
+      nativeToScVal(params.expiry, { type: 'u64' }),
+      nativeToScVal(params.pairAddress, { type: 'address' }),
+      nativeToScVal(orderSigner, { type: 'address' }),
+    );
+
+    const source = this.client.publicKey;
+    const account = await withRetry(
+      () => this.server.getAccount(source),
+      this.retryOptions,
+      undefined,
+      'LimitOrderModule_place_getAccount',
+    );
+
+    const tx = new TransactionBuilder(account, {
+      fee: '100',
+      networkPassphrase: this.networkPassphrase,
+    })
+      .addOperation(op)
+      .setTimeout(30)
+      .build();
+
+    const sim = await withRetry(
+      () => this.server.simulateTransaction(tx),
+      this.retryOptions,
+      undefined,
+      'LimitOrderModule_place_simulate',
+    );
+
+    if (!SorobanRpc.Api.isSimulationSuccess(sim) || !sim.result) {
+      throw new Error('Failed to place limit order: simulation did not succeed');
+    }
+
+    const orderId = scValToString(sim.result.retval);
+
+    const submitResult = await this.client.submitTransaction([op]);
+
+    if (!submitResult.success || !submitResult.data) {
+      throw new Error(
+        `Failed to place limit order: ${submitResult.error?.message ?? 'Unknown error'}`,
+      );
+    }
+
+    return { orderId };
+  }
+
+  async getLimitOrder(orderId: string): Promise<LimitOrderDetails> {
+    if (!orderId || typeof orderId !== 'string') {
+      throw new Error('orderId must be a non-empty string');
+    }
+
+    const op = this.contract.call(
+      'get_order',
+      nativeToScVal(orderId, { type: 'string' }),
+    );
+
+    const source = this.client.publicKey;
+    const account = await withRetry(
+      () => this.server.getAccount(source),
+      this.retryOptions,
+      undefined,
+      'LimitOrderModule_getOrder_getAccount',
+    );
+
+    const tx = new TransactionBuilder(account, {
+      fee: '100',
+      networkPassphrase: this.networkPassphrase,
+    })
+      .addOperation(op)
+      .setTimeout(30)
+      .build();
+
+    const sim = await withRetry(
+      () => this.server.simulateTransaction(tx),
+      this.retryOptions,
+      undefined,
+      'LimitOrderModule_getOrder_simulate',
+    );
+
+    if (!SorobanRpc.Api.isSimulationSuccess(sim) || !sim.result) {
+      throw new Error(`Failed to read order ${orderId}: simulation did not succeed`);
+    }
+
+    return parseOrderDetails(sim.result.retval);
+  }
+
+  async getOpenOrders(address: string): Promise<LimitOrderDetails[]> {
+    validateAddress(address, 'address');
+
+    const op = this.contract.call(
+      'orders_for_user',
+      nativeToScVal(address, { type: 'address' }),
+    );
+
+    const source = this.client.publicKey;
+    const account = await withRetry(
+      () => this.server.getAccount(source),
+      this.retryOptions,
+      undefined,
+      'LimitOrderModule_openOrders_getAccount',
+    );
+
+    const tx = new TransactionBuilder(account, {
+      fee: '100',
+      networkPassphrase: this.networkPassphrase,
+    })
+      .addOperation(op)
+      .setTimeout(30)
+      .build();
+
+    const sim = await withRetry(
+      () => this.server.simulateTransaction(tx),
+      this.retryOptions,
+      undefined,
+      'LimitOrderModule_openOrders_simulate',
+    );
+
+    if (!SorobanRpc.Api.isSimulationSuccess(sim) || !sim.result) {
+      throw new Error(`Failed to fetch orders for ${address}: simulation did not succeed`);
+    }
+
+    const orderIds = scValToStringVec(sim.result.retval);
+
+    const orders = await Promise.all(
+      orderIds.map((id) => this.getLimitOrder(id)),
+    );
+
+    return orders.filter(
+      (o) => o.status.state === 'open' || o.status.state === 'partial',
+    );
   }
 }

@@ -55,12 +55,12 @@ export interface LiquidityEvent extends ContractEvent {
 }
 
 /**
- * Flash loan event.
+ * Flash loan event as emitted in the CoralSwapEvent stream (ledger events).
+ * For the richer decoded form returned by FlashLoanModule.execute(), see
+ * FlashLoanExecutedEvent and FlashLoanFailedEvent in types/flash-loan.
  */
-export interface FlashLoanEvent extends ContractEvent {
-  /** Literal type tag */
-  type: "flash_loan";
-  /** Address receiving the flash loan */
+export interface FlashLoanContractEvent extends ContractEvent {
+  type: 'flash_loan';
   borrower: string;
   /** Address of the token borrowed */
   token: string;
@@ -150,9 +150,9 @@ export interface ProposalEvent extends ContractEvent {
 export type CoralSwapEvent =
   | SwapEvent
   | LiquidityEvent
-  | FlashLoanEvent
+  | FlashLoanContractEvent
+  | FeeUpdateEvent
+  | ProposalEvent
   | MintEvent
   | BurnEvent
-  | SyncEvent
-  | FeeUpdateEvent
-  | ProposalEvent;
+  | SyncEvent;

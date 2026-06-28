@@ -6,4 +6,5 @@ export { OracleModule, TWAPObservation, TWAPResult } from './oracle';
 export { TokenListModule } from './tokens';
 export { FactoryModule } from './factory';
 export { RouterModule } from './router';
-export { PositionsModule } from './positions';
+export { TreasuryModule } from './treasury';
+export type { TreasuryModuleOptions } from './treasury';

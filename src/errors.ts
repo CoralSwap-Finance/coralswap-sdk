@@ -152,6 +152,10 @@ export class ValidationError extends CoralSwapSDKError {
 
 /**
  * Flash loan specific errors.
+ *
+ * When the contract emits a FlashLoanFailed event, the decoded details are
+ * attached as `event` so callers can inspect borrowedAmount and reason without
+ * manually parsing XDR.
  */
 export class FlashLoanError extends CoralSwapSDKError {
   constructor(message: string, details?: Record<string, unknown>) {
@@ -197,6 +201,38 @@ export class CircuitBreakerError extends CoralSwapSDKError {
 }
 
 /**
+ * RedStone oracle price deviation exceeded the configured threshold.
+ */
+export class PriceDeviationError extends CoralSwapSDKError {
+  constructor(
+    executionPriceBps: number,
+    oraclePriceBps: number,
+    maxDeviationBps: number,
+  ) {
+    super(
+      "PRICE_DEVIATION_TOO_HIGH",
+      `Execution price deviates ${executionPriceBps} bps from oracle price (max allowed: ${maxDeviationBps} bps)`,
+      { executionPriceBps, oraclePriceBps, maxDeviationBps },
+    );
+    this.name = "PriceDeviationError";
+  }
+}
+
+/**
+ * RedStone oracle payload is stale (older than the allowed staleness window).
+ */
+export class StaleOracleError extends CoralSwapSDKError {
+  constructor(payloadTimestamp: number, maxAgeMs: number) {
+    super(
+      "STALE_ORACLE_PAYLOAD",
+      `RedStone payload is stale (timestamp: ${payloadTimestamp}, max age: ${maxAgeMs}ms)`,
+      { payloadTimestamp, maxAgeMs },
+    );
+    this.name = "StaleOracleError";
+  }
+}
+
+/**
  * No signing key configured.
  */
 export class SignerError extends CoralSwapSDKError {
@@ -210,41 +246,42 @@ export class SignerError extends CoralSwapSDKError {
 }
 
 /**
- * Cooldown period has not elapsed for unstaking.
- *
- * Thrown when {@link StakingModule.unstake} is called while
- * the staker's position is still in its cooldown window.
+ * Order not found or already cancelled.
  */
-export class CooldownError extends CoralSwapSDKError {
-  readonly cooldownEnd: number;
-  readonly canWithdrawAt: Date;
-
-  constructor(cooldownEnd: number) {
-    const canWithdrawAt = new Date(cooldownEnd * 1000);
-    super(
-      "COOLDOWN_ACTIVE",
-      `Cannot unstake: cooldown period has not elapsed. Withdrawal available at ${canWithdrawAt.toISOString()}`,
-      {
-        cooldownEnd,
-        canWithdrawAt: canWithdrawAt.toISOString(),
-      },
-    );
-    this.name = "CooldownError";
-    this.cooldownEnd = cooldownEnd;
-    this.canWithdrawAt = canWithdrawAt;
+export class OrderNotFoundError extends CoralSwapSDKError {
+  constructor(orderId: string) {
+    super("ORDER_NOT_FOUND", `Order ${orderId} not found or has been cancelled`, { orderId });
+    this.name = "OrderNotFoundError";
   }
 }
 
 /**
- * General staking operation error.
- *
- * Used for staking-specific failures such as attempting to claim
- * zero rewards or staking with insufficient balance.
+ * Invalid operation attempted (e.g. cancelling a filled order).
+ */
+export class InvalidOperationError extends CoralSwapSDKError {
+  constructor(message: string, details?: Record<string, unknown>) {
+    super("INVALID_OPERATION", message, details);
+    this.name = "InvalidOperationError";
+  }
+}
+
+/**
+ * Staking-specific error (e.g. no rewards pending).
  */
 export class StakingError extends CoralSwapSDKError {
   constructor(message: string, details?: Record<string, unknown>) {
     super("STAKING_ERROR", message, details);
     this.name = "StakingError";
+  }
+}
+
+/**
+ * Cooldown period has not elapsed.
+ */
+export class CooldownError extends CoralSwapSDKError {
+  constructor(cooldownEnd: bigint) {
+    super("COOLDOWN_ERROR", `Cooldown period active until block ${cooldownEnd}`, { cooldownEnd });
+    this.name = "CooldownError";
   }
 }
 
@@ -476,6 +513,25 @@ export function mapError(err: unknown): CoralSwapSDKError {
     normalizedMessage.includes("must be")
   ) {
     return new ValidationError(message);
+  }
+
+  // Order not found / already cancelled
+  if (
+    normalizedMessage.includes("order not found") ||
+    message.includes("ORDER_NOT_FOUND") ||
+    normalizedMessage.includes("already cancelled")
+  ) {
+    const orderIdMatch = message.match(/order\s+([^\s]+)/i);
+    return new OrderNotFoundError(orderIdMatch?.[1] ?? "unknown");
+  }
+
+  // Invalid operation (e.g. cancelling a filled order)
+  if (
+    normalizedMessage.includes("invalid operation") ||
+    message.includes("INVALID_OPERATION") ||
+    normalizedMessage.includes("already filled")
+  ) {
+    return new InvalidOperationError(message);
   }
 
   // Pair not found

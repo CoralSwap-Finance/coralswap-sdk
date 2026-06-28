@@ -1,11 +1,9 @@
 import { CoralSwapClient } from "@/client";
-import { LPPosition } from "@/types/pool";
 import {
   EnrichedLPPosition,
   GetPositionsOptions,
   PositionSummary,
 } from "@/types/positions";
-import { ValidationError } from "@/errors";
 import { validateAddress } from "@/utils/validation";
 
 /**

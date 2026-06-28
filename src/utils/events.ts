@@ -4,7 +4,7 @@ import {
   ContractEvent,
   SwapEvent,
   LiquidityEvent,
-  FlashLoanEvent,
+  FlashLoanContractEvent,
   MintEvent,
   BurnEvent,
   SyncEvent,
@@ -360,7 +360,7 @@ export class EventParser {
   private parseFlashLoan(
     data: xdr.ScVal,
     base: Omit<ContractEvent, "type">,
-  ): FlashLoanEvent {
+  ): FlashLoanContractEvent {
     const map = data.map();
     if (!map) throw new ValidationError("FlashLoan event data is not an ScMap");
 
