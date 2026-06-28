@@ -120,6 +120,21 @@ deJTRSY is a *yield-bearing* token: unlike a simple stablecoin, its value in USD
 
 ---
 
+### `redstone-guarded-swap.ts` ← **New**
+
+**Run:** `npm run examples:redstone-guarded-swap`
+
+Demonstrates how to fetch a RedStone price attestation using a custom `price-feed.ts` module, and use it to execute a guarded swap. This is crucial for builders integrating price guards into their protocols.
+
+**Flow:**
+1. **Fetch**: Retrieves the latest RedStone attestation via the price feed module (avoiding raw API fetches).
+2. **Check Deviation**: Retrieves an AMM quote from CoralSwap and checks the expected price against the oracle's price. If the deviation exceeds the maximum allowed (e.g., 1%), it catches the bad price locally rather than relying on an expensive on-chain revert.
+3. **Attach & Submit**: If the price is within the acceptable threshold, it attaches the payload and submits the guarded swap to the Stellar Testnet.
+
+The example simulates both a happy path (within deviation) and a failure case (simulated bad price).
+
+---
+
 ## Common environment variables
 
 All examples share these base variables:

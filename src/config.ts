@@ -9,6 +9,7 @@ export interface NetworkConfig {
   networkPassphrase: string;
   factoryAddress: string;
   routerAddress: string;
+  limitOrderAddress?: string;
   sorobanTimeout: number;
 }
 

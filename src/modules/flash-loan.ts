@@ -3,6 +3,7 @@ import {
   FlashLoanRequest,
   FlashLoanResult,
   FlashLoanFeeEstimate,
+  FlashLoanFeeComparison,
   FlashLoanEventData,
 } from "@/types/flash-loan";
 import { FlashLoanConfig } from "@/types/pool";
@@ -15,6 +16,7 @@ import {
   FlashLoanError,
   TransactionError,
 } from "@/errors";
+import { FeeModule } from "@/modules/fees";
 import { validateAddress, validatePositiveAmount } from "@/utils/validation";
 import { estimateGas } from "@/utils/gas";
 import { DEFAULTS } from "@/config";
@@ -87,6 +89,57 @@ export class FlashLoanModule {
       feeAmount: actualFee,
       feeFloor: Number(config.flashFeeFloor),
     };
+  }
+
+  /**
+   * Compare the flash loan fee against the current dynamic swap fee for a
+   * pair and amount.
+   *
+   * Arbitrageurs use this to decide whether borrowing via a flash loan is
+   * cheaper than routing capital through a direct swap before committing to
+   * a strategy. Both fees are fetched in parallel and reduced to absolute
+   * token amounts using `(amount * feeBps) / 10000n`.
+   *
+   * @param pair - The address of the pair contract to compare fees for
+   * @param amount - The notional amount the strategy would move (must be > 0)
+   * @returns The two effective fees and which option is cheaper
+   * @throws {ValidationError} If `pair` is invalid or `amount` is zero/negative
+   * @example
+   * const cmp = await client.flashLoans.compareFees('C...', 1_000_000n);
+   * if (cmp.cheaperOption === 'flashLoan') {
+   *   // borrow via flash loan
+   * }
+   */
+  async compareFees(
+    pair: string,
+    amount: bigint,
+  ): Promise<FlashLoanFeeComparison> {
+    validateAddress(pair, "pair");
+    validatePositiveAmount(amount, "amount");
+
+    const fees = new FeeModule(this.client);
+
+    // Fetch the flash loan fee (fee_bps) and the dynamic swap fee in parallel.
+    const [config, swapEstimate] = await Promise.all([
+      this.getConfig(pair),
+      fees.estimateSwapFee(pair, amount),
+    ]);
+
+    // Reduce both fees to absolute token amounts on the same basis-points
+    // formula so the comparison is apples-to-apples.
+    const flashLoanFee = (amount * BigInt(config.flashFeeBps)) / 10000n;
+    const swapFee = swapEstimate.feeAmount;
+
+    let cheaperOption: FlashLoanFeeComparison["cheaperOption"];
+    if (flashLoanFee < swapFee) {
+      cheaperOption = "flashLoan";
+    } else if (swapFee < flashLoanFee) {
+      cheaperOption = "swap";
+    } else {
+      cheaperOption = "equal";
+    }
+
+    return { flashLoanFee, swapFee, cheaperOption };
   }
 
   /**

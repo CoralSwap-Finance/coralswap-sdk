@@ -1,7 +1,7 @@
 import { CoralSwapClient } from "../src/client";
 import { FlashLoanModule } from "../src/modules/flash-loan";
 import { PairClient } from "../src/contracts/pair";
-import { FlashLoanError, TransactionError, FlashLoanFailedError } from "../src/errors";
+import { FlashLoanError, TransactionError, FlashLoanFailedError, ValidationError } from "../src/errors";
 import { Network } from "../src/types/common";
 import { FlashLoanConfig } from "../src/types/pool";
 import { xdr, Address, nativeToScVal, SorobanRpc } from "@stellar/stellar-sdk";
@@ -1067,6 +1067,82 @@ describe("FlashLoanModule - Event Parsing", () => {
         feePaid: 225n,
         callbackAddress: TEST_BORROWER_ADDRESS,
       });
+    });
+  });
+
+  describe("compareFees()", () => {
+    const AMOUNT = 1_000_000n;
+
+    /** Configure the mocked pair to report a given flash and swap fee (bps). */
+    function mockFees(flashFeeBps: number, swapFeeBps: number): void {
+      mockPairClient.getFlashLoanConfig.mockResolvedValue({
+        flashFeeBps,
+        locked: false,
+        flashFeeFloor: 0n,
+      });
+      mockPairClient.getDynamicFee = jest.fn().mockResolvedValue(swapFeeBps);
+    }
+
+    it("reports 'flashLoan' when the flash loan fee is cheaper", async () => {
+      mockFees(9, 30);
+
+      const result = await flashLoanModule.compareFees(TEST_PAIR_ADDRESS, AMOUNT);
+
+      // flash = 1_000_000 * 9 / 10000 = 900; swap = 1_000_000 * 30 / 10000 = 3000
+      expect(result.flashLoanFee).toBe(900n);
+      expect(result.swapFee).toBe(3000n);
+      expect(result.cheaperOption).toBe("flashLoan");
+    });
+
+    it("reports 'swap' when the swap fee is cheaper", async () => {
+      mockFees(50, 10);
+
+      const result = await flashLoanModule.compareFees(TEST_PAIR_ADDRESS, AMOUNT);
+
+      // flash = 5000; swap = 1000
+      expect(result.flashLoanFee).toBe(5000n);
+      expect(result.swapFee).toBe(1000n);
+      expect(result.cheaperOption).toBe("swap");
+    });
+
+    it("reports 'equal' when both fees match", async () => {
+      mockFees(30, 30);
+
+      const result = await flashLoanModule.compareFees(TEST_PAIR_ADDRESS, AMOUNT);
+
+      expect(result.flashLoanFee).toBe(result.swapFee);
+      expect(result.cheaperOption).toBe("equal");
+    });
+
+    it("fetches both fees in parallel", async () => {
+      mockFees(9, 30);
+
+      await flashLoanModule.compareFees(TEST_PAIR_ADDRESS, AMOUNT);
+
+      expect(mockPairClient.getFlashLoanConfig).toHaveBeenCalledTimes(1);
+      expect(mockPairClient.getDynamicFee).toHaveBeenCalledTimes(1);
+    });
+
+    it("throws ValidationError when the amount is zero", async () => {
+      mockFees(9, 30);
+
+      await expect(
+        flashLoanModule.compareFees(TEST_PAIR_ADDRESS, 0n),
+      ).rejects.toThrow(ValidationError);
+    });
+
+    it("throws ValidationError when the amount is negative", async () => {
+      mockFees(9, 30);
+
+      await expect(
+        flashLoanModule.compareFees(TEST_PAIR_ADDRESS, -5n),
+      ).rejects.toThrow(ValidationError);
+    });
+
+    it("throws ValidationError for an invalid pair address", async () => {
+      await expect(
+        flashLoanModule.compareFees("not-an-address", AMOUNT),
+      ).rejects.toThrow(ValidationError);
     });
   });
 });

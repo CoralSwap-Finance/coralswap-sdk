@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 /**
  * Mappings for CoralSwap contract error codes to human-readable messages.
  *

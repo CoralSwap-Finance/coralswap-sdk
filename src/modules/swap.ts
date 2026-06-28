@@ -1,6 +1,6 @@
 import { CoralSwapClient } from "@/client";
 import { PairClient } from "@/contracts/pair";
-import { TradeType } from "@/types/common";
+import { TradeType as CommonTradeType } from "@/types/common";
 import {
   SwapRequest,
   SwapQuote,
@@ -32,13 +32,15 @@ import { resolveTokenIdentifier } from '@/utils/addresses';
 import { estimateGas } from '@/utils/gas';
 import { EventParser } from '@/utils/events';
 import { SorobanRpc } from '@stellar/stellar-sdk';
+import { getLimitOrders, getDcaExecutions } from './order-book';
+import { Trade, TradeFilter } from '../types/trade';
+
 
 /** Default ledger window when no fromLedger/toLedger is specified. */
 const DEFAULT_HISTORY_WINDOW = 1000;
 
 /** Default maximum results per query. */
 const DEFAULT_HISTORY_LIMIT = 200;
-
 
 /**
  * Swap module -- builds, quotes, and executes token swaps.
@@ -57,6 +59,48 @@ export class SwapModule {
     this.client = client;
   }
 
+  async getTradeHistory(address: string, filter?: TradeFilter): Promise<Trade[]> {
+    const swapHistory = await this.getSwapHistory({ userAddress: address });
+    const limitOrders = await getLimitOrders(address);
+    const dcaExecutions = await getDcaExecutions(address);
+
+    let allTrades: Trade[] = [
+      ...swapHistory.map(
+        (swap) =>
+          ({
+            type: 'swap',
+            tokenIn: swap.tokenIn,
+            tokenOut: swap.tokenOut,
+            amountIn: swap.amountIn,
+            amountOut: swap.amountOut,
+            price: Number(swap.amountOut) / Number(swap.amountIn),
+            timestamp: new Date(swap.timestamp * 1000),
+            txHash: swap.txHash,
+          } as Trade)
+      ),
+      ...limitOrders,
+      ...dcaExecutions,
+    ];
+
+    if (filter?.types) {
+      allTrades = allTrades.filter((trade) => filter.types!.includes(trade.type));
+    }
+    if (filter?.fromDate) {
+      allTrades = allTrades.filter((trade) => trade.timestamp >= filter.fromDate!);
+    }
+    if (filter?.toDate) {
+      allTrades = allTrades.filter((trade) => trade.timestamp <= filter.toDate!);
+    }
+
+    allTrades.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+
+    if (filter?.limit) {
+      allTrades = allTrades.slice(0, filter.limit);
+    }
+
+    return allTrades;
+  }
+
   /**
    * Get an estimated swap quote without executing.
    *
@@ -68,7 +112,7 @@ export class SwapModule {
    * @returns The standard swap quote
    * @throws {ValidationError} If inputs are invalid or path has <2 tokens
    * @example
-   * const quote = await client.swap.getQuote({ tokenIn: 'C...', tokenOut: 'C...', amount: 100n, tradeType: TradeType.EXACT_IN });
+   * const quote = await client.swap.getQuote({ tokenIn: 'C...', tokenOut: 'C...', amount: 100n, tradeType: CommonTradeType.EXACT_IN });
    */
   async getQuote(request: SwapRequest): Promise<SwapQuote> {
     validatePositiveAmount(request.amount, 'amount');
@@ -109,7 +153,7 @@ export class SwapModule {
    * @throws {TransactionError} If the execution on-chain fails
    * @throws {SimulationError} If estimateOnly simulation fails
    * @example
-   * const result = await client.swap.execute({ tokenIn: 'C...', tokenOut: 'C...', amount: 100n, tradeType: TradeType.EXACT_IN });
+   * const result = await client.swap.execute({ tokenIn: 'C...', tokenOut: 'C...', amount: 100n, tradeType: CommonTradeType.EXACT_IN });
    * const gas = await client.swap.execute({ ... }, { estimateOnly: true });
    */
   async execute(request: SwapRequest, options: { estimateOnly: true }): Promise<GasEstimate>;
@@ -142,7 +186,7 @@ export class SwapModule {
       );
     } else {
       op =
-        request.tradeType === TradeType.EXACT_IN
+        request.tradeType === CommonTradeType.EXACT_IN
           ? this.client.router.buildSwapExactIn(
               request.to ?? this.client.publicKey,
               tokenIn,
@@ -197,7 +241,7 @@ export class SwapModule {
    * @throws {ValidationError} If path has fewer than 3 tokens.
    * @throws {PairNotFoundError} If any intermediate pair does not exist.
    * @example
-   * const quote = await client.swap.getMultiHopQuote({ path: ['A', 'B', 'C'], amount: 100n, tradeType: TradeType.EXACT_IN });
+   * const quote = await client.swap.getMultiHopQuote({ path: ['A', 'B', 'C'], amount: 100n, tradeType: CommonTradeType.EXACT_IN });
    */
   async getMultiHopQuote(request: MultiHopSwapRequest): Promise<MultiHopSwapQuote> {
     const passphrase = this.client.networkConfig.networkPassphrase;
@@ -210,7 +254,7 @@ export class SwapModule {
       );
     }
 
-    if (request.tradeType === TradeType.EXACT_OUT) {
+    if (request.tradeType === CommonTradeType.EXACT_OUT) {
       throw new ValidationError(
         'EXACT_OUT trade type is not supported for multi-hop swaps',
         { path },
@@ -264,7 +308,7 @@ export class SwapModule {
    * @throws {PairNotFoundError} If any intermediate pair does not exist.
    * @throws {TransactionError} If the on-chain transaction fails.
    * @example
-   * const result = await client.swap.executeMultiHop({ path: ['A', 'B', 'C'], amount: 100n, tradeType: TradeType.EXACT_IN });
+   * const result = await client.swap.executeMultiHop({ path: ['A', 'B', 'C'], amount: 100n, tradeType: CommonTradeType.EXACT_IN });
    */
   async executeMultiHop(request: MultiHopSwapRequest): Promise<SwapResult> {
     const quote = await this.getMultiHopQuote(request);
@@ -739,7 +783,7 @@ export class SwapModule {
     let amountIn: bigint;
     let amountOut: bigint;
 
-    if (request.tradeType === TradeType.EXACT_IN) {
+    if (request.tradeType === CommonTradeType.EXACT_IN) {
       amountIn = request.amount;
       amountOut = this.getAmountOut(
         amountIn,
@@ -797,7 +841,7 @@ export class SwapModule {
     request: SwapRequest,
     path: string[],
   ): Promise<SwapQuote> {
-    if (request.tradeType === TradeType.EXACT_OUT) {
+    if (request.tradeType === CommonTradeType.EXACT_OUT) {
       throw new ValidationError(
         'EXACT_OUT trade type is not supported for multi-hop swaps',
         { path },

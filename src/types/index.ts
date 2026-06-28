@@ -6,4 +6,4 @@ export * from './flash-loan';
 export * from './fee';
 export * from './events';
 export * from './tokens';
-export * from './gas';
+export * from './positions';

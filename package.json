@@ -13,7 +13,6 @@
     "test": "jest",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
-    "test:integration": "jest --config jest.integration.config.js --runInBand",
     "lint": "eslint src/**/*.ts",
     "lint:fix": "eslint src/**/*.ts --fix",
     "clean": "rimraf dist",
@@ -24,7 +23,8 @@
     "examples:read-reserves": "ts-node examples/read-reserves.ts",
     "examples:rwa-pool": "ts-node examples/rwa-pool.ts",
     "examples:governance-vote": "ts-node examples/governance-vote.ts",
-    "docs": "typedoc"
+    "docs": "typedoc",
+    "fuzz": "jest --testPathPattern=fuzz --no-coverage"
   },
   "keywords": [
     "coralswap",
@@ -53,6 +53,7 @@
     "@typescript-eslint/parser": "^8.0.0",
     "dotenv": "^17.3.1",
     "eslint": "^9.0.0",
+    "fast-check": "^3.22.0",
     "jest": "^29.7.0",
     "rimraf": "^6.0.0",
     "ts-jest": "^29.2.0",

@@ -210,6 +210,45 @@ export class SignerError extends CoralSwapSDKError {
 }
 
 /**
+ * Cooldown period has not elapsed for unstaking.
+ *
+ * Thrown when {@link StakingModule.unstake} is called while
+ * the staker's position is still in its cooldown window.
+ */
+export class CooldownError extends CoralSwapSDKError {
+  readonly cooldownEnd: number;
+  readonly canWithdrawAt: Date;
+
+  constructor(cooldownEnd: number) {
+    const canWithdrawAt = new Date(cooldownEnd * 1000);
+    super(
+      "COOLDOWN_ACTIVE",
+      `Cannot unstake: cooldown period has not elapsed. Withdrawal available at ${canWithdrawAt.toISOString()}`,
+      {
+        cooldownEnd,
+        canWithdrawAt: canWithdrawAt.toISOString(),
+      },
+    );
+    this.name = "CooldownError";
+    this.cooldownEnd = cooldownEnd;
+    this.canWithdrawAt = canWithdrawAt;
+  }
+}
+
+/**
+ * General staking operation error.
+ *
+ * Used for staking-specific failures such as attempting to claim
+ * zero rewards or staking with insufficient balance.
+ */
+export class StakingError extends CoralSwapSDKError {
+  constructor(message: string, details?: Record<string, unknown>) {
+    super("STAKING_ERROR", message, details);
+    this.name = "StakingError";
+  }
+}
+
+/**
  * Extract pair address from error details or message.
  */
 function extractPairAddress(err: unknown): string {

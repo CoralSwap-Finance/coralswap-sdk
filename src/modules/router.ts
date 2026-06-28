@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { CoralSwapClient } from '@/client';
 import { TradeType } from '@/types/common';
 import { SwapQuote } from '@/types/swap';

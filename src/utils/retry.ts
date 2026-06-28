@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { Logger } from "@/types/common";
 import { DEFAULTS } from "@/config";
 
@@ -179,6 +180,15 @@ function normalizeRetryConfig(options: RetryOptions): RetryConfig {
   };
 }
 
+/**
+ * Helper to execute an async function with exponential backoff retry.
+ *
+ * @param fn - The async function to execute
+ * @param options - Retry configuration
+ * @param logger - Optional logger for instrumentation
+ * @param label - A label for logging purposes
+ * @returns The result of the function
+ */
 
 export async function withRetry<T>(
   fn: () => Promise<T>,

@@ -63,6 +63,22 @@ export interface FlashLoanFeeEstimate {
 }
 
 /**
+ * Result of comparing a flash loan fee against a regular swap fee
+ * for the same pair and amount.
+ *
+ * Both fees are expressed as absolute token amounts (not basis points),
+ * computed as `(amount * feeBps) / 10000n`.
+ */
+export interface FlashLoanFeeComparison {
+  /** Effective flash loan fee for the requested amount. */
+  flashLoanFee: bigint;
+  /** Effective dynamic swap fee for the requested amount. */
+  swapFee: bigint;
+  /** Which option is cheaper for the caller, or `'equal'` when identical. */
+  cheaperOption: 'flashLoan' | 'swap' | 'equal';
+}
+
+/**
  * Interface that flash loan receivers must implement.
  */
 export interface FlashLoanReceiverParams {
