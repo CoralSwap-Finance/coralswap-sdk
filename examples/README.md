@@ -54,6 +54,14 @@ A detailed guide to implementing the `on_flash_loan` callback in your own Soroba
 
 ---
 
+### `governance-vote.ts` ← **New**
+
+**Run:** `npm run examples:governance-vote`
+
+Walks through a full governance proposal lifecycle against a Soroban governance contract: create a proposal, query its status, cast a vote, inspect quorum, and execute the proposal once it passes. The script is intentionally configurable via environment variables so it can target a deployed governance contract on Stellar Testnet without hard-coding a single ABI.
+
+---
+
 ### `rwa-pool.ts` ← **New**
 
 **Run:** `npm run examples:rwa-pool`

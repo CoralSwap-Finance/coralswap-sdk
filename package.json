@@ -23,6 +23,7 @@
     "examples:provide-liquidity": "ts-node examples/provide-liquidity.ts",
     "examples:read-reserves": "ts-node examples/read-reserves.ts",
     "examples:rwa-pool": "ts-node examples/rwa-pool.ts",
+    "examples:governance-vote": "ts-node examples/governance-vote.ts",
     "docs": "typedoc"
   },
   "keywords": [
@@ -56,6 +57,7 @@
     "rimraf": "^6.0.0",
     "ts-jest": "^29.2.0",
     "ts-node": "^10.9.2",
+    "tsconfig-paths": "^4.2.0",
     "typedoc": "^0.27.0",
     "typescript": "^5.6.0"
   },
