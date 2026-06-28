@@ -337,6 +337,10 @@ try {
 }
 ```
 
+## Performance
+
+High-throughput integrations (trading bots, aggregators, dashboards) should tune caching, RPC failover, and connection pooling. See **[docs/PERFORMANCE.md](docs/PERFORMANCE.md)** for use-case profiles, TTL guidance, benchmark numbers, and copy-paste configuration examples.
+
 ## Design Principles
 
 | Principle      | Implementation                                 |
