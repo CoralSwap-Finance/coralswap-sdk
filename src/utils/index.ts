@@ -80,3 +80,6 @@ export {
   setVotingPowerQueryProvider,
 } from './voting-power';
 export type { VotingPower, VotingPowerQueryProvider, VotingPowerQueryResult } from './voting-power';
+
+export { checkCompatibility } from './migration';
+export type { BreakingChange, CompatibilityReport } from './migration';
