@@ -1,9 +1,19 @@
 import { CoralSwapClient } from '../client';
 import { TradeType } from '../types/common';
-import { SwapRequest, SwapQuote, SwapResult, HopResult } from '../types/swap';
+import { SwapRequest, SwapQuote, SwapResult, HopResult, SwapHistoryFilter, SwapHistoryEvent } from '../types/swap';
 import { PRECISION, DEFAULTS } from '../config';
 import { PairNotFoundError, ValidationError, InsufficientLiquidityError, TransactionError } from '../errors';
 import { PairClient } from '@/contracts/pair';
+import { SwapEvent } from '../types/events';
+import { validateAddress } from '../utils/validation';
+import { EventParser } from '../utils/events';
+import { SorobanRpc } from '@stellar/stellar-sdk';
+
+/** Default ledger window when no fromLedger/toLedger is specified. */
+const DEFAULT_HISTORY_WINDOW = 1000;
+
+/** Default maximum results per query. */
+const DEFAULT_HISTORY_LIMIT = 200;
 
 /**
  * Swap module -- builds, quotes, and executes token swaps.
@@ -444,5 +454,206 @@ export class SwapModule {
   private async isToken0(pair: PairClient, tokenIn: string): Promise<boolean> {
     const tokens = await pair.getTokens();
     return tokens.token0 === tokenIn;
+  }
+
+  /**
+   * Fetch swap history.
+   *
+   * Uses the Soroban RPC `getEvents` endpoint to fetch on-chain swap events
+   * and applies the provided filters client-side. Pagination is controlled
+   * via `fromLedger` / `toLedger`; both default to a 1000-ledger window
+   * ending at the current ledger when omitted.
+   *
+   * Filter semantics:
+   * - `pairAddress` alone  → all swaps in that pool
+   * - `userAddress` alone  → all swaps by that sender across all pools
+   * - both provided        → swaps by that sender in that pool (AND)
+   * - neither provided     → all swap events in the ledger window
+   *
+   * @param filter - Query parameters (pairAddress, userAddress, ledger range, limit)
+   * @returns Ordered array of SwapHistoryEvent (oldest first). Returns [] on no match.
+   * @throws {ValidationError} If pairAddress or userAddress is provided but invalid.
+   */
+  async getSwapHistory(filter: SwapHistoryFilter = {}): Promise<SwapHistoryEvent[]> {
+    const { pairAddress, userAddress, limit = DEFAULT_HISTORY_LIMIT } = filter;
+
+    // Validate optional addresses up-front
+    if (pairAddress) validateAddress(pairAddress, 'pairAddress');
+    if (userAddress) validateAddress(userAddress, 'userAddress');
+
+    // Resolve ledger range — default to last DEFAULT_HISTORY_WINDOW ledgers
+    const currentLedger = await this.client.getCurrentLedger();
+    const fromLedger = filter.fromLedger ?? Math.max(0, currentLedger - DEFAULT_HISTORY_WINDOW);
+    const toLedger = filter.toLedger ?? currentLedger;
+
+    if (fromLedger > toLedger) {
+      throw new ValidationError(
+        `fromLedger (${fromLedger}) must not be greater than toLedger (${toLedger})`,
+        { fromLedger, toLedger },
+      );
+    }
+
+    // Build the getEvents request.
+    // When pairAddress is given we scope the query to that contract, which is
+    // the most efficient path. Without it we query all contracts for "swap" topic.
+    const request: SorobanRpc.Server.GetEventsRequest = {
+      startLedger: fromLedger,
+      filters: [
+        {
+          type: 'contract',
+          contractIds: pairAddress ? [pairAddress] : [],
+          topics: [['swap']],
+        },
+      ],
+      limit,
+    };
+
+    const response = await this.client.server.getEvents(request);
+
+    if (!response || !Array.isArray(response.events)) {
+      return [];
+    }
+
+    const parser = new EventParser(pairAddress ? [pairAddress] : []);
+    const results: SwapHistoryEvent[] = [];
+
+    for (const rawEvent of response.events) {
+      // Respect toLedger upper bound (RPC only accepts startLedger, not endLedger)
+      if (rawEvent.ledger > toLedger) continue;
+
+      // Parse the raw event into a typed SwapEvent using the existing EventParser.
+      // The RPC returns events in a different shape than DiagnosticEvents, so we
+      // reconstruct the fields we need directly from the raw event value.
+      let swapEvent: SwapEvent | null = null;
+      try {
+        swapEvent = this.parseRawSwapEvent(rawEvent, parser);
+      } catch {
+        // Skip malformed events
+        continue;
+      }
+
+      if (!swapEvent) continue;
+
+      // Apply userAddress filter (AND with pairAddress if both given)
+      if (userAddress && swapEvent.sender !== userAddress) continue;
+
+      results.push({
+        txHash: swapEvent.txHash,
+        amountIn: swapEvent.amountIn,
+        amountOut: swapEvent.amountOut,
+        tokenIn: swapEvent.tokenIn,
+        tokenOut: swapEvent.tokenOut,
+        sender: swapEvent.sender,
+        pairAddress: swapEvent.contractId,
+        ledger: swapEvent.ledger,
+        timestamp: swapEvent.timestamp,
+        feeBps: swapEvent.feeBps,
+      });
+
+      if (results.length >= limit) break;
+    }
+
+    return results;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Private helper: parse a raw RPC event into a SwapEvent
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Convert a raw `SorobanRpc.Api.EventResponse` entry into a typed SwapEvent.
+   *
+   * The RPC `getEvents` response carries decoded ScVal values in `event.value`
+   * and topic strings in `event.topic`. We reconstruct the SwapEvent fields
+   * directly from the decoded values rather than going through XDR re-encoding.
+   *
+   * Returns null if the event is not a swap event or cannot be decoded.
+   */
+  private parseRawSwapEvent(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    rawEvent: any,
+    _parser: EventParser,
+  ): SwapEvent | null {
+    // Verify this is a swap event by checking the first topic
+    const topics: string[] = rawEvent.topic ?? [];
+    if (!topics.length || topics[0] !== 'swap') return null;
+
+    // The `value` field is an ScVal (already decoded by stellar-sdk)
+    const value = rawEvent.value;
+    if (!value) return null;
+
+    // Extract the ScMap entries
+    const map: Array<{ key: { sym?: () => { toString(): string }; str?: () => { toString(): string } }; val: unknown }> =
+      typeof value.map === 'function' ? value.map() : value._value;
+
+    if (!Array.isArray(map)) return null;
+
+    // Helper to get a map value by key name
+    const get = (key: string): unknown => {
+      for (const entry of map) {
+        const k = entry.key;
+        let keyStr: string | undefined;
+        try {
+          if (typeof k.sym === 'function') keyStr = k.sym().toString();
+          else if (typeof k.str === 'function') keyStr = k.str().toString();
+        } catch { /* skip */ }
+        if (keyStr === key) return entry.val;
+      }
+      return undefined;
+    };
+
+    // Decode address ScVal to string
+    const decodeAddr = (val: unknown): string => {
+      if (!val) throw new Error('missing address');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const v = val as any;
+      if (typeof v.address === 'function') return v.address().toString();
+      if (typeof v._value?.toString === 'function') return v._value.toString();
+      throw new Error('cannot decode address');
+    };
+
+    // Decode i128 ScVal to bigint
+    const decodeI128 = (val: unknown): bigint => {
+      if (!val) throw new Error('missing i128');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const v = val as any;
+      if (typeof v.i128 === 'function') {
+        const parts = v.i128();
+        return (BigInt(parts.hi().toString()) << 64n) + BigInt(parts.lo().toString());
+      }
+      throw new Error('cannot decode i128');
+    };
+
+    // Decode u32 ScVal to number
+    const decodeU32 = (val: unknown): number => {
+      if (!val) throw new Error('missing u32');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const v = val as any;
+      if (typeof v.u32 === 'function') return v.u32();
+      throw new Error('cannot decode u32');
+    };
+
+    const sender = decodeAddr(get('sender'));
+    const tokenIn = decodeAddr(get('token_in'));
+    const tokenOut = decodeAddr(get('token_out'));
+    const amountIn = decodeI128(get('amount_in'));
+    const amountOut = decodeI128(get('amount_out'));
+    const feeBps = decodeU32(get('fee_bps'));
+
+    return {
+      type: 'swap',
+      contractId: rawEvent.contractId ?? '',
+      ledger: rawEvent.ledger ?? 0,
+      timestamp: rawEvent.ledgerClosedAt
+        ? Math.floor(new Date(rawEvent.ledgerClosedAt).getTime() / 1000)
+        : rawEvent.ledger ?? 0,
+      txHash: rawEvent.txHash ?? '',
+      sender,
+      tokenIn,
+      tokenOut,
+      amountIn,
+      amountOut,
+      feeBps,
+    };
   }
 }
