@@ -142,4 +142,217 @@ describe('AlertModule', () => {
       ).rejects.toThrow(ValidationError);
     });
   });
+
+  describe('checkHealthAlert()', () => {
+    it('returns a health score for a pool', async () => {
+      const alerts = new AlertModule(makeClient({ reserve0: 100n, reserve1: 250n }));
+
+      const result = await alerts.checkHealthAlert({ pairAddress: PAIR }, 'health-1');
+
+      expect(result).toMatchObject({
+        id: 'health-1',
+        type: 'health',
+        currentHealthScore: 4000,
+        status: 'active',
+        triggered: false,
+      });
+    });
+
+    it('throws when the pool has no liquidity', async () => {
+      const alerts = new AlertModule(makeClient({ reserve0: 0n, reserve1: 250n }));
+
+      await expect(
+        alerts.checkHealthAlert({ pairAddress: PAIR }, 'health-2'),
+      ).rejects.toThrow(InsufficientLiquidityError);
+    });
+  });
+
+  describe('checkVolumeAlert()', () => {
+    it('returns volume data for a pool', async () => {
+      const alerts = new AlertModule(makeClient({ reserve0: 100n, reserve1: 250n }));
+
+      const result = await alerts.checkVolumeAlert({ pairAddress: PAIR }, 'vol-1');
+
+      expect(result).toMatchObject({
+        id: 'vol-1',
+        type: 'volume',
+        currentVolume: 350n,
+        status: 'active',
+        triggered: false,
+      });
+    });
+
+    it('throws when the pool has no liquidity', async () => {
+      const alerts = new AlertModule(makeClient({ reserve0: 0n, reserve1: 0n }));
+
+      await expect(
+        alerts.checkVolumeAlert({ pairAddress: PAIR }, 'vol-2'),
+      ).rejects.toThrow(InsufficientLiquidityError);
+    });
+  });
+
+  describe('createAlert()', () => {
+    it('creates a price alert and returns a string ID', async () => {
+      const alerts = new AlertModule(makeClient({ reserve0: 100n, reserve1: 250n }));
+
+      const id = await alerts.createAlert({
+        type: 'price',
+        target: PAIR,
+        threshold: 2.5,
+        direction: 'above',
+      });
+
+      expect(typeof id).toBe('string');
+      expect(id.length).toBeGreaterThan(0);
+    });
+
+    it('creates an IL alert and returns a string ID', async () => {
+      const alerts = new AlertModule(makeClient({ reserve0: 100n, reserve1: 250n }));
+
+      const id = await alerts.createAlert({
+        type: 'il',
+        target: PAIR,
+        threshold: 500,
+        direction: 'above',
+      });
+
+      expect(typeof id).toBe('string');
+      expect(id.length).toBeGreaterThan(0);
+    });
+
+    it('creates a health alert and returns a string ID', async () => {
+      const alerts = new AlertModule(makeClient({ reserve0: 100n, reserve1: 250n }));
+
+      const id = await alerts.createAlert({
+        type: 'health',
+        target: PAIR,
+        threshold: 3000,
+        direction: 'below',
+      });
+
+      expect(typeof id).toBe('string');
+      expect(id.length).toBeGreaterThan(0);
+    });
+
+    it('creates a volume alert and returns a string ID', async () => {
+      const alerts = new AlertModule(makeClient({ reserve0: 100n, reserve1: 250n }));
+
+      const id = await alerts.createAlert({
+        type: 'volume',
+        target: PAIR,
+        threshold: 100,
+        direction: 'above',
+      });
+
+      expect(typeof id).toBe('string');
+      expect(id.length).toBeGreaterThan(0);
+    });
+
+    it('validates IL threshold is between 0 and 10000', async () => {
+      const alerts = new AlertModule(makeClient({ reserve0: 100n, reserve1: 250n }));
+
+      await expect(
+        alerts.createAlert({ type: 'il', target: PAIR, threshold: 15000, direction: 'above' }),
+      ).rejects.toThrow(ValidationError);
+    });
+
+    it('validates health threshold is between 0 and 10000', async () => {
+      const alerts = new AlertModule(makeClient({ reserve0: 100n, reserve1: 250n }));
+
+      await expect(
+        alerts.createAlert({ type: 'health', target: PAIR, threshold: -1, direction: 'below' }),
+      ).rejects.toThrow(ValidationError);
+    });
+
+    it('validates price threshold is positive', async () => {
+      const alerts = new AlertModule(makeClient({ reserve0: 100n, reserve1: 250n }));
+
+      await expect(
+        alerts.createAlert({ type: 'price', target: PAIR, threshold: 0, direction: 'above' }),
+      ).rejects.toThrow(ValidationError);
+    });
+
+    it('validates volume threshold is positive', async () => {
+      const alerts = new AlertModule(makeClient({ reserve0: 100n, reserve1: 250n }));
+
+      await expect(
+        alerts.createAlert({ type: 'volume', target: PAIR, threshold: -5, direction: 'above' }),
+      ).rejects.toThrow(ValidationError);
+    });
+  });
+
+  describe('checkAlerts()', () => {
+    it('returns triggered price alerts for the given address', async () => {
+      const alerts = new AlertModule(makeClient({ reserve0: 100n, reserve1: 250n }));
+
+      await alerts.createAlert({
+        type: 'price',
+        target: PAIR,
+        threshold: 2,
+        direction: 'above',
+      });
+
+      const results = await alerts.checkAlerts(PAIR);
+
+      expect(results).toHaveLength(1);
+      expect(results[0].triggered).toBe(true);
+      expect(results[0].type).toBe('price');
+    });
+
+    it('returns empty array when no alerts match the address', async () => {
+      const alerts = new AlertModule(makeClient({ reserve0: 100n, reserve1: 250n }));
+
+      await alerts.createAlert({
+        type: 'price',
+        target: PAIR,
+        threshold: 2,
+        direction: 'above',
+      });
+
+      const results = await alerts.checkAlerts('COTHERADDRESSXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX');
+
+      expect(results).toHaveLength(0);
+    });
+
+    it('returns active alerts that have not yet triggered', async () => {
+      const alerts = new AlertModule(makeClient({ reserve0: 100n, reserve1: 250n }));
+
+      await alerts.createAlert({
+        type: 'price',
+        target: PAIR,
+        threshold: 2,
+        direction: 'below',
+      });
+
+      const results = await alerts.checkAlerts(PAIR);
+
+      expect(results).toHaveLength(1);
+      expect(results[0].triggered).toBe(false);
+      expect(results[0].status).toBe('active');
+    });
+  });
+
+  describe('deleteAlert()', () => {
+    it('removes a stored alert', async () => {
+      const alerts = new AlertModule(makeClient({ reserve0: 100n, reserve1: 250n }));
+
+      const id = await alerts.createAlert({
+        type: 'price',
+        target: PAIR,
+        threshold: 2,
+        direction: 'above',
+      });
+
+      alerts.deleteAlert(id);
+
+      const results = await alerts.checkAlerts(PAIR);
+      expect(results).toHaveLength(0);
+    });
+
+    it('throws for a non-existent alert ID', () => {
+      const alerts = new AlertModule(makeClient({ reserve0: 100n, reserve1: 250n }));
+
+      expect(() => alerts.deleteAlert('nonexistent-id')).toThrow(ValidationError);
+    });
+  });
 });

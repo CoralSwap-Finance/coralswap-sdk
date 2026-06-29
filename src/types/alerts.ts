@@ -2,6 +2,15 @@ export type AlertDirection = 'above' | 'below';
 
 export type AlertStatus = 'active' | 'triggered' | 'cleared';
 
+export type AlertType = 'price' | 'il' | 'health' | 'volume';
+
+export interface AlertConfig {
+  type: AlertType;
+  target: string;
+  threshold: number;
+  direction: AlertDirection;
+}
+
 export interface PriceAlertConfig {
   tokenIn: string;
   tokenOut: string;
@@ -16,6 +25,14 @@ export interface ILAlertConfig {
   tokenB: string;
   referencePrice: bigint;
   maxImpermanentLossBps: number;
+}
+
+export interface HealthAlertConfig {
+  pairAddress: string;
+}
+
+export interface VolumeAlertConfig {
+  pairAddress: string;
 }
 
 export interface PriceAlert {
@@ -37,4 +54,22 @@ export interface ILAlert {
   triggered: boolean;
 }
 
-export type Alert = PriceAlert | ILAlert;
+export interface HealthAlert {
+  id: string;
+  type: 'health';
+  config: HealthAlertConfig;
+  currentHealthScore: number;
+  status: AlertStatus;
+  triggered: boolean;
+}
+
+export interface VolumeAlert {
+  id: string;
+  type: 'volume';
+  config: VolumeAlertConfig;
+  currentVolume: bigint;
+  status: AlertStatus;
+  triggered: boolean;
+}
+
+export type Alert = PriceAlert | ILAlert | HealthAlert | VolumeAlert;
