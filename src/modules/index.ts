@@ -8,3 +8,5 @@ export { FactoryModule } from './factory';
 export { RouterModule } from './router';
 export { TreasuryModule } from './treasury';
 export type { TreasuryModuleOptions } from './treasury';
+export { PortfolioModule } from './portfolio';
+export type { GetPortfolioPnLOptions } from './portfolio';
