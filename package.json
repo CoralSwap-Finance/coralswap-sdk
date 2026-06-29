@@ -22,7 +22,8 @@
     "examples:provide-liquidity": "ts-node examples/provide-liquidity.ts",
     "examples:read-reserves": "ts-node examples/read-reserves.ts",
     "docs": "typedoc",
-    "fuzz": "jest --testPathPattern=fuzz --no-coverage"
+    "fuzz": "jest --testPathPattern=fuzz --no-coverage",
+    "benchmark": "ts-node benchmarks/run.ts"
   },
   "keywords": [
     "coralswap",
