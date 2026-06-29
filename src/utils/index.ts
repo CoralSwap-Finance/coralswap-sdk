@@ -41,13 +41,16 @@ export {
   withRetry,
   isRetryable,
   sleep,
-  RetryConfig,
   DEFAULT_RETRY_CONFIG,
   CircuitBreaker,
   CircuitOpenError,
   getCircuitBreaker,
   resetCircuitBreakers,
 } from "./retry";
+export type { CircuitBreakerOptions, RetryConfig, RetryOptions } from "./retry";
+
+export { PollingStrategy, TransactionPoller } from "./polling";
+export type { PollingOptions } from "./polling";
 
 export { Fraction, Percent, Rounding } from './math';
 
