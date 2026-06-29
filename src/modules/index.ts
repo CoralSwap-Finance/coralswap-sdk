@@ -7,3 +7,5 @@ export { TokenListModule } from './tokens';
 export { FactoryModule } from './factory';
 export { RouterModule } from './router';
 export { GovernanceModule } from './governance';
+export { createPriceAlert, getPriceAlerts } from './alerts';
+export type { PriceAlertParams, PriceAlert } from './alerts';

@@ -72,6 +72,10 @@ export {
 export type { OptimalPath } from "@/modules/router";
 export type { TWAPObservation, TWAPResult } from "@/modules";
 
+// Price alerts
+export { createPriceAlert, getPriceAlerts } from "@/modules/alerts";
+export type { PriceAlertParams, PriceAlert } from "@/modules/alerts";
+
 // Utilities
 export {
   toSorobanAmount,
