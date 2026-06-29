@@ -11,3 +11,4 @@ export type { TreasuryModuleOptions } from './treasury';
 export { AlertModule } from './alerts';
 export { LeaderboardModule } from './leaderboard';
 export type { TraderRanking, GetTopTradersOptions } from './leaderboard';
+export { WebhookModule } from './webhooks';
