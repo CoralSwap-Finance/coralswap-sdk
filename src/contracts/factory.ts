@@ -26,7 +26,7 @@ export class FactoryClient {
    * Create a new FactoryClient.
    *
    * @param contractAddress - The Soroban contract address of the factory.
-   * @param rpcUrl - The Soroban RPC endpoint URL.
+   * @param server - The Soroban RPC server instance.
    * @param networkPassphrase - The Stellar network passphrase.
    * @param retryOptions - Retry policy for RPC calls.
    * @param logger - Optional logger for debug/error output.

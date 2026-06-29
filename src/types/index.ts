@@ -8,3 +8,5 @@ export * from './events';
 export * from './tokens';
 export * from './gas';
 export * from './treasury';
+export * from './positions';
+export * from './portfolio';

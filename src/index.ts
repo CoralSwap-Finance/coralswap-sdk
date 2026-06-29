@@ -66,12 +66,22 @@ export {
   FlashLoanModule,
   FeeModule,
   OracleModule,
+  FactoryModule,
   TokenListModule,
   RouterModule,
   TreasuryModule,
+  PositionsModule,
+  PortfolioModule,
+  getPriceDeviation,
 } from "@/modules";
 export type { OptimalPath } from "@/modules/router";
-export type { TWAPObservation, TWAPResult } from "@/modules";
+export type {
+  DeviationResult,
+  GetPairOptions,
+  PriceFeed,
+  TWAPObservation,
+  TWAPResult,
+} from "@/modules";
 export type { TreasuryModuleOptions } from "@/modules";
 
 // Utilities
@@ -108,6 +118,8 @@ export {
   withRetry,
   isRetryable,
   sleep,
+  PollingStrategy,
+  TransactionPoller,
   validateAddress,
   validatePositiveAmount,
   validateNonNegativeAmount,
@@ -123,6 +135,9 @@ export {
 
 export type {
   RetryConfig,
+  RetryOptions,
+  CircuitBreakerOptions,
+  PollingOptions,
   SimulationResult,
   SimulationResourceEstimate,
   WaitNextLedgerOptions,

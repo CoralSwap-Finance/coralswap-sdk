@@ -7,7 +7,7 @@ import {
 import { validateAddress } from "@/utils/validation";
 
 /**
- * Positions module — tracks LP positions per address across CoralSwap pools.
+ * Positions module -- tracks LP positions per address across CoralSwap pools.
  *
  * Builds on top of the raw LPPosition data from the LiquidityModule and
  * enriches each position with pool token addresses, reserves, and fee state.
@@ -16,6 +16,17 @@ export class PositionsModule {
   private client: CoralSwapClient;
   private lpTokenCache: Map<string, string> = new Map();
 
+  /**
+   * Create a positions module bound to a CoralSwap client.
+   *
+   * @param client - SDK client used to read pair, LP token, and factory state.
+   * @returns A new PositionsModule instance.
+   * @throws Never throws during construction.
+   * @example
+   * ```ts
+   * const positions = new PositionsModule(client);
+   * ```
+   */
   constructor(client: CoralSwapClient) {
     this.client = client;
   }
@@ -23,11 +34,28 @@ export class PositionsModule {
   /**
    * Get a single enriched LP position for an owner in a specific pair.
    *
-   * @param pairAddress - The address of the pair contract
-   * @param owner - The wallet address to query
-   * @returns Enriched LP position with token metadata and reserves
+   * The LP share and token amounts are calculated from on-chain LP supply:
+   *
+   * `share = lpBalance / totalSupply`
+   *
+   * `token0Amount = reserve0 * lpBalance / totalSupply`
+   *
+   * `token1Amount = reserve1 * lpBalance / totalSupply`
+   *
+   * When total supply is zero, share and token amounts are returned as zero.
+   *
+   * @param pairAddress - The address of the pair contract.
+   * @param owner - The wallet address to query.
+   * @returns Enriched LP position with token metadata, reserve data, fee state, share, and underlying token amounts.
+   * @throws {ValidationError} If `pairAddress` or `owner` is not a valid Stellar address.
+   * @throws If pair, LP token, reserve, token metadata, or balance RPC calls fail.
    * @example
-   * const pos = await sdk.positions.getPosition('C...pair', 'G...wallet');
+   * ```ts
+   * const positions = new PositionsModule(client);
+   * const pos = await positions.getPosition("C...pair", "G...wallet");
+   *
+   * console.log(pos.share, pos.token0Amount, pos.token1Amount);
+   * ```
    */
   async getPosition(
     pairAddress: string,
@@ -84,13 +112,25 @@ export class PositionsModule {
   /**
    * Get all LP positions for an owner across multiple pairs.
    *
-   * @param owner - The wallet address to query
-   * @param options - Optional filters: includeEmpty, pairAddresses
-   * @returns A PositionSummary with all matching positions
+   * When `pairAddresses` is omitted, all known pairs from the factory are
+   * queried. Individual pair query failures are skipped so one unavailable pool
+   * does not prevent returning the rest of the portfolio.
+   *
+   * @param owner - The wallet address to query.
+   * @param options - Optional filters controlling zero-balance inclusion and pair selection.
+   * @returns A PositionSummary with all matching positions and the number of returned pools.
+   * @throws {ValidationError} If `owner` is not a valid Stellar address.
+   * @throws If factory pair discovery fails when `options.pairAddresses` is omitted.
    * @example
-   * const summary = await sdk.positions.getPositions('G...wallet');
-   * const summary = await sdk.positions.getPositions('G...wallet', { includeEmpty: true });
-   * const summary = await sdk.positions.getPositions('G...wallet', { pairAddresses: ['C...'] });
+   * ```ts
+   * const positions = new PositionsModule(client);
+   *
+   * const active = await positions.getPositions("G...wallet");
+   * const all = await positions.getPositions("G...wallet", { includeEmpty: true });
+   * const filtered = await positions.getPositions("G...wallet", {
+   *   pairAddresses: ["C...pair"],
+   * });
+   * ```
    */
   async getPositions(
     owner: string,
@@ -133,9 +173,16 @@ export class PositionsModule {
   /**
    * Check whether an address holds any LP tokens in a given pair.
    *
-   * @param pairAddress - The pair contract address
-   * @param owner - The wallet address to check
-   * @returns true if the owner has a non-zero LP balance
+   * @param pairAddress - The pair contract address.
+   * @param owner - The wallet address to check.
+   * @returns `true` if the owner has a non-zero LP balance; otherwise `false`.
+   * @throws {ValidationError} If `pairAddress` or `owner` is not a valid Stellar address.
+   * @throws If pair or LP token balance RPC calls fail.
+   * @example
+   * ```ts
+   * const positions = new PositionsModule(client);
+   * const hasPosition = await positions.hasPosition("C...pair", "G...wallet");
+   * ```
    */
   async hasPosition(pairAddress: string, owner: string): Promise<boolean> {
     validateAddress(pairAddress, "pairAddress");
