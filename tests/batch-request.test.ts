@@ -4,7 +4,7 @@
  * All tests use only in-memory mock functions — no real network calls.
  */
 
-import { batchRequest, batchRequestOrThrow } from '../src/utils/batch-request';
+import { batchRequest, batchRequestOrThrow, batchCall, batchCallSequential, DEFAULT_BATCH_CONCURRENCY } from '../src/utils/batch-request';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -273,5 +273,136 @@ describe('batchRequestOrThrow()', () => {
     const results = await batchRequestOrThrow(tasks);
 
     expect(results).toEqual([10, 20, 30]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// batchCall()
+// ---------------------------------------------------------------------------
+
+describe('batchCall()', () => {
+  it('DEFAULT_BATCH_CONCURRENCY is 5', () => {
+    expect(DEFAULT_BATCH_CONCURRENCY).toBe(5);
+  });
+
+  it('returns results in input order for successful calls', async () => {
+    const calls = [makeTask('a'), makeTask('b'), makeTask('c')];
+    const results = await batchCall(calls);
+
+    expect(results).toEqual([
+      { status: 'fulfilled', value: 'a' },
+      { status: 'fulfilled', value: 'b' },
+      { status: 'fulfilled', value: 'c' },
+    ]);
+  });
+
+  it('failed calls do not abort remaining calls', async () => {
+    const ran = jest.fn();
+    const calls = [
+      makeFailingTask(new Error('oops')),
+      async () => { ran(); return 'ok'; },
+    ];
+
+    const results = await batchCall(calls);
+
+    expect(ran).toHaveBeenCalledTimes(1);
+    expect(results[0].status).toBe('rejected');
+    expect(results[1]).toEqual({ status: 'fulfilled', value: 'ok' });
+  });
+
+  it('respects concurrency limit via options override', async () => {
+    let running = 0;
+    let maxRunning = 0;
+    const calls = Array.from({ length: 10 }, () => async () => {
+      running++;
+      maxRunning = Math.max(maxRunning, running);
+      await Promise.resolve();
+      running--;
+      return true;
+    });
+
+    await batchCall(calls, { concurrency: 2 });
+
+    expect(maxRunning).toBeLessThanOrEqual(2);
+  });
+
+  it('defaults to concurrency 5 when not overridden', async () => {
+    let running = 0;
+    let maxRunning = 0;
+    // 10 tasks each yielding once — only 5 should run simultaneously by default
+    const calls = Array.from({ length: 10 }, () => async () => {
+      running++;
+      maxRunning = Math.max(maxRunning, running);
+      await Promise.resolve();
+      running--;
+      return true;
+    });
+
+    await batchCall(calls);
+
+    expect(maxRunning).toBeLessThanOrEqual(DEFAULT_BATCH_CONCURRENCY);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// batchCallSequential()
+// ---------------------------------------------------------------------------
+
+describe('batchCallSequential()', () => {
+  it('returns results in input order', async () => {
+    const calls = [makeTask(1), makeTask(2), makeTask(3)];
+    const results = await batchCallSequential(calls);
+
+    expect(results).toEqual([
+      { status: 'fulfilled', value: 1 },
+      { status: 'fulfilled', value: 2 },
+      { status: 'fulfilled', value: 3 },
+    ]);
+  });
+
+  it('executes calls strictly in order', async () => {
+    const order: number[] = [];
+    const calls = [0, 1, 2].map((i) => async () => { order.push(i); return i; });
+
+    await batchCallSequential(calls);
+
+    expect(order).toEqual([0, 1, 2]);
+  });
+
+  it('failed calls do not abort remaining calls', async () => {
+    const ran = jest.fn();
+    const calls = [
+      makeFailingTask(new Error('first')),
+      async () => { ran(); return 'second'; },
+      async () => { ran(); return 'third'; },
+    ];
+
+    const results = await batchCallSequential(calls);
+
+    expect(ran).toHaveBeenCalledTimes(2);
+    expect(results[0].status).toBe('rejected');
+    expect(results[1]).toEqual({ status: 'fulfilled', value: 'second' });
+    expect(results[2]).toEqual({ status: 'fulfilled', value: 'third' });
+  });
+
+  it('adds delay between calls when delayMs > 0', async () => {
+    const timestamps: number[] = [];
+    const delayMs = 20;
+    const calls = [0, 1, 2].map(() => async () => {
+      timestamps.push(Date.now());
+      return true;
+    });
+
+    await batchCallSequential(calls, delayMs);
+
+    expect(timestamps).toHaveLength(3);
+    // Each call should start at least delayMs after the previous
+    expect(timestamps[1] - timestamps[0]).toBeGreaterThanOrEqual(delayMs - 5);
+    expect(timestamps[2] - timestamps[1]).toBeGreaterThanOrEqual(delayMs - 5);
+  });
+
+  it('handles empty array', async () => {
+    const results = await batchCallSequential([]);
+    expect(results).toEqual([]);
   });
 });

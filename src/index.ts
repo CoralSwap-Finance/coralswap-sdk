@@ -119,6 +119,11 @@ export {
   EVENT_TOPICS,
   decodeEvents,
   decodeEventsFromXdr,
+  batchCall,
+  batchCallSequential,
+  batchRequest,
+  batchRequestOrThrow,
+  DEFAULT_BATCH_CONCURRENCY,
 } from './utils';
 
 
@@ -129,6 +134,8 @@ export type {
   WaitNextLedgerOptions,
   DecodeEventsOptions,
   SimulateFn,
+  BatchRequestOptions,
+  BatchResult,
 } from "./utils";
 
 // Errors

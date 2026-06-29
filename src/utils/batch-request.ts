@@ -88,3 +88,47 @@ export async function batchRequestOrThrow<T>(
 
   return results.map((r) => (r as Extract<BatchResult<T>, { status: 'fulfilled' }>).value);
 }
+
+/** Default concurrency for {@link batchCall}. */
+export const DEFAULT_BATCH_CONCURRENCY = 5;
+
+/**
+ * Execute `calls` in parallel with a default concurrency of 5.
+ * Failed calls are captured as `{ status: 'rejected' }` without aborting others.
+ * Results maintain input order.
+ *
+ * @example
+ * const results = await batchCall(pools.map(p => () => fetchReserves(p)));
+ */
+export function batchCall<T>(
+  calls: Array<() => Promise<T>>,
+  options: BatchRequestOptions = {},
+): Promise<BatchResult<T>[]> {
+  return batchRequest(calls, { concurrency: DEFAULT_BATCH_CONCURRENCY, ...options });
+}
+
+/**
+ * Execute `calls` one at a time, optionally waiting `delayMs` between each.
+ * Failed calls are captured as `{ status: 'rejected' }` without aborting others.
+ * Results maintain input order.
+ *
+ * @param delayMs - Milliseconds to wait between calls (default 0).
+ *
+ * @example
+ * const results = await batchCallSequential(calls, 100); // 100ms between each
+ */
+export async function batchCallSequential<T>(
+  calls: Array<() => Promise<T>>,
+  delayMs = 0,
+): Promise<BatchResult<T>[]> {
+  const results: BatchResult<T>[] = [];
+  for (let i = 0; i < calls.length; i++) {
+    if (i > 0 && delayMs > 0) await new Promise<void>((r) => setTimeout(r, delayMs));
+    try {
+      results.push({ status: 'fulfilled', value: await calls[i]() });
+    } catch (err) {
+      results.push({ status: 'rejected', reason: err });
+    }
+  }
+  return results;
+}
