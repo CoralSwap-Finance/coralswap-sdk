@@ -69,10 +69,12 @@ export {
   TokenListModule,
   RouterModule,
   TreasuryModule,
+  PortfolioModule,
 } from "@/modules";
 export type { OptimalPath } from "@/modules/router";
 export type { TWAPObservation, TWAPResult } from "@/modules";
 export type { TreasuryModuleOptions } from "@/modules";
+export type { GetPortfolioPnLOptions } from "@/modules";
 
 // Utilities
 export {
