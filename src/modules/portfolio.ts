@@ -1,6 +1,13 @@
 import { SorobanRpc } from "@stellar/stellar-sdk";
 import { CoralSwapClient } from "@/client";
-import { PortfolioPnL, PositionPnL } from "@/types/positions";
+import {
+  Portfolio,
+  PortfolioPosition,
+  PortfolioPnL,
+  PortfolioValue,
+  PositionPnL,
+  PositionValue,
+} from "@/types/positions";
 import { validateAddress } from "@/utils/validation";
 import { PositionsModule } from "./positions";
 
@@ -9,6 +16,32 @@ import { PositionsModule } from "./positions";
  * Callers can override via GetPortfolioPnLOptions.startLedger.
  */
 const DEFAULT_LOOKBACK_LEDGERS = 120_960;
+
+/** Approximate ledgers in 24 hours at ~5 s/ledger. */
+const LEDGERS_PER_24H = 17_280;
+
+const DECIMALS = 1e7; // Soroban standard: 7 decimal places
+
+/**
+ * Options for getPortfolio and getPortfolioValue.
+ */
+export interface GetPortfolioOptions {
+  /** Token address → current USD price. Missing tokens default to 0. */
+  tokenPricesUSD?: Record<string, number>;
+  /** Restrict to these pair addresses; defaults to all factory pairs. */
+  pairAddresses?: string[];
+}
+
+/**
+ * Options for getPortfolioValue (extends GetPortfolioOptions).
+ */
+export interface GetPortfolioValueOptions extends GetPortfolioOptions {
+  /**
+   * Ledger number to use as the 24 h window start.
+   * Defaults to (currentLedger − LEDGERS_PER_24H).
+   */
+  startLedger24h?: number;
+}
 
 /**
  * Options for getPortfolioPnL.
@@ -56,6 +89,136 @@ export class PortfolioModule {
   constructor(client: CoralSwapClient) {
     this.client = client;
     this.positions = new PositionsModule(client);
+  }
+
+  /**
+   * Return the current LP portfolio for `address` with per-position USD values.
+   *
+   * Only positions with a non-zero LP balance are included. Pass
+   * `tokenPricesUSD` to get meaningful USD figures; without it every
+   * `valueUSD` field is 0.
+   *
+   * @param address - Stellar account or contract address to query
+   * @param options - Optional price map and pair filter
+   * @returns Portfolio snapshot with totalValueUSD and per-position breakdown
+   *
+   * @example
+   * ```ts
+   * const portfolio = new PortfolioModule(client);
+   * const snap = await portfolio.getPortfolio('G...wallet', {
+   *   tokenPricesUSD: { 'CUSDC...': 1.0, 'CXLM...': 0.12 },
+   * });
+   * console.log(`Portfolio value: $${snap.totalValueUSD.toFixed(2)}`);
+   * ```
+   */
+  async getPortfolio(
+    address: string,
+    options: GetPortfolioOptions = {},
+  ): Promise<Portfolio> {
+    validateAddress(address, "address");
+
+    const { tokenPricesUSD = {}, pairAddresses } = options;
+
+    const summary = await this.positions.getPositions(address, { pairAddresses });
+
+    const positions: PortfolioPosition[] = summary.positions.map((pos) => {
+      const priceA = tokenPricesUSD[pos.token0] ?? 0;
+      const priceB = tokenPricesUSD[pos.token1] ?? 0;
+      const valueUSD =
+        pos.totalSupply > 0n
+          ? (Number(pos.balance) / Number(pos.totalSupply)) *
+            ((Number(pos.reserve0) / DECIMALS) * priceA +
+              (Number(pos.reserve1) / DECIMALS) * priceB)
+          : 0;
+
+      return {
+        pairAddress: pos.pairAddress,
+        token0: pos.token0,
+        token1: pos.token1,
+        balance: pos.balance,
+        totalSupply: pos.totalSupply,
+        share: pos.share,
+        token0Amount: pos.token0Amount,
+        token1Amount: pos.token1Amount,
+        reserve0: pos.reserve0,
+        reserve1: pos.reserve1,
+        valueUSD,
+      };
+    });
+
+    const totalValueUSD = positions.reduce((s, p) => s + p.valueUSD, 0);
+
+    return { owner: address, totalValueUSD, positions };
+  }
+
+  /**
+   * Return the total USD value of `address`'s LP portfolio with a 24 h
+   * activity delta.
+   *
+   * `change24hUSD` reflects net liquidity added minus removed in the last
+   * 24 hours (evaluated at current prices). It does not capture unrealised
+   * price-movement gains since on-chain historical prices are unavailable.
+   *
+   * All pairs are fetched concurrently — one call to `getCurrentLedger` and
+   * one `getEvents` call per pair for each event type.
+   *
+   * @param address - Stellar account or contract address to query
+   * @param options - Optional price map, pair filter, and 24 h window override
+   * @returns Portfolio value snapshot with 24 h change metrics
+   *
+   * @example
+   * ```ts
+   * const pv = await portfolio.getPortfolioValue('G...wallet', {
+   *   tokenPricesUSD: { 'CUSDC...': 1.0, 'CXLM...': 0.12 },
+   * });
+   * console.log(`24h change: $${pv.change24hUSD.toFixed(2)}`);
+   * ```
+   */
+  async getPortfolioValue(
+    address: string,
+    options: GetPortfolioValueOptions = {},
+  ): Promise<PortfolioValue> {
+    validateAddress(address, "address");
+
+    const { tokenPricesUSD = {}, pairAddresses } = options;
+
+    const portfolio = await this.getPortfolio(address, {
+      tokenPricesUSD,
+      pairAddresses,
+    });
+
+    if (portfolio.positions.length === 0) {
+      return { totalValueUSD: 0, change24hUSD: 0, change24hPercent: 0, positions: [] };
+    }
+
+    // Resolve 24h start ledger once (batch efficiency — single RPC call)
+    const startLedger24h =
+      options.startLedger24h ??
+      Math.max(0, (await this.client.getCurrentLedger()) - LEDGERS_PER_24H);
+
+    const posValueResults = await Promise.allSettled(
+      portfolio.positions.map((pos) =>
+        this.computePositionValue(
+          pos,
+          address,
+          tokenPricesUSD,
+          startLedger24h,
+        ),
+      ),
+    );
+
+    const positions: PositionValue[] = [];
+    for (const result of posValueResults) {
+      if (result.status === "fulfilled") positions.push(result.value);
+    }
+
+    const totalValueUSD = positions.reduce((s, p) => s + p.valueUSD, 0);
+    const totalChange24hUSD = positions.reduce((s, p) => s + p.change24hUSD, 0);
+    const baseValueUSD = totalValueUSD - totalChange24hUSD;
+    const change24hPercent =
+      baseValueUSD !== 0 ? (totalChange24hUSD / baseValueUSD) * 100 : 0;
+
+    return { totalValueUSD, change24hUSD: totalChange24hUSD, change24hPercent, positions };
   }
 
   /**
@@ -129,6 +292,41 @@ export class PortfolioModule {
   // ---------------------------------------------------------------------------
   // Private helpers
   // ---------------------------------------------------------------------------
+
+  private async computePositionValue(
+    pos: PortfolioPosition,
+    owner: string,
+    tokenPricesUSD: Record<string, number>,
+    startLedger24h: number,
+  ): Promise<PositionValue> {
+    const priceA = tokenPricesUSD[pos.token0] ?? 0;
+    const priceB = tokenPricesUSD[pos.token1] ?? 0;
+
+    const [addEvents, removeEvents] = await Promise.all([
+      this.fetchLiquidityEvents(pos.pairAddress, "add_liquidity", startLedger24h),
+      this.fetchLiquidityEvents(pos.pairAddress, "remove_liquidity", startLedger24h),
+    ]);
+
+    let addedValueUSD = 0;
+    for (const ev of addEvents.filter((e) => e.provider === owner)) {
+      addedValueUSD +=
+        (Number(ev.amountA) / DECIMALS) * priceA +
+        (Number(ev.amountB) / DECIMALS) * priceB;
+    }
+
+    let removedValueUSD = 0;
+    for (const ev of removeEvents.filter((e) => e.provider === owner)) {
+      removedValueUSD +=
+        (Number(ev.amountA) / DECIMALS) * priceA +
+        (Number(ev.amountB) / DECIMALS) * priceB;
+    }
+
+    return {
+      pairAddress: pos.pairAddress,
+      valueUSD: pos.valueUSD,
+      change24hUSD: addedValueUSD - removedValueUSD,
+    };
+  }
 
   private async resolveStartLedger(): Promise<number> {
     const current = await this.client.getCurrentLedger();

@@ -9,4 +9,8 @@ export { RouterModule } from './router';
 export { TreasuryModule } from './treasury';
 export type { TreasuryModuleOptions } from './treasury';
 export { PortfolioModule } from './portfolio';
-export type { GetPortfolioPnLOptions } from './portfolio';
+export type {
+  GetPortfolioOptions,
+  GetPortfolioValueOptions,
+  GetPortfolioPnLOptions,
+} from './portfolio';

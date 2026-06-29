@@ -74,7 +74,11 @@ export {
 export type { OptimalPath } from "@/modules/router";
 export type { TWAPObservation, TWAPResult } from "@/modules";
 export type { TreasuryModuleOptions } from "@/modules";
-export type { GetPortfolioPnLOptions } from "@/modules";
+export type {
+  GetPortfolioOptions,
+  GetPortfolioValueOptions,
+  GetPortfolioPnLOptions,
+} from "@/modules";
 
 // Utilities
 export {
