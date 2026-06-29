@@ -387,6 +387,12 @@ Add the following secrets to your repository (Settings → Secrets → Actions):
 | `TEST_TOKEN_A` | Testnet token A contract address |
 | `TEST_TOKEN_B` | Testnet token B contract address |
 
+## Architecture Decision Records
+
+- [ADR-001 Module Boundary Decisions](docs/adr/ADR-001-module-boundaries.md)
+- [ADR-002 Error Handling Strategy](docs/adr/ADR-002-error-handling.md)
+- [ADR-003 Caching Approach](docs/adr/ADR-003-caching-approach.md)
+
 ## License
 
 MIT
