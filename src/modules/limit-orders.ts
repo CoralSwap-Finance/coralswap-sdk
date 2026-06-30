@@ -1,4 +1,4 @@
-import { CoralSwapSDKError, mapContractError } from "./errors";
+import { CoralSwapSDKError } from "@/errors";
 import {
   Contract,
   SorobanRpc,
@@ -18,6 +18,7 @@ import {
 import { withRetry, RetryOptions } from '@/utils/retry';
 import { OrderNotFoundError, InvalidOperationError, ValidationError } from '@/errors';
 import { validateAddress, validatePositiveAmount, validateDistinctTokens } from '@/utils/validation';
+
 export function scValToString(val: xdr.ScVal | undefined): string {
   if (!val) throw new CoralSwapSDKError("Missing field");
   const tag = val.switch().name;
