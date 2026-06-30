@@ -16,5 +16,5 @@ export { LeaderboardModule } from './leaderboard';
 export type { TraderRanking, GetTopTradersOptions } from './leaderboard';
 export { WebhookModule } from './webhooks';
 export { TaxReportingModule } from './tax-reporting';
-export { RiskMetricsModule } from './risk-metrics';
 export { GovernanceModule } from './governance';
+export { MonitoringModule } from './monitoring';

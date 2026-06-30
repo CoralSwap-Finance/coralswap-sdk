@@ -74,13 +74,10 @@ export {
   StopLossModule,
   AlertModule,
   LeaderboardModule,
-  PortfolioModule,
-  RiskMetricsModule,
-  StopLossModule,
   WebhookModule,
   TaxReportingModule,
-  RiskMetricsModule,
   GovernanceModule,
+  MonitoringModule,
 } from "@/modules";
 export type { OptimalPath } from "@/modules/router";
 export type { TWAPObservation, TWAPResult, TraderRanking, GetTopTradersOptions } from "@/modules";
