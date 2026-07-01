@@ -80,9 +80,10 @@ export {
   LeaderboardModule,
   TaxReportingModule,
   GovernanceModule,
+  PortfolioModule,
 } from "@/modules";
 export type { OptimalPath } from "@/modules/router";
-export type { TWAPObservation, TWAPResult, TraderRanking, GetTopTradersOptions } from "@/modules";
+export type { TWAPObservation, TWAPResult, TraderRanking, GetTopTradersOptions, PortfolioModuleOptions } from "@/modules";
 export type { TreasuryModuleOptions } from "@/modules";
 
 // Utilities

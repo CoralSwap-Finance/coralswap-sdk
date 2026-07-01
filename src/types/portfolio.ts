@@ -72,3 +72,13 @@ export interface GetPortfolioOptions {
   /** Specific pair addresses to include; defaults to all factory pairs */
   pairAddresses?: string[];
 }
+
+/**
+ * Historical aggregated portfolio value and 24h performance change.
+ */
+export interface PortfolioValue {
+  totalUSD: number;
+  change24h: number;
+  change24hPercent: number;
+}
+

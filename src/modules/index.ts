@@ -25,3 +25,5 @@ export { LeaderboardModule } from './leaderboard';
 export type { TraderRanking, GetTopTradersOptions } from './leaderboard';
 export { TaxReportingModule } from './tax-reporting';
 export { GovernanceModule } from './governance';
+export { PortfolioModule } from './portfolio';
+export type { PortfolioModuleOptions } from './portfolio';
