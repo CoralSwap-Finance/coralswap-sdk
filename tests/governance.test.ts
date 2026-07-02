@@ -141,7 +141,7 @@ describe('GovernanceModule', () => {
 
       await expect(
         governance.createProposal('', 'Description', actions, mockSigner),
-      ).rejects.toThrow('title must not be empty');
+      ).rejects.toThrow('title must be at least 1 character(s), got 0');
     });
 
     it('throws ValidationError when description is empty', async () => {
@@ -187,6 +187,12 @@ describe('GovernanceModule', () => {
   // -------------------------------------------------------------------------
 
   describe('castVote()', () => {
+    beforeEach(() => {
+      jest
+        .spyOn(client, 'simulateTransaction')
+        .mockResolvedValue(makeSimResult(makeProposalNative()) as never);
+    });
+
     it('returns a tx hash when vote is cast successfully', async () => {
       jest.spyOn(client, 'submitTransaction').mockResolvedValue({
         success: true,

@@ -17,7 +17,7 @@ import {
 } from '@/types/limit-orders';
 import { withRetry, RetryOptions } from '@/utils/retry';
 import { OrderNotFoundError, InvalidOperationError, ValidationError } from '@/errors';
-import { validateAddress, validatePositiveAmount } from '@/utils/validation';
+import { validateAddress, validatePositiveAmount, validateDistinctTokens } from '@/utils/validation';
 export function scValToString(val: xdr.ScVal | undefined): string {
   if (!val) throw new CoralSwapSDKError("Missing field");
   const tag = val.switch().name;
@@ -186,6 +186,12 @@ export class LimitOrderModule {
     client: CoralSwapClient,
     contractAddress?: string,
   ) {
+    if (!client || typeof client !== 'object') {
+      throw new ValidationError('client must be a valid CoralSwapClient instance');
+    }
+    if (contractAddress !== undefined) {
+      validateAddress(contractAddress, 'contractAddress');
+    }
     this.client = client;
     const address = contractAddress ?? client.networkConfig.limitOrderAddress;
     if (!address) {
@@ -204,8 +210,8 @@ export class LimitOrderModule {
   }
 
   async getLimitOrderStatus(orderId: string): Promise<OrderStatus> {
-    if (!orderId || typeof orderId !== 'string') {
-      throw new CoralSwapSDKError('orderId must be a non-empty string');
+    if (!orderId || typeof orderId !== 'string' || orderId.trim().length === 0) {
+      throw new ValidationError('orderId must be a non-empty string', { orderId });
     }
 
     const op = this.contract.call(
@@ -248,6 +254,15 @@ export class LimitOrderModule {
     callback: (status: OrderStatus) => void,
     intervalMs?: number,
   ): () => void {
+    if (!orderId || typeof orderId !== 'string' || orderId.trim().length === 0) {
+      throw new ValidationError('orderId must be a non-empty string', { orderId });
+    }
+    if (typeof callback !== 'function') {
+      throw new ValidationError('callback must be a function');
+    }
+    if (intervalMs !== undefined && (typeof intervalMs !== 'number' || isNaN(intervalMs) || !isFinite(intervalMs) || intervalMs <= 0)) {
+      throw new ValidationError('intervalMs must be a positive number', { intervalMs });
+    }
     const interval = intervalMs ?? 5000;
     let active = true;
 
@@ -272,8 +287,11 @@ export class LimitOrderModule {
   }
 
   async cancelLimitOrder(orderId: string, signer?: string): Promise<CancelResult> {
-    if (!orderId || typeof orderId !== 'string') {
-      throw new CoralSwapSDKError('orderId must be a non-empty string');
+    if (!orderId || typeof orderId !== 'string' || orderId.trim().length === 0) {
+      throw new ValidationError('orderId must be a non-empty string', { orderId });
+    }
+    if (signer !== undefined) {
+      validateAddress(signer, 'signer');
     }
 
     const status = await this.getLimitOrderStatus(orderId);
@@ -345,7 +363,10 @@ export class LimitOrderModule {
   }
 
   async placeLimitOrder(params: LimitOrderParams, signer?: string): Promise<PlaceLimitOrderResult> {
-    if (!params.targetPrice || params.targetPrice <= 0) {
+    if (!params || typeof params !== 'object') {
+      throw new ValidationError('params must be a valid object');
+    }
+    if (typeof params.targetPrice !== 'number' || isNaN(params.targetPrice) || !isFinite(params.targetPrice) || params.targetPrice <= 0) {
       throw new ValidationError('targetPrice must be positive', { targetPrice: params.targetPrice });
     }
     if (params.targetPrice > 1_000_000) {
@@ -353,7 +374,7 @@ export class LimitOrderModule {
         targetPrice: params.targetPrice,
       });
     }
-    if (!params.expiry || params.expiry <= Math.floor(Date.now() / 1000)) {
+    if (typeof params.expiry !== 'number' || isNaN(params.expiry) || !isFinite(params.expiry) || params.expiry <= Math.floor(Date.now() / 1000)) {
       throw new ValidationError('expiry must be a Unix timestamp in the future', {
         expiry: params.expiry,
       });
@@ -361,8 +382,23 @@ export class LimitOrderModule {
 
     validateAddress(params.tokenIn, 'tokenIn');
     validateAddress(params.tokenOut, 'tokenOut');
+    validateDistinctTokens(params.tokenIn, params.tokenOut);
     validateAddress(params.pairAddress, 'pairAddress');
     validatePositiveAmount(params.amountIn, 'amountIn');
+
+    if (signer !== undefined) {
+      validateAddress(signer, 'signer');
+    }
+
+    if (typeof this.client.getPairAddress === 'function') {
+      const onChainPair = await this.client.getPairAddress(params.tokenIn, params.tokenOut);
+      if (!onChainPair || onChainPair !== params.pairAddress) {
+        throw new ValidationError(
+          `Pair address ${params.pairAddress} does not exist on-chain or does not match tokens ${params.tokenIn} and ${params.tokenOut}`,
+          { pairAddress: params.pairAddress, tokenIn: params.tokenIn, tokenOut: params.tokenOut, onChainPair },
+        );
+      }
+    }
 
     const orderSigner = signer ?? this.client.publicKey;
 
@@ -418,8 +454,8 @@ export class LimitOrderModule {
   }
 
   async getLimitOrder(orderId: string): Promise<LimitOrderDetails> {
-    if (!orderId || typeof orderId !== 'string') {
-      throw new CoralSwapSDKError('orderId must be a non-empty string');
+    if (!orderId || typeof orderId !== 'string' || orderId.trim().length === 0) {
+      throw new ValidationError('orderId must be a non-empty string', { orderId });
     }
 
     const op = this.contract.call(

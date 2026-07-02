@@ -26,7 +26,7 @@ import {
   xdr,
 } from '@stellar/stellar-sdk';
 
-type DecodedStopLossOrder = Omit<StopLossOrder, 'currentPrice' | 'triggered'>;
+type DecodedStopLossOrder = Omit<StopLossOrder, 'currentPrice' | 'triggered' | 'distancePercent'>;
 
 interface OraclePriceSnapshot {
   price: bigint;
@@ -248,7 +248,7 @@ export class StopLossModule {
     options: TriggerEvaluationOptions = {},
   ): Promise<boolean> {
     const snapshot = await this.getOraclePrice(order.oracleAsset);
-    this.assertOracleFresh(snapshot, options.staleAfterMs);
+    this.assertOracleFresh(snapshot, order.oracleAsset, options.staleAfterMs);
     return snapshot.price <= order.triggerPrice;
   }
 
@@ -341,6 +341,7 @@ export class StopLossModule {
 
   private assertOracleFresh(
     snapshot: OraclePriceSnapshot,
+    asset: string,
     staleAfterMs?: number,
   ): void {
     if (staleAfterMs === undefined || snapshot.timestamp === undefined) {
@@ -349,7 +350,7 @@ export class StopLossModule {
 
     const ageMs = Date.now() - snapshot.timestamp;
     if (ageMs > staleAfterMs) {
-      throw new StaleOracleError(snapshot.timestamp, staleAfterMs);
+      throw new StaleOracleError(asset, snapshot.timestamp, staleAfterMs);
     }
   }
 

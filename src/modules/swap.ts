@@ -4,6 +4,8 @@ import { SwapRequest, SwapQuote, SwapResult, HopResult, SwapHistoryFilter, SwapH
 import { PRECISION, DEFAULTS } from '../config';
 import { PairNotFoundError, ValidationError, InsufficientLiquidityError, TransactionError } from '../errors';
 import { PairClient } from '@/contracts/pair';
+import { validateAddress } from '@/utils/validation';
+import { SorobanRpc } from '@stellar/stellar-sdk';
 import { SwapEvent } from '../types/events';
 import { validateAddress } from '../utils/validation';
 import { EventParser } from '../utils/events';
@@ -457,6 +459,27 @@ export class SwapModule {
   }
 
   /**
+   * Fetch swap history for a given pair and/or user.
+   *
+   * @param filter - Filter parameters: pairAddress, userAddress, fromLedger, toLedger, limit
+   * @returns An array of parsed SwapHistoryEvent objects.
+   */
+  async getSwapHistory(filter: SwapHistoryFilter = {}): Promise<SwapHistoryEvent[]> {
+    const currentLedger = await this.client.getCurrentLedger();
+    const fromLedger = filter.fromLedger ?? Math.max(0, currentLedger - 1000);
+    const toLedger = filter.toLedger ?? currentLedger;
+
+    if (fromLedger > toLedger) {
+      throw new ValidationError(`fromLedger (${fromLedger}) must not be greater than toLedger (${toLedger})`);
+    }
+
+    if (filter.pairAddress) {
+      validateAddress(filter.pairAddress, "pairAddress");
+    }
+    if (filter.userAddress) {
+      validateAddress(filter.userAddress, "userAddress");
+    }
+
    * Fetch swap history.
    *
    * Uses the Soroban RPC `getEvents` endpoint to fetch on-chain swap events
@@ -500,6 +523,140 @@ export class SwapModule {
       startLedger: fromLedger,
       filters: [
         {
+          type: "contract",
+          contractIds: filter.pairAddress ? [filter.pairAddress] : [],
+          topics: [["swap"]],
+        },
+      ],
+      limit: filter.limit ?? 200,
+    };
+
+    const response = await this.client.server.getEvents(request);
+    if (!response || !Array.isArray(response.events)) return [];
+
+    const events: SwapHistoryEvent[] = [];
+
+    for (const ev of response.events) {
+      // Skip events beyond toLedger
+      if (ev.ledger > toLedger) continue;
+
+      // Skip non-swap topics
+      const topicName = ev.topic?.[0] ? decodeScValString(ev.topic[0]) : "";
+      if (topicName !== "swap") continue;
+
+      if (!ev.value) continue;
+
+      const data = decodeMapEvent(ev.value);
+      if (!data) continue;
+
+      const sender = readAddress(data, "sender");
+      if (!sender) continue;
+
+      // Filter by userAddress if specified
+      if (filter.userAddress && sender !== filter.userAddress) continue;
+
+      const amountIn = readI128(data, "amount_in");
+      const amountOut = readI128(data, "amount_out");
+      const tokenIn = readAddress(data, "token_in");
+      const tokenOut = readAddress(data, "token_out");
+      const feeBps = readU32(data, "fee_bps");
+
+      if (
+        amountIn === undefined ||
+        amountOut === undefined ||
+        !tokenIn ||
+        !tokenOut ||
+        feeBps === undefined
+      ) {
+        continue;
+      }
+
+      const timestamp = ev.ledgerClosedAt
+        ? Math.floor(new Date(ev.ledgerClosedAt).getTime() / 1000)
+        : Math.floor(Date.now() / 1000);
+
+      events.push({
+        txHash: ev.txHash ?? "",
+        amountIn,
+        amountOut,
+        tokenIn,
+        tokenOut,
+        sender,
+        pairAddress: ev.contractId?.toString() ?? "",
+        ledger: ev.ledger,
+        timestamp,
+        feeBps,
+      });
+    }
+
+    // Limit the results
+    return events.slice(0, filter.limit ?? 200);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Event Decoding Helpers
+// ---------------------------------------------------------------------------
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function decodeMapEvent(value: any): Map<string, any> | null {
+  const entries: unknown[] =
+    typeof value?.map === "function" ? value.map() : value?._value;
+  if (!Array.isArray(entries)) return null;
+
+  const map = new Map<string, unknown>();
+  for (const entry of entries as Array<{ key: unknown; val: unknown }>) {
+    const k = entry.key as Record<string, () => { toString(): string }>;
+    let key: string | undefined;
+    try {
+      key = k.sym?.().toString() ?? k.str?.().toString();
+    } catch { /* skip */ }
+    if (key) map.set(key, entry.val);
+  }
+  return map as Map<string, unknown>;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function readAddress(map: Map<string, any>, key: string): string | undefined {
+  const val = map.get(key);
+  if (!val) return undefined;
+  try {
+    if (typeof val.address === "function") return val.address().toString();
+    if (typeof val._value?.toString === "function") return val._value.toString();
+  } catch { /* skip */ }
+  return undefined;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function readI128(map: Map<string, any>, key: string): bigint | undefined {
+  const val = map.get(key);
+  if (!val) return undefined;
+  try {
+    if (typeof val.i128 === "function") {
+      const parts = val.i128();
+      return (BigInt(parts.hi().toString()) << 64n) + BigInt(parts.lo().toString());
+    }
+  } catch { /* skip */ }
+  return undefined;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function readU32(map: Map<string, any>, key: string): number | undefined {
+  const val = map.get(key);
+  if (!val) return undefined;
+  try {
+    if (typeof val.u32 === "function") return val.u32();
+  } catch { /* skip */ }
+  return undefined;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function decodeScValString(val: any): string {
+  if (!val) return "";
+  if (typeof val === "string") return val;
+  if (typeof val.sym === "function") return val.sym().toString();
+  if (typeof val.str === "function") return val.str().toString();
+  return val.toString();
           type: 'contract',
           contractIds: pairAddress ? [pairAddress] : [],
           topics: [['swap']],

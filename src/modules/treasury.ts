@@ -40,6 +40,11 @@ export class TreasuryModule {
     this.stableSet = new Set(options.stableAddresses ?? []);
   }
 
+  /** Expose stablecoin addresses for subclasses. */
+  protected get stableAddresses(): ReadonlySet<string> {
+    return this.stableSet;
+  }
+
   /**
    * Return the treasury contract address (the protocol fee recipient).
    *

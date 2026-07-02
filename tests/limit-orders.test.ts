@@ -662,6 +662,32 @@ describe('LimitOrderModule', () => {
       ).rejects.toThrow(ValidationError);
     });
 
+    it('throws ValidationError for negative amountIn', async () => {
+      await expect(
+        module.placeLimitOrder({ ...validParams, amountIn: -100n }),
+      ).rejects.toThrow(ValidationError);
+    });
+
+    it('throws ValidationError for same-token swaps', async () => {
+      await expect(
+        module.placeLimitOrder({ ...validParams, tokenOut: TOKEN_IN }),
+      ).rejects.toThrow(ValidationError);
+    });
+
+    it('throws ValidationError when pair address does not exist on-chain', async () => {
+      mockClient.getPairAddress = jest.fn().mockResolvedValue(null);
+      await expect(
+        module.placeLimitOrder(validParams),
+      ).rejects.toThrow(ValidationError);
+    });
+
+    it('throws ValidationError when pair address does not match on-chain pair', async () => {
+      mockClient.getPairAddress = jest.fn().mockResolvedValue('CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM');
+      await expect(
+        module.placeLimitOrder(validParams),
+      ).rejects.toThrow(ValidationError);
+    });
+
     it('throws when simulation fails', async () => {
       mockServer.simulateTransaction.mockResolvedValue({
         latestLedger: 0,

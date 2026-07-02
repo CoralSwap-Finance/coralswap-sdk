@@ -20,4 +20,7 @@ module.exports = {
       },
     ],
   },
+  transformIgnorePatterns: [
+    'node_modules/(?!(@stellar/stellar-sdk|@noble/hashes|zod)/)',
+  ],
 };

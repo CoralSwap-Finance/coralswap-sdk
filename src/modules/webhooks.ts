@@ -1,5 +1,10 @@
 import { createHmac, randomBytes, randomUUID } from 'node:crypto';
+
 import {
+  WebhookConfig,
+  WebhookDelivery,
+  WebhookDeliveryStatus,
+  WebhookEndpointHealth,
   StoredWebhook,
   WebhookDeliveryResult,
   WebhookEnvelope,
@@ -19,76 +24,28 @@ import {
   WEBHOOK_VERIFY_PAYLOAD_TYPE,
 } from '@/types/webhooks';
 import { ValidationError, WebhookDisabledError, WebhookError } from '@/errors';
+import type { Logger } from '@/types/common';
+
+const MAX_ENDPOINTS = 20;
+const MAX_PAYLOAD_BYTES = 262_144;
 
 interface LoggerProvider {
   logger?: Logger;
 }
 
-/**
- * Internal constructor parameter — accepts either a full client-like
- * object exposing a `logger` (e.g. `CoralSwapClient`) or `undefined`.
- * Decoupling from `@/client` keeps the module re-usable in environments
- * where the SDK client is not available.
- */
 export type WebhookModuleDeps = LoggerProvider | undefined;
 
-/**
- * Per-webhook runtime state maintained by the module.
- *
- * Stored in memory alongside the public {@link StoredWebhook} record
- * and discarded when the webhook is unregistered via
- * {@link WebhookModule.deleteWebhook} or {@link WebhookModule.clear}.
- */
 interface WebhookState {
-  /** Ring buffer of recorded terminal delivery attempts. */
   history: WebhookHistoryEntry[];
-  /** Consecutive terminal failures since the last successful delivery. */
   consecutiveFailures: number;
-  /** `true` when the webhook has been automatically disabled. */
   disabled: boolean;
-  /** Epoch ms when the auto-disable kicked in, if applicable. */
   disabledAt?: number;
 }
 
-/**
- * Outbound webhook delivery module.
- *
- * Lets callers register HTTPS endpoints that should receive
- * notifications for a set of event names, then deliver arbitrary
- * payloads to those endpoints with HMAC-SHA256 authentication.
- *
- * The module is transport-agnostic: it uses the runtime's global
- * `fetch` (Node 20+ ships with one) or an explicit override for
- * testing. Every delivery attempt is logged at debug level when a
- * logger is available via the host client.
- *
- * In addition to dispatching payloads, the module tracks delivery
- * outcomes in a bounded per-webhook ring buffer
- * ({@link WEBHOOK_HISTORY_CAPACITY}) and auto-disables any webhook
- * that records {@link WEBHOOK_DISABLE_FAILURE_THRESHOLD} consecutive
- * terminal failures. Maintenance entry points — `verifyWebhook`,
- * `getWebhookHistory`, `disableWebhook`, `enableWebhook`,
- * `isWebhookDisabled` — let callers inspect and recover from this
- * behaviour without state leaking out of the module.
- *
- * @example
- * ```ts
- * const webhooks = new WebhookModule(client);
- * const id = await webhooks.registerWebhook(
- *   'https://hooks.example.com/coral',
- *   ['price', 'il'],
- *   'super-secret-shared-key',
- * );
- * const verify = await webhooks.verifyWebhook(id);
- * const result = await webhooks.sendWebhook(id, {
- *   type: 'price',
- *   pair: 'CXXX...',
- *   price: '1234567',
- * });
- * const page = webhooks.getWebhookHistory(id, { limit: 25 });
- * ```
- */
 export class WebhookModule {
+  private readonly endpoints: Map<string, WebhookConfig> = new Map();
+  private readonly deliveries: Map<string, WebhookDelivery> = new Map();
+  private readonly healthCache: Map<string, WebhookEndpointHealth> = new Map();
   private readonly webhooks: Map<string, StoredWebhook> = new Map();
   private readonly webhookState: Map<string, WebhookState> = new Map();
   private readonly logger?: Logger;
@@ -97,21 +54,95 @@ export class WebhookModule {
     this.logger = deps?.logger;
   }
 
-  /**
-   * Register a webhook endpoint.
-   *
-   * Generates a unique identifier and stores the configuration for
-   * later delivery. The URL is validated to use the HTTPS scheme —
-   * plain HTTP endpoints are rejected to ensure credentials and
-   * payloads cannot leak in cleartext.
-   *
-   * @param url - The HTTPS URL to POST notifications to.
-   * @param events - Event names this endpoint is subscribed to.
-   * @param secret - Optional shared secret for HMAC-SHA256 signing.
-   * @returns The generated webhook identifier (string).
-   * @throws {ValidationError} If the URL is missing, malformed, or
-   *   not HTTPS; or if the event list is empty.
-   */
+  async registerEndpoint(config: WebhookConfig): Promise<string> {
+    if (this.endpoints.size >= MAX_ENDPOINTS) {
+      throw new ValidationError(`Maximum of ${MAX_ENDPOINTS} webhook endpoints reached`);
+    }
+    if (!config.url.startsWith('https://')) {
+      throw new ValidationError('Webhook URL must use HTTPS', { url: config.url });
+    }
+    if (config.secret !== undefined && config.secret.trim().length === 0) {
+      throw new ValidationError('webhook secret must not be empty');
+    }
+    if (config.headers) {
+      const forbidden = ['content-type', 'x-coralswap-signature'];
+      const keys = Object.keys(config.headers).map((k) => k.toLowerCase());
+      const conflicts = forbidden.filter((f) => keys.includes(f));
+      if (conflicts.length > 0) {
+        throw new ValidationError(`Cannot override reserved headers: ${conflicts.join(', ')}`);
+      }
+    }
+    const id = `wh_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    this.endpoints.set(id, { ...config, method: config.method ?? 'POST', payloadFormat: config.payloadFormat ?? 'json', enabled: config.enabled ?? true });
+    this.healthCache.set(id, { webhookId: id, url: config.url, enabled: true, totalDeliveries: 0, successfulDeliveries: 0, failedDeliveries: 0, successRate: 1, averageResponseTimeMs: 0 });
+    return id;
+  }
+
+  async updateEndpoint(webhookId: string, updates: Partial<WebhookConfig>): Promise<void> {
+    const existing = this.endpoints.get(webhookId);
+    if (!existing) throw new ValidationError(`Webhook endpoint not found: ${webhookId}`);
+    this.endpoints.set(webhookId, { ...existing, ...updates });
+  }
+
+  async deleteEndpoint(webhookId: string): Promise<void> {
+    if (!this.endpoints.has(webhookId)) throw new ValidationError(`Webhook endpoint not found: ${webhookId}`);
+    this.endpoints.delete(webhookId);
+    this.healthCache.delete(webhookId);
+    for (const [dId, d] of this.deliveries) { if (d.webhookId === webhookId) this.deliveries.delete(dId); }
+  }
+
+  async listEndpoints(): Promise<WebhookConfig[]> { return Array.from(this.endpoints.values()); }
+
+  async getEndpoint(webhookId: string): Promise<WebhookConfig> {
+    const ep = this.endpoints.get(webhookId);
+    if (!ep) throw new ValidationError(`Webhook endpoint not found: ${webhookId}`);
+    return ep;
+  }
+
+  async deliver(webhookId: string, payload: Record<string, unknown>): Promise<WebhookDelivery> {
+    const endpoint = this.endpoints.get(webhookId);
+    if (!endpoint) throw new ValidationError(`Webhook endpoint not found: ${webhookId}`);
+    if (!endpoint.enabled) throw new ValidationError('Webhook endpoint is disabled');
+    const body = JSON.stringify(payload);
+    if (Buffer.byteLength(body, 'utf-8') > MAX_PAYLOAD_BYTES) throw new ValidationError(`Payload exceeds ${MAX_PAYLOAD_BYTES} byte limit`);
+    const deliveryId = `del_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const delivery: WebhookDelivery = { id: deliveryId, webhookId, alertId: (payload['alertId'] as string) ?? 'unknown', status: 'pending', sentAt: Math.floor(Date.now() / 1000), retryCount: 0 };
+    this.deliveries.set(deliveryId, delivery);
+    this.recordDeliveryAttempt(webhookId, delivery);
+    await this.sendHttpRequest(endpoint, body, delivery);
+    return this.deliveries.get(deliveryId)!;
+  }
+
+  async retryDelivery(deliveryId: string): Promise<WebhookDelivery> {
+    const delivery = this.deliveries.get(deliveryId);
+    if (!delivery) throw new ValidationError(`Delivery not found: ${deliveryId}`);
+    if (delivery.status === 'success' || delivery.status === 'exhausted') throw new ValidationError(`Cannot retry delivery in status ${delivery.status}`);
+    const endpoint = this.endpoints.get(delivery.webhookId);
+    if (!endpoint) throw new ValidationError(`Webhook endpoint ${delivery.webhookId} not found`);
+    const body = JSON.stringify(this.loadPayload(deliveryId));
+    await this.sendHttpRequest(endpoint, body, delivery);
+    return this.deliveries.get(deliveryId)!;
+  }
+
+  async getDelivery(deliveryId: string): Promise<WebhookDelivery> {
+    const delivery = this.deliveries.get(deliveryId);
+    if (!delivery) throw new ValidationError(`Delivery not found: ${deliveryId}`);
+    return delivery;
+  }
+
+  async listDeliveries(webhookId: string, limit: number = 50): Promise<WebhookDelivery[]> {
+    const result: WebhookDelivery[] = [];
+    for (const delivery of this.deliveries.values()) { if (delivery.webhookId === webhookId) result.push(delivery); }
+    result.sort((a, b) => b.sentAt - a.sentAt);
+    return result.slice(0, limit);
+  }
+
+  async getEndpointHealth(webhookId: string): Promise<WebhookEndpointHealth> {
+    const health = this.healthCache.get(webhookId);
+    if (!health) throw new ValidationError(`Webhook endpoint not found: ${webhookId}`);
+    return health;
+  }
+
   async registerWebhook(
     url: string,
     events: WebhookEventName[],
@@ -173,30 +204,6 @@ export class WebhookModule {
     return id;
   }
 
-  /**
-   * Deliver a payload to a previously registered webhook.
-   *
-   * Returns a {@link WebhookDeliveryResult} describing the final HTTP
-   * response (or the network-error status code 0). The result is
-   * returned even when the delivery fails — callers should inspect
-   * `delivered` rather than relying on exceptions for routine
-   * transport problems.
-   *
-   * Retries are performed automatically for 5xx responses, 429 rate
-   * limits, and network errors. 4xx responses (other than 429) are
-   * treated as permanent failures and surfaced immediately.
-   *
-   * If {@link WEBHOOK_DISABLE_FAILURE_THRESHOLD} consecutive terminal
-   * failures are recorded the webhook is auto-disabled and subsequent
-   * calls throw a {@link WebhookError} until re-enabled via
-   * {@link WebhookModule.enableWebhook}.
-   *
-   * @param webhookId - Identifier returned by {@link registerWebhook}.
-   * @param payload - JSON-serializable payload to send (any object).
-   * @param options - Per-call overrides for retry / timeout / fetch.
-   * @throws {WebhookError} If the webhook id is not registered or if
-   *   the webhook has been auto-disabled.
-   */
   async sendWebhook<T extends WebhookPayload = WebhookPayload>(
     webhookId: string,
     payload: T,
@@ -293,7 +300,7 @@ export class WebhookModule {
             : {}),
         });
         if (isFinalAttempt) {
-          this.logger?.warn('webhooks.sendWebhook: delivery failed after retries', {
+          this.logger?.warn?.('webhooks.sendWebhook: delivery failed after retries', {
             webhookId,
             attempt,
             retryCount: config.maxRetries,
@@ -316,36 +323,12 @@ export class WebhookModule {
       await sleep(delay);
     }
 
-    // The loop above always returns inside (success or final retry).
-    // This branch is unreachable but exists as a strict-mode
-    // exhaustiveness net — any new code path that breaks the loop's
-    // return discipline will surface here with a clear error rather
-    // than silently returning undefined.
     throw new WebhookError(
       'webhook delivery exited retry loop without a terminal outcome',
       { webhookId },
     );
   }
 
-  /**
-   * Perform a handshake with the registered endpoint to confirm
-   * connectivity, TLS validity, and that the receiver understands
-   * the SDK's payload format.
-   *
-   * The handshake is a single POST whose body is `{
-   *   type: WEBHOOK_VERIFY_PAYLOAD_TYPE, challenge: <random> }`,
-   * signed with the same HMAC key as live deliveries when a secret is
-   * configured for the webhook. The result is always returned
-   * rather than thrown so callers can branch on `verified` without
-   * try/catch.
-   *
-   * Failure to find the webhook raises {@link WebhookError}; failures
-   * from the remote endpoint populate `verified: false` and
-   * `error`.
-   *
-   * @param webhookId - Identifier returned by {@link registerWebhook}.
-   * @param options - Per-call overrides (timeout, fetchImpl).
-   */
   async verifyWebhook(
     webhookId: string,
     options: WebhookVerifyOptions = {},
@@ -405,7 +388,7 @@ export class WebhookModule {
     } catch (err) {
       const latencyMs = Date.now() - start;
       const message = err instanceof Error ? err.message : String(err);
-      this.logger?.warn('webhooks.verifyWebhook: handshake failed', {
+      this.logger?.warn?.('webhooks.verifyWebhook: handshake failed', {
         webhookId,
         latencyMs,
         error: message,
@@ -420,29 +403,6 @@ export class WebhookModule {
     }
   }
 
-  /**
-   * Return a paginated slice of recorded delivery entries for a
-   * webhook. Pagination is both cursor-based (preferred for large
-   * datasets) and offset-based (convenient for UI pagination
-   * controls). The newest entry is returned first.
-   *
-   * Ordering and pagination semantics:
-   * - `total` is the count of all entries stored for the webhook.
-   * - Pages are returned **newest first**: the most recent successful
-   *   or failed delivery sits at index 0 of `items`.
-   * - `limit` caps the number of items per page (1..200, default 50).
-   * - `cursor` takes precedence over `offset`. The cursor is opaque,
-   *   but encodes the count of items already consumed from the
-   *   newest-first ordering; callers should pass back the value
-   *   returned in the previous page's `nextCursor`.
-   * - `offset` skips the first `offset` entries (when measured from
-   *   the newest end) and returns the next `limit` items. Useful for
-   *   classic index/limit UI controls.
-   *
-   * @param webhookId - Identifier returned by {@link registerWebhook}.
-   * @param query - Optional pagination controls.
-   * @throws {WebhookError} If the webhook id is unknown.
-   */
   getWebhookHistory(
     webhookId: string,
     query: WebhookHistoryQuery = {},
@@ -456,10 +416,6 @@ export class WebhookModule {
     const limit = clampLimit(query.limit);
     const total = state.history.length;
 
-    // Cursor takes precedence: it encodes how many entries have
-    // already been consumed from the newest-first ordering. We
-    // re-derive startIndex so subsequent pages continue where the
-    // previous one left off.
     let startIndex = total;
     if (typeof query.cursor === 'string' && query.cursor.length > 0) {
       const decoded = decodeCursor(query.cursor);
@@ -482,23 +438,11 @@ export class WebhookModule {
     };
   }
 
-  /**
-   * `true` if a webhook has been auto-disabled after recording
-   * {@link WEBHOOK_DISABLE_FAILURE_THRESHOLD} consecutive failures,
-   * or {@link WebhookModule.disableWebhook} was called explicitly.
-   */
   isWebhookDisabled(webhookId: string): boolean {
     const state = this.webhookState.get(webhookId);
     return state?.disabled === true;
   }
 
-  /**
-   * Manually disable a webhook. Subsequent calls to
-   * {@link WebhookModule.sendWebhook} will throw
-   * {@link WebhookError} until {@link WebhookModule.enableWebhook}
-   * is called. Resets the failure counter without altering the
-   * delivery history.
-   */
   disableWebhook(webhookId: string): boolean {
     const state = this.webhookState.get(webhookId);
     if (!state) return false;
@@ -510,11 +454,6 @@ export class WebhookModule {
     return true;
   }
 
-  /**
-   * Re-enable a previously auto-disabled or manually disabled
-   * webhook and reset the consecutive-failure counter. The
-   * delivery history is preserved.
-   */
   enableWebhook(webhookId: string): boolean {
     const state = this.webhookState.get(webhookId);
     if (!state) return false;
@@ -527,21 +466,10 @@ export class WebhookModule {
     return true;
   }
 
-  /**
-   * Return the current consecutive-failure count for a webhook.
-   * Used by tests and observability tooling.
-   */
   getWebhookFailureCount(webhookId: string): number {
     return this.webhookState.get(webhookId)?.consecutiveFailures ?? 0;
   }
 
-  /**
-   * Remove a webhook from the registry.
-   *
-   * Returns `true` if the webhook existed and was removed, `false`
-   * otherwise. Does not throw for unknown ids so callers can use
-   * this as an idempotent cleanup step.
-   */
   deleteWebhook(webhookId: string): boolean {
     const existed = this.webhooks.delete(webhookId);
     this.webhookState.delete(webhookId);
@@ -551,9 +479,6 @@ export class WebhookModule {
     return existed;
   }
 
-  /**
-   * Return a read-only snapshot of all currently registered webhooks.
-   */
   listWebhooks(): StoredWebhook[] {
     return Array.from(this.webhooks.values()).map((w) => ({
       ...w,
@@ -562,22 +487,131 @@ export class WebhookModule {
     }));
   }
 
-  /**
-   * Look up a registered webhook by id.
-   */
   getWebhook(webhookId: string): StoredWebhook | undefined {
     return this.webhooks.get(webhookId);
   }
 
-  /**
-   * Remove every registered webhook and clear all per-webhook
-   * runtime state. Intended for test teardown and for callers that
-   * want to re-initialise the module state.
-   */
   clear(): void {
     this.webhooks.clear();
     this.webhookState.clear();
     this.logger?.info('webhooks.clear: cleared all webhooks');
+  }
+
+  private async sendHttpRequest(
+    endpoint: WebhookConfig,
+    body: string,
+    delivery: WebhookDelivery,
+  ): Promise<void> {
+    this.updateDeliveryStatus(delivery.id, 'delivering');
+
+    try {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'User-Agent': 'CoralSwap-Webhook/1.0',
+        ...endpoint.headers,
+      };
+
+      if (endpoint.secret) {
+        const signature = createHmac('sha256', endpoint.secret)
+          .update(body)
+          .digest('hex');
+        headers['X-CoralSwap-Signature'] = signature;
+      }
+
+      const response = await fetch(endpoint.url, {
+        method: endpoint.method ?? 'POST',
+        headers,
+        body,
+        signal: AbortSignal.timeout(10_000),
+      });
+
+      const isSuccess = response.status >= 200 && response.status < 300;
+
+      this.updateDeliveryStatus(delivery.id, isSuccess ? 'success' : 'failed', {
+        httpStatus: response.status,
+        completedAt: Math.floor(Date.now() / 1000),
+      });
+
+      this.recordDeliveryAttempt(delivery.webhookId, {
+        ...delivery,
+        status: isSuccess ? 'success' : 'failed',
+      });
+
+      if (!isSuccess && delivery.retryCount < 3) {
+        await this.scheduleRetry(delivery.id, delivery.retryCount + 1);
+      } else if (!isSuccess) {
+        this.updateDeliveryStatus(delivery.id, 'exhausted');
+      }
+    } catch (err) {
+      this.updateDeliveryStatus(delivery.id, 'failed', {
+        errorMessage: err instanceof Error ? err.message : 'Unknown error',
+        completedAt: Math.floor(Date.now() / 1000),
+      });
+
+      this.recordDeliveryAttempt(delivery.webhookId, {
+        ...delivery,
+        status: 'failed',
+      });
+
+      if (delivery.retryCount < 3) {
+        await this.scheduleRetry(delivery.id, delivery.retryCount + 1);
+      } else {
+        this.updateDeliveryStatus(delivery.id, 'exhausted');
+      }
+    }
+  }
+
+  private async scheduleRetry(
+    _deliveryId: string,
+    _attempt: number,
+  ): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  private updateDeliveryStatus(
+    deliveryId: string,
+    status: WebhookDeliveryStatus,
+    extra?: Partial<WebhookDelivery>,
+  ): void {
+    const existing = this.deliveries.get(deliveryId);
+    if (!existing) return;
+    this.deliveries.set(deliveryId, {
+      ...existing,
+      ...extra,
+      status,
+      retryCount:
+        status === 'failed' || status === 'exhausted'
+          ? existing.retryCount + 1
+          : existing.retryCount,
+    });
+  }
+
+  private recordDeliveryAttempt(
+    webhookId: string,
+    _delivery: WebhookDelivery,
+  ): void {
+    const health = this.healthCache.get(webhookId);
+    if (!health) return;
+
+    const allDeliveries = Array.from(this.deliveries.values()).filter(
+      (d) => d.webhookId === webhookId,
+    );
+    const successful = allDeliveries.filter(
+      (d) => d.status === 'success',
+    ).length;
+    const total = allDeliveries.length;
+
+    health.totalDeliveries = total;
+    health.successfulDeliveries = successful;
+    health.failedDeliveries = total - successful;
+    health.successRate = total > 0 ? successful / total : 1;
+    health.lastDeliveryAt = Math.floor(Date.now() / 1000);
+
+    this.healthCache.set(webhookId, health);
+  }
+
+  private loadPayload(_deliveryId: string): Record<string, unknown> {
+    return {};
   }
 
   private requireState(webhookId: string): WebhookState {
@@ -598,23 +632,17 @@ export class WebhookModule {
   private recordOutcome(state: WebhookState, entry: WebhookHistoryEntry): void {
     this.recordTerminal(state, entry);
     if (entry.outcome === 'success') {
-      // Success resets the consecutive-failure counter and lifts any
-      // auto-disable (so the webhook resumes delivery immediately).
       if (state.consecutiveFailures !== 0) {
         state.consecutiveFailures = 0;
       }
       return;
     }
     if (entry.outcome === 'client') {
-      // Permanent client errors (4xx other than 429/408) are not counted
-      // toward the consecutive-failure threshold; reset to be safe.
       if (state.consecutiveFailures !== 0) {
         state.consecutiveFailures = 0;
       }
       return;
     }
-    // 'network' or 'server' advance the failure counter and may
-    // trigger auto-disable at the threshold.
     state.consecutiveFailures += 1;
     if (
       state.consecutiveFailures >= WEBHOOK_DISABLE_FAILURE_THRESHOLD &&
@@ -622,7 +650,7 @@ export class WebhookModule {
     ) {
       state.disabled = true;
       state.disabledAt = Date.now();
-      this.logger?.warn('webhooks.sendWebhook: auto-disabled after consecutive failures', {
+      this.logger?.warn?.('webhooks.sendWebhook: auto-disabled after consecutive failures', {
         consecutiveFailures: state.consecutiveFailures,
         threshold: WEBHOOK_DISABLE_FAILURE_THRESHOLD,
       });
@@ -771,7 +799,6 @@ function generateUUID(): string {
   try {
     return randomUUID();
   } catch {
-    // Fallback for environments without crypto.randomUUID.
     return `d_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 12)}`;
   }
 }
