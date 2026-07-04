@@ -160,7 +160,7 @@ export function createRpcClient(latencyMs: number): CoralSwapClient {
     maxRetries: 0,
   });
 
-  (client as { server: typeof mock }).server = mock as never;
+  (client as unknown as { server: typeof mock }).server = mock;
   (client as { networkConfig: { factoryAddress: string; routerAddress: string } })
     .networkConfig.factoryAddress = FACTORY_ADDRESS;
   (client as { networkConfig: { routerAddress: string } }).networkConfig.routerAddress =
