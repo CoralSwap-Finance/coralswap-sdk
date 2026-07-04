@@ -15,3 +15,5 @@ export * from './stop-loss';
 export * from './risk-metrics';
 export * from './portfolio';
 export * from './governance';
+export * from './dca';
+export * from './limit-orders';
