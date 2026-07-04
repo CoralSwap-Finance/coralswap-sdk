@@ -2,6 +2,8 @@ import { CoralSwapClient } from "@/client";
 import { validateAddress } from "@/utils/validation";
 import { ValidationError } from "@/errors";
 import { SorobanRpc } from "@stellar/stellar-sdk";
+import { TreasuryModule, TreasuryModuleOptions } from "./treasury";
+import { SwapModule } from "./swap";
 
 export interface LeaderboardEntry {
   rank: number;
@@ -18,16 +20,67 @@ export interface LeaderboardOptions {
 }
 
 /**
- * Leaderboard module — ranks top LPs and traders by yield/volume.
- *
- * Interacts directly with Soroban contract events using the client RPC server
- * to compute real-time performance rankings.
+ * Rankings for a trader based on their swap activity.
  */
-export class LeaderboardModule {
-  private client: CoralSwapClient;
+export interface TraderRanking {
+  /** The wallet address of the trader. */
+  address: string;
+  /** Total volume traded in USD across all pairs. */
+  totalVolumeUSD: number;
+  /** Total number of trades executed (includes all swap types). */
+  tradeCount: number;
+  /** Average trade size in USD. */
+  avgTradeSize: number;
+  /** The pair contract address the trader interacted with most. */
+  favoritePool: string;
+  /** Percentage of swaps where output value > input value at time of trade (0-100). */
+  winRate: number;
+}
 
-  constructor(client: CoralSwapClient) {
-    this.client = client;
+/**
+ * Options for querying the top traders leaderboard.
+ */
+export interface GetTopTradersOptions {
+  /** The period in days to look back for swaps (defaults to 30). */
+  periodDays?: number;
+  /** Optional pool/pair address to restrict the query. */
+  pairAddress?: string;
+  /** Maximum number of top traders to return. */
+  limit?: number;
+  /** Optional custom stablecoin addresses to override the constructor ones. */
+  stableAddresses?: string[];
+  /** Optional starting ledger sequence override. */
+  fromLedger?: number;
+  /** Optional ending ledger sequence override. */
+  toLedger?: number;
+}
+
+const decimalsCache = new Map<string, number>();
+
+async function getTokenDecimals(client: CoralSwapClient, address: string): Promise<number> {
+  if (decimalsCache.has(address)) {
+    return decimalsCache.get(address)!;
+  }
+  try {
+    const meta = await client.lpToken(address).metadata();
+    decimalsCache.set(address, meta.decimals);
+    return meta.decimals;
+  } catch {
+    return 7; // standard fallback for Soroban
+  }
+}
+
+/**
+ * Leaderboard module — ranks top LPs and traders by yield/volume.
+ */
+export class LeaderboardModule extends TreasuryModule {
+  private readonly leaderboardClient: CoralSwapClient;
+  private readonly leaderboardStableSet: Set<string>;
+
+  constructor(client: CoralSwapClient, options: TreasuryModuleOptions = {}) {
+    super(client, options);
+    this.leaderboardClient = client;
+    this.leaderboardStableSet = new Set(options.stableAddresses ?? []);
   }
 
   /**
@@ -60,7 +113,7 @@ export class LeaderboardModule {
     if (period === "7d") periodLedgers = ledgersPerDay * 7;
     else if (period === "30d") periodLedgers = ledgersPerDay * 30;
 
-    const currentLedger = await this.client.getCurrentLedger();
+    const currentLedger = await this.leaderboardClient.getCurrentLedger();
     const startLedger = Math.max(0, currentLedger - periodLedgers - ledgersPerDay);
     const endLedger = currentLedger;
 
@@ -78,7 +131,7 @@ export class LeaderboardModule {
       limit: 1000,
     };
 
-    const response = await this.client.server.getEvents(request);
+    const response = await this.leaderboardClient.server.getEvents(request);
     if (!response || !Array.isArray(response.events)) return [];
 
     const currentMap = new Map<string, bigint>();
@@ -151,129 +204,6 @@ export class LeaderboardModule {
 
     const limit = options.limit ?? entries.length;
     return entries.slice(0, limit);
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Event Decoding Helpers
-// ---------------------------------------------------------------------------
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function decodeMapEvent(value: any): Map<string, any> | null {
-  const entries: unknown[] =
-    typeof value?.map === "function" ? value.map() : value?._value;
-  if (!Array.isArray(entries)) return null;
-
-  const map = new Map<string, unknown>();
-  for (const entry of entries as Array<{ key: unknown; val: unknown }>) {
-    const k = entry.key as Record<string, () => { toString(): string }>;
-    let key: string | undefined;
-    try {
-      key = k.sym?.().toString() ?? k.str?.().toString();
-    } catch { /* skip */ }
-    if (key) map.set(key, entry.val);
-  }
-  return map as Map<string, unknown>;
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function readAddress(map: Map<string, any>, key: string): string | undefined {
-  const val = map.get(key);
-  if (!val) return undefined;
-  try {
-    if (typeof val.address === "function") return val.address().toString();
-    if (typeof val._value?.toString === "function") return val._value.toString();
-  } catch { /* skip */ }
-  return undefined;
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function readI128(map: Map<string, any>, key: string): bigint | undefined {
-  const val = map.get(key);
-  if (!val) return undefined;
-  try {
-    if (typeof val.i128 === "function") {
-      const parts = val.i128();
-      return (BigInt(parts.hi().toString()) << 64n) + BigInt(parts.lo().toString());
-    }
-  } catch { /* skip */ }
-  return undefined;
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function decodeScValString(val: any): string {
-  if (!val) return "";
-  if (typeof val === "string") return val;
-  if (typeof val.sym === "function") return val.sym().toString();
-  if (typeof val.str === "function") return val.str().toString();
-  return val.toString();
-import { CoralSwapClient } from "../client";
-import { TreasuryModule, TreasuryModuleOptions } from "./treasury";
-import { SwapModule } from "./swap";
-import { validateAddress } from "../utils/validation";
-
-/**
- * Rankings for a trader based on their swap activity.
- */
-export interface TraderRanking {
-  /** The wallet address of the trader. */
-  address: string;
-  /** Total volume traded in USD across all pairs. */
-  totalVolumeUSD: number;
-  /** Total number of trades executed (includes all swap types). */
-  tradeCount: number;
-  /** Average trade size in USD. */
-  avgTradeSize: number;
-  /** The pair contract address the trader interacted with most. */
-  favoritePool: string;
-  /** Percentage of swaps where output value > input value at time of trade (0-100). */
-  winRate: number;
-}
-
-/**
- * Options for querying the top traders leaderboard.
- */
-export interface GetTopTradersOptions {
-  /** The period in days to look back for swaps (defaults to 30). */
-  periodDays?: number;
-  /** Optional pool/pair address to restrict the query. */
-  pairAddress?: string;
-  /** Maximum number of top traders to return. */
-  limit?: number;
-  /** Optional custom stablecoin addresses to override the constructor ones. */
-  stableAddresses?: string[];
-  /** Optional starting ledger sequence override. */
-  fromLedger?: number;
-  /** Optional ending ledger sequence override. */
-  toLedger?: number;
-}
-
-const decimalsCache = new Map<string, number>();
-
-async function getTokenDecimals(client: CoralSwapClient, address: string): Promise<number> {
-  if (decimalsCache.has(address)) {
-    return decimalsCache.get(address)!;
-  }
-  try {
-    const meta = await client.lpToken(address).metadata();
-    decimalsCache.set(address, meta.decimals);
-    return meta.decimals;
-  } catch {
-    return 7; // standard fallback for Soroban
-  }
-}
-
-/**
- * Leaderboard module -- ranks traders by swap volume and calculates stats.
- */
-export class LeaderboardModule extends TreasuryModule {
-  private readonly leaderboardClient: CoralSwapClient;
-  private readonly leaderboardStableSet: Set<string>;
-
-  constructor(client: CoralSwapClient, options: TreasuryModuleOptions = {}) {
-    super(client, options);
-    this.leaderboardClient = client;
-    this.leaderboardStableSet = new Set(options.stableAddresses ?? []);
   }
 
   /**
@@ -446,4 +376,59 @@ export class LeaderboardModule extends TreasuryModule {
 
     return prices;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Event Decoding Helpers
+// ---------------------------------------------------------------------------
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function decodeMapEvent(value: any): Map<string, any> | null {
+  const entries: unknown[] =
+    typeof value?.map === "function" ? value.map() : value?._value;
+  if (!Array.isArray(entries)) return null;
+
+  const map = new Map<string, unknown>();
+  for (const entry of entries as Array<{ key: unknown; val: unknown }>) {
+    const k = entry.key as Record<string, () => { toString(): string }>;
+    let key: string | undefined;
+    try {
+      key = k.sym?.().toString() ?? k.str?.().toString();
+    } catch { /* skip */ }
+    if (key) map.set(key, entry.val);
+  }
+  return map as Map<string, unknown>;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function readAddress(map: Map<string, any>, key: string): string | undefined {
+  const val = map.get(key);
+  if (!val) return undefined;
+  try {
+    if (typeof val.address === "function") return val.address().toString();
+    if (typeof val._value?.toString === "function") return val._value.toString();
+  } catch { /* skip */ }
+  return undefined;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function readI128(map: Map<string, any>, key: string): bigint | undefined {
+  const val = map.get(key);
+  if (!val) return undefined;
+  try {
+    if (typeof val.i128 === "function") {
+      const parts = val.i128();
+      return (BigInt(parts.hi().toString()) << 64n) + BigInt(parts.lo().toString());
+    }
+  } catch { /* skip */ }
+  return undefined;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function decodeScValString(val: any): string {
+  if (!val) return "";
+  if (typeof val === "string") return val;
+  if (typeof val.sym === "function") return val.sym().toString();
+  if (typeof val.str === "function") return val.str().toString();
+  return val.toString();
 }

@@ -524,6 +524,9 @@ describe("TaxReportingModule.getCapitalGains()", () => {
   });
 
   it("categorizes gains as short-term or long-term based on holding period", async () => {
+    jest.spyOn(client.server, "getEvents").mockResolvedValue(
+      mockEventsResponse([])
+    );
     const gains = await tax.getCapitalGains(USER, 2024);
     expect(gains.shortTermGains).toBeDefined();
     expect(gains.longTermGains).toBeDefined();

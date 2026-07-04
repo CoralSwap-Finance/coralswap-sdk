@@ -77,8 +77,9 @@ export class TransactionError extends CoralSwapSDKError {
     message: string,
     txHash?: string,
     details?: Record<string, unknown>,
+    code: string = "TRANSACTION_ERROR",
   ) {
-    super("TRANSACTION_ERROR", message, details);
+    super(code, message, details);
     this.name = "TransactionError";
     this.txHash = txHash;
   }
@@ -137,19 +138,6 @@ export class InsufficientLiquidityError extends CoralSwapSDKError {
   }
 }
 
-/**
- * Threshold value is invalid.
- */
-export class InvalidThresholdError extends CoralSwapSDKError {
-  constructor(alertType: string, value: number, min: number, max: number) {
-    super(
-      "INVALID_THRESHOLD",
-      `${alertType} threshold ${value} is out of range (${min}-${max})`,
-      { alertType, value, min, max },
-    );
-    this.name = "InvalidThresholdError";
-  }
-}
 
 /**
  * Pool not found for a token pair.
@@ -189,16 +177,33 @@ export class ValidationError extends CoralSwapSDKError {
 }
 
 /**
+ * Threshold value is invalid.
+ */
+export class InvalidThresholdError extends ValidationError {
+  constructor(alertType: string, value: number, min: number, max: number) {
+    super(
+      `${alertType} threshold ${value} is out of range (${min}-${max})`,
+      { alertType, value, min, max },
+    );
+    this.name = "InvalidThresholdError";
+  }
+}
+
+
+/**
  * Flash loan specific errors.
  *
  * When the contract emits a FlashLoanFailed event, the decoded details are
  * attached as `event` so callers can inspect borrowedAmount and reason without
  * manually parsing XDR.
  */
-export class FlashLoanError extends CoralSwapSDKError {
-  constructor(message: string, details?: Record<string, unknown>) {
-    super("FLASH_LOAN_ERROR", message, details);
+export class FlashLoanError extends TransactionError {
+  constructor(message: string, details?: Record<string, unknown>, txHash?: string) {
+    super(message, txHash, details, "FLASH_LOAN_ERROR");
     this.name = "FlashLoanError";
+    if (details) {
+      Object.assign(this, details);
+    }
   }
 }
 
@@ -317,9 +322,15 @@ export class StakingError extends CoralSwapSDKError {
  * Cooldown period has not elapsed.
  */
 export class CooldownError extends CoralSwapSDKError {
-  constructor(cooldownEnd: bigint) {
-    super("COOLDOWN_ERROR", `Cooldown period active until block ${cooldownEnd}`, { cooldownEnd });
+  readonly cooldownEnd: number;
+  readonly canWithdrawAt: Date;
+
+  constructor(cooldownEnd: bigint | number) {
+    const end = typeof cooldownEnd === "bigint" ? Number(cooldownEnd) : cooldownEnd;
+    super("COOLDOWN_ERROR", `Cooldown period active until block ${end}`, { cooldownEnd });
     this.name = "CooldownError";
+    this.cooldownEnd = end;
+    this.canWithdrawAt = new Date(end * 1000);
   }
 }
 
