@@ -3,6 +3,7 @@ import { LeaderboardModule } from "../src/modules/leaderboard";
 import { Network } from "../src/types/common";
 import { ValidationError } from "../src/errors";
 import { SorobanRpc } from "@stellar/stellar-sdk";
+import { SwapModule } from "../src/modules/swap";
 
 // ---------------------------------------------------------------------------
 // Shared test fixtures
@@ -14,6 +15,12 @@ const PAIR_B = "CBQHNAXSI55GX2GN6D67GK7BHVPSLJUGZQEU7WJ5LKR5PNUCGLIMAO4K";
 const USER_1 = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
 const USER_2 = "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5";
 const USER_3 = "GCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCWHF";
+
+const STABLE_ADDR = "CUSDC000000000000000000000000000000000000000000000000000000";
+const TOKEN_A     = "CTOKENA00000000000000000000000000000000000000000000000000";
+const TOKEN_B     = "CTOKENB00000000000000000000000000000000000000000000000000";
+const PAIR_1      = "CPAIR00000000000000000000000000000000000000000000000000001";
+const PAIR_2      = "CPAIR00000000000000000000000000000000000000000000000000002";
 
 // ---------------------------------------------------------------------------
 // Raw event builder helpers
@@ -105,27 +112,12 @@ function makeEventsResponse(
 }
 
 // ---------------------------------------------------------------------------
-// Test suite
+// Test suites
 // ---------------------------------------------------------------------------
 
 describe("LeaderboardModule.getLeaderboard()", () => {
   let client: CoralSwapClient;
   let leaderboard: LeaderboardModule;
-import { LeaderboardModule } from "../src/modules/leaderboard";
-import { SwapModule } from "../src/modules/swap";
-import { CoralSwapClient } from "../src/client";
-import { Network } from "../src/types/common";
-
-const STABLE_ADDR = "CUSDC000000000000000000000000000000000000000000000000000000";
-const TOKEN_A     = "CTOKENA00000000000000000000000000000000000000000000000000";
-const TOKEN_B     = "CTOKENB00000000000000000000000000000000000000000000000000";
-const PAIR_1      = "CPAIR00000000000000000000000000000000000000000000000000001";
-const PAIR_2      = "CPAIR00000000000000000000000000000000000000000000000000002";
-
-describe("LeaderboardModule.getTopTraders()", () => {
-  let client: CoralSwapClient;
-  let leaderboard: LeaderboardModule;
-  let getSwapHistorySpy: jest.SpyInstance;
 
   beforeEach(() => {
     client = new CoralSwapClient({
@@ -137,57 +129,12 @@ describe("LeaderboardModule.getTopTraders()", () => {
 
     // Default current ledger: 50000
     jest.spyOn(client, "getCurrentLedger").mockResolvedValue(50000);
-      secretKey: "SB6K2AINTGNYBFX4M7TRPGSKQ5RKNOXXWB7UZUHRYOVTM7REDUGECKZU",
-    });
-
-    leaderboard = new LeaderboardModule(client, { stableAddresses: [STABLE_ADDR] });
-
-    // Mock getCurrentLedger to return a fixed ledger sequence
-    jest.spyOn(client, "getCurrentLedger").mockResolvedValue(100000);
-
-    // Mock factory getter
-    jest.spyOn(client, "factory", "get").mockReturnValue({
-      getAllPairs: jest.fn().mockResolvedValue([PAIR_1, PAIR_2]),
-    } as any);
-
-    // Mock pair.getTokens and pair.getReserves
-    jest.spyOn(client, "pair").mockImplementation((pairAddr: string): any => {
-      if (pairAddr === PAIR_1) {
-        return {
-          getTokens: jest.fn().mockResolvedValue({ token0: STABLE_ADDR, token1: TOKEN_A }),
-          getReserves: jest.fn().mockResolvedValue({ reserve0: 1000000n, reserve1: 1000000n }), // 1:1 price
-        };
-      }
-      if (pairAddr === PAIR_2) {
-        return {
-          getTokens: jest.fn().mockResolvedValue({ token0: STABLE_ADDR, token1: TOKEN_B }),
-          getReserves: jest.fn().mockResolvedValue({ reserve0: 2000000n, reserve1: 1000000n }), // 2 USD per TOKEN_B
-        };
-      }
-      return {
-        getTokens: jest.fn().mockResolvedValue({ token0: TOKEN_A, token1: TOKEN_B }),
-        getReserves: jest.fn().mockResolvedValue({ reserve0: 1000000n, reserve1: 1000000n }),
-      };
-    });
-
-    // Mock lpToken metadata
-    jest.spyOn(client, "lpToken").mockImplementation((tokenAddr: string): any => {
-      return {
-        metadata: jest.fn().mockResolvedValue({
-          name: "Token",
-          symbol: "TKN",
-          decimals: 7,
-        }),
-      };
-    });
-
-    // Spy on SwapModule's getSwapHistory
-    getSwapHistorySpy = jest.spyOn(SwapModule.prototype, "getSwapHistory");
   });
 
   afterEach(() => {
     jest.restoreAllMocks();
   });
+
   describe("Validation & Options Check", () => {
     it("throws ValidationError for invalid type", async () => {
       await expect(
@@ -333,6 +280,69 @@ describe("LeaderboardModule.getTopTraders()", () => {
       expect(result[1].rank).toBe(2);
       expect(result[1].change24h).toBe(-25);
     });
+  });
+});
+
+describe("LeaderboardModule.getTopTraders()", () => {
+  let client: CoralSwapClient;
+  let leaderboard: LeaderboardModule;
+  let getSwapHistorySpy: jest.SpyInstance;
+
+  beforeEach(() => {
+    client = new CoralSwapClient({
+      network: Network.TESTNET,
+      secretKey: TEST_SECRET,
+    });
+
+    leaderboard = new LeaderboardModule(client, { stableAddresses: [STABLE_ADDR] });
+
+    // Mock getCurrentLedger to return a fixed ledger sequence
+    jest.spyOn(client, "getCurrentLedger").mockResolvedValue(100000);
+
+    // Mock factory getter
+    jest.spyOn(client, "factory", "get").mockReturnValue({
+      getAllPairs: jest.fn().mockResolvedValue([PAIR_1, PAIR_2]),
+    } as any);
+
+    // Mock pair.getTokens and pair.getReserves
+    jest.spyOn(client, "pair").mockImplementation((pairAddr: string): any => {
+      if (pairAddr === PAIR_1) {
+        return {
+          getTokens: jest.fn().mockResolvedValue({ token0: STABLE_ADDR, token1: TOKEN_A }),
+          getReserves: jest.fn().mockResolvedValue({ reserve0: 1000000n, reserve1: 1000000n }), // 1:1 price
+        };
+      }
+      if (pairAddr === PAIR_2) {
+        return {
+          getTokens: jest.fn().mockResolvedValue({ token0: STABLE_ADDR, token1: TOKEN_B }),
+          getReserves: jest.fn().mockResolvedValue({ reserve0: 2000000n, reserve1: 1000000n }), // 2 USD per TOKEN_B
+        };
+      }
+      return {
+        getTokens: jest.fn().mockResolvedValue({ token0: TOKEN_A, token1: TOKEN_B }),
+        getReserves: jest.fn().mockResolvedValue({ reserve0: 1000000n, reserve1: 1000000n }),
+      };
+    });
+
+    // Mock lpToken metadata
+    jest.spyOn(client, "lpToken").mockImplementation((tokenAddr: string): any => {
+      return {
+        metadata: jest.fn().mockResolvedValue({
+          name: "Token",
+          symbol: "TKN",
+          decimals: 7,
+        }),
+      };
+    });
+
+    // Spy on SwapModule's getSwapHistory
+    getSwapHistorySpy = jest.spyOn(SwapModule.prototype, "getSwapHistory");
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
   it("returns empty array if no swap events found", async () => {
     getSwapHistorySpy.mockResolvedValue([]);
     const result = await leaderboard.getTopTraders();

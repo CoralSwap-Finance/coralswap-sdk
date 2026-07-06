@@ -1,5 +1,6 @@
 export * from './common';
 export * from './pool';
+export * from './positions';
 export * from './swap';
 export * from './liquidity';
 export * from './flash-loan';
@@ -15,3 +16,5 @@ export * from './stop-loss';
 export * from './risk-metrics';
 export * from './portfolio';
 export * from './governance';
+export * from './dca';
+export * from './limit-orders';

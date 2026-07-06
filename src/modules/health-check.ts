@@ -337,8 +337,8 @@ export async function getContractStatus(
       ),
     ]);
 
-    const entry = (response as { latestLedger?: number });
-    const result = response as Record<string, unknown>;
+    const entry = response as any;
+    const result = response as any;
 
     if (!result || !('liveUntilLedgerSeq' in result) || (result.liveUntilLedgerSeq as number) <= 0) {
       return {

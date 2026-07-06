@@ -284,8 +284,8 @@ export class StopLossModule {
     const distancePercent =
       order.triggerPrice > 0n
         ? Number(
-            ((snapshot.price - order.triggerPrice) * 100n) / order.triggerPrice
-          )
+            ((snapshot.price - order.triggerPrice) * 10000n) / order.triggerPrice
+          ) / 100
         : 0;
     return {
       ...order,

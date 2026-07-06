@@ -19,9 +19,6 @@ export { RouterModule } from './router';
 export { TreasuryModule } from './treasury';
 export { StopLossModule } from './stop-loss';
 export type { TreasuryModuleOptions } from './treasury';
-export { LeaderboardModule } from './leaderboard';
-export type { LeaderboardEntry, LeaderboardOptions } from './leaderboard';
-export { AlertModule } from './alerts';
 export { AlertsModule, AlertModule } from './alerts';
 export { WebhookModule } from './webhooks';
 export { MonitoringModule } from './monitoring';
@@ -33,6 +30,9 @@ export type {
   UpdateAlertParams,
 } from './alerts';
 export { LeaderboardModule } from './leaderboard';
+export type { LeaderboardEntry, LeaderboardOptions } from './leaderboard';
 export type { TraderRanking, GetTopTradersOptions } from './leaderboard';
 export { TaxReportingModule } from './tax-reporting';
 export { GovernanceModule } from './governance';
+export { DCAModule } from './dca';
+export { LimitOrderModule } from './limit-orders';

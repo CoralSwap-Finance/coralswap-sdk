@@ -320,7 +320,6 @@ describe('LimitOrderModule', () => {
       const callback = jest.fn();
       unsub = module.watchOrder('order-error', callback, 100);
 
-      // Wait long enough for the initial (failing) poll and first successful interval
       await new Promise(r => setTimeout(r, 250));
 
       expect(callback.mock.calls.length).toBeGreaterThanOrEqual(1);
