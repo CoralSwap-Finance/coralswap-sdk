@@ -387,3 +387,171 @@ describe("TaxReportingModule.exportTradeHistory()", () => {
     ).rejects.toThrow();
   });
 });
+
+// ---------------------------------------------------------------------------
+// getCostBasis() tests
+// ---------------------------------------------------------------------------
+
+describe("TaxReportingModule.getCostBasis()", () => {
+  let client: CoralSwapClient;
+  let tax: TaxReportingModule;
+
+  beforeEach(() => {
+    client = new CoralSwapClient({
+      network: Network.TESTNET,
+      secretKey: TEST_SECRET,
+    });
+
+    jest.spyOn(client, "getCurrentLedger").mockResolvedValue(5000);
+    tax = new TaxReportingModule(client);
+  });
+
+  afterEach(() => jest.restoreAllMocks());
+
+  it("calculates cost basis for a token using FIFO method", async () => {
+    const swapEv1 = makeSwapEvent({
+      sender: USER,
+      tokenIn: TOKEN_A,
+      tokenOut: TOKEN_B,
+      amountIn: 10_000_000n,
+      amountOut: 5_000_000n,
+      feeBps: 30,
+    });
+    const swapEv2 = makeSwapEvent({
+      sender: USER,
+      tokenIn: TOKEN_A,
+      tokenOut: TOKEN_B,
+      amountIn: 20_000_000n,
+      amountOut: 10_000_000n,
+      feeBps: 30,
+      txHash: "tx-2",
+      ledgerClosedAt: new Date(1_700_000_000_000 + 86_400_000).toISOString(),
+    });
+
+    jest.spyOn(client.server, "getEvents").mockImplementation(async (req) => {
+      const topic = (req.filters?.[0]?.topics?.[0] as string[])?.[0];
+      return mockEventsResponse(
+        topic === "swap"
+          ? [swapEv1, swapEv2]
+          : topic === "add_liquidity"
+            ? []
+            : []
+      );
+    });
+
+    const basis = await tax.getCostBasis(USER, TOKEN_B, { method: "FIFO" });
+    expect(basis.token).toBe(TOKEN_B);
+    expect(basis.method).toBe("FIFO");
+    expect(basis.disposals).toEqual([]);
+  });
+
+  it("handles partial disposal with FIFO accounting", async () => {
+    const purchaseEv = makeSwapEvent({
+      sender: USER,
+      tokenIn: TOKEN_A,
+      tokenOut: TOKEN_B,
+      amountIn: 10_000_000n,
+      amountOut: 5_000_000n,
+      feeBps: 30,
+    });
+    const disposalEv = makeSwapEvent({
+      sender: USER,
+      tokenIn: TOKEN_B,
+      tokenOut: TOKEN_A,
+      amountIn: 2_000_000n,
+      amountOut: 4_000_000n,
+      feeBps: 30,
+      txHash: "tx-disposal",
+      ledgerClosedAt: new Date(1_700_000_000_000 + 86_400_000).toISOString(),
+    });
+
+    jest.spyOn(client.server, "getEvents").mockImplementation(async (req) => {
+      const topic = (req.filters?.[0]?.topics?.[0] as string[])?.[0];
+      return mockEventsResponse(topic === "swap" ? [purchaseEv, disposalEv] : []);
+    });
+
+    const basis = await tax.getCostBasis(USER, TOKEN_B, { method: "FIFO" });
+    expect(basis.disposals.length).toBeGreaterThan(0);
+    expect(basis.disposals[0].quantity).toBe("0.2000000");
+  });
+
+  it("throws ValidationError for invalid token address", async () => {
+    await expect(
+      tax.getCostBasis(USER, "INVALID_TOKEN", { method: "FIFO" })
+    ).rejects.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getCapitalGains() tests
+// ---------------------------------------------------------------------------
+
+describe("TaxReportingModule.getCapitalGains()", () => {
+  let client: CoralSwapClient;
+  let tax: TaxReportingModule;
+
+  beforeEach(() => {
+    client = new CoralSwapClient({
+      network: Network.TESTNET,
+      secretKey: TEST_SECRET,
+    });
+
+    jest.spyOn(client, "getCurrentLedger").mockResolvedValue(5000);
+    tax = new TaxReportingModule(client);
+  });
+
+  afterEach(() => jest.restoreAllMocks());
+
+  it("calculates capital gains for a tax year", async () => {
+    const swapEv = makeSwapEvent({
+      sender: USER,
+      tokenIn: TOKEN_A,
+      tokenOut: TOKEN_B,
+      amountIn: 10_000_000n,
+      amountOut: 9_000_000n,
+      feeBps: 30,
+      ledgerClosedAt: new Date("2024-06-15T00:00:00Z").toISOString(),
+    });
+
+    jest.spyOn(client.server, "getEvents").mockImplementation(async (req) => {
+      const topic = (req.filters?.[0]?.topics?.[0] as string[])?.[0];
+      return mockEventsResponse(topic === "swap" ? [swapEv] : []);
+    });
+
+    const gains = await tax.getCapitalGains(USER, 2024);
+    expect(gains.period.start).toContain("2024");
+    expect(gains.netGain).toBeDefined();
+  });
+
+  it("categorizes gains as short-term or long-term based on holding period", async () => {
+    jest.spyOn(client.server, "getEvents").mockResolvedValue(
+      mockEventsResponse([])
+    );
+    const gains = await tax.getCapitalGains(USER, 2024);
+    expect(gains.shortTermGains).toBeDefined();
+    expect(gains.longTermGains).toBeDefined();
+    expect(gains.shortTermLosses).toBeDefined();
+    expect(gains.longTermLosses).toBeDefined();
+  });
+
+  it("respects custom date range in options", async () => {
+    jest.spyOn(client.server, "getEvents").mockResolvedValue(
+      mockEventsResponse([])
+    );
+
+    const fromDate = new Date("2024-03-01");
+    const toDate = new Date("2024-06-30");
+    const gains = await tax.getCapitalGains(USER, 2024, {
+      fromDate,
+      toDate,
+    });
+    expect(gains.period.start).toBe("2024-03-01");
+    expect(gains.period.end).toBe("2024-06-30");
+  });
+
+  it("throws ValidationError for invalid address", async () => {
+    await expect(
+      tax.getCapitalGains("NOT_AN_ADDRESS", 2024)
+    ).rejects.toThrow();
+  });
+});

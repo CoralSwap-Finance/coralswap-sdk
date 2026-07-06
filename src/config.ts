@@ -24,7 +24,7 @@ export interface CoralSwapConfig {
   /** Optional custom headers to include in all RPC requests (e.g. for authentication) */
   rpcHeaders?: Record<string, string>;
   /** Optional custom fetch options for the underlying RPC client */
-  fetchOptions?: any;
+  fetchOptions?: Record<string, unknown>;
   /** Optional secret key for signing transactions */
   secretKey?: string;
   /** Optional public key for the account */

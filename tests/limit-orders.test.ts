@@ -320,7 +320,6 @@ describe('LimitOrderModule', () => {
       const callback = jest.fn();
       unsub = module.watchOrder('order-error', callback, 100);
 
-      // Wait long enough for the initial (failing) poll and first successful interval
       await new Promise(r => setTimeout(r, 250));
 
       expect(callback.mock.calls.length).toBeGreaterThanOrEqual(1);
@@ -659,6 +658,32 @@ describe('LimitOrderModule', () => {
     it('throws ValidationError for zero amountIn', async () => {
       await expect(
         module.placeLimitOrder({ ...validParams, amountIn: 0n }),
+      ).rejects.toThrow(ValidationError);
+    });
+
+    it('throws ValidationError for negative amountIn', async () => {
+      await expect(
+        module.placeLimitOrder({ ...validParams, amountIn: -100n }),
+      ).rejects.toThrow(ValidationError);
+    });
+
+    it('throws ValidationError for same-token swaps', async () => {
+      await expect(
+        module.placeLimitOrder({ ...validParams, tokenOut: TOKEN_IN }),
+      ).rejects.toThrow(ValidationError);
+    });
+
+    it('throws ValidationError when pair address does not exist on-chain', async () => {
+      mockClient.getPairAddress = jest.fn().mockResolvedValue(null);
+      await expect(
+        module.placeLimitOrder(validParams),
+      ).rejects.toThrow(ValidationError);
+    });
+
+    it('throws ValidationError when pair address does not match on-chain pair', async () => {
+      mockClient.getPairAddress = jest.fn().mockResolvedValue('CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM');
+      await expect(
+        module.placeLimitOrder(validParams),
       ).rejects.toThrow(ValidationError);
     });
 

@@ -1,330 +1,222 @@
-import { SorobanRpc } from "@stellar/stellar-sdk";
 import { CoralSwapClient } from "@/client";
-import { PortfolioPnL, PositionPnL } from "@/types/positions";
+import {
+  GetPortfolioOptions,
+  Portfolio,
+  PortfolioEntrySnapshot,
+  PortfolioPnL,
+  PortfolioPosition,
+} from "@/types/portfolio";
+import { TreasuryModule, TreasuryModuleOptions } from "@/modules/treasury";
+import { PositionsModule } from "@/modules/positions";
 import { validateAddress } from "@/utils/validation";
-import { PositionsModule } from "./positions";
+import {
+  MissingPriceFeedError,
+  AddressNotFoundError,
+  PortfolioCalculationError,
+  CoralSwapSDKError,
+} from "@/errors";
+
+const STROOP = 1e7;
 
 /**
- * Default ledger lookback window (~7 days at ~5 s/ledger).
- * Callers can override via GetPortfolioPnLOptions.startLedger.
- */
-const DEFAULT_LOOKBACK_LEDGERS = 120_960;
-
-/**
- * Options for getPortfolioPnL.
- */
-export interface GetPortfolioPnLOptions {
-  /**
-   * Token address → current USD price (as a plain number).
-   * If omitted or a token is missing, its contribution to USD values is 0.
-   * Derive these from a price oracle (e.g. RedStone) before calling.
-   */
-  tokenPricesUSD?: Record<string, number>;
-  /**
-   * Specific pair addresses to analyse.
-   * Defaults to all pairs returned by the factory.
-   */
-  pairAddresses?: string[];
-  /**
-   * Ledger sequence number to start fetching events from.
-   * Defaults to (currentLedger - DEFAULT_LOOKBACK_LEDGERS).
-   */
-  startLedger?: number;
-}
-
-/**
- * Portfolio PnL module — computes LP position profitability from on-chain
- * add/remove-liquidity events and current pool state.
+ * Portfolio module — aggregates LP positions with USD valuations and PnL.
  *
- * USD amounts require caller-supplied token prices (tokenPricesUSD option).
- * Without prices every USD field is 0, but netPnLUSD still reflects whether
- * the position grew or shrank relative to its cost basis.
- *
- * @example
- * ```ts
- * const portfolio = new PortfolioModule(client);
- * const result = await portfolio.getPortfolioPnL('G...wallet', {
- *   tokenPricesUSD: { 'CUSDC...': 1.0, 'CXLM...': 0.12 },
- * });
- * console.log(`Total P&L: $${result.totalPnLUSD.toFixed(2)}`);
- * ```
+ * Builds on {@link PositionsModule} for on-chain position data and reuses
+ * treasury-style spot pricing anchored to caller-supplied stablecoins.
  */
-export class PortfolioModule {
-  private client: CoralSwapClient;
+export class PortfolioModule extends TreasuryModule {
+  private readonly portfolioClient: CoralSwapClient;
   private positions: PositionsModule;
 
-  constructor(client: CoralSwapClient) {
-    this.client = client;
+  constructor(client: CoralSwapClient, options: TreasuryModuleOptions = {}) {
+    super(client, options);
+    this.portfolioClient = client;
     this.positions = new PositionsModule(client);
   }
 
   /**
-   * Compute PnL for all active LP positions held by `address`.
+   * Get the full portfolio for an owner across one or more pools.
    *
-   * Positions with a zero LP balance are skipped (brand-new / never-added
-   * addresses naturally return `{ totalPnLUSD: 0, byPosition: [] }`).
+   * @param owner - Wallet address to query
+   * @param options - Optional pair filter
+   * @returns Portfolio with per-pool positions and total USD value
+   */
+  async getPortfolio(
+    owner: string,
+    options: GetPortfolioOptions = {},
+  ): Promise<Portfolio> {
+    return this.get(owner, options);
+  }
+
+  async get(
+    owner: string,
+    options: GetPortfolioOptions = {},
+  ): Promise<Portfolio> {
+    validateAddress(owner, "owner");
+
+    let summary;
+    try {
+      summary = await this.positions.getPositions(owner, {
+        pairAddresses: options.pairAddresses,
+        includeEmpty: false,
+      });
+    } catch (err) {
+      if (err instanceof CoralSwapSDKError) throw err;
+      throw new AddressNotFoundError(owner, this.portfolioClient.network);
+    }
+
+    const allPairs =
+      options.pairAddresses && options.pairAddresses.length > 0
+        ? options.pairAddresses
+        : await this.portfolioClient.factory.getAllPairs();
+
+    const { priceMap } = await this.buildPriceMapTracked(allPairs);
+
+    const positions: PortfolioPosition[] = [];
+    for (const pos of summary.positions) {
+      const price0 = priceMap.get(pos.token0) ?? 0;
+      const price1 = priceMap.get(pos.token1) ?? 0;
+
+      if (!priceMap.has(pos.token0)) {
+        throw new MissingPriceFeedError(pos.token0, false);
+      }
+      if (!priceMap.has(pos.token1)) {
+        throw new MissingPriceFeedError(pos.token1, false);
+      }
+
+      try {
+        const valueUSD =
+          (Number(pos.token0Amount) / STROOP) * price0 +
+          (Number(pos.token1Amount) / STROOP) * price1;
+
+        positions.push({
+          pairAddress: pos.pairAddress,
+          lpTokenAddress: pos.lpTokenAddress,
+          token0: pos.token0,
+          token1: pos.token1,
+          lpBalance: pos.balance,
+          token0Amount: pos.token0Amount,
+          token1Amount: pos.token1Amount,
+          valueUSD,
+        });
+      } catch (err) {
+        if (err instanceof CoralSwapSDKError) throw err;
+        throw new PortfolioCalculationError(
+          pos.pairAddress,
+          err instanceof Error ? err.message : String(err),
+        );
+      }
+    }
+
+    const totalValueUSD = positions.reduce((sum, p) => sum + p.valueUSD, 0);
+
+    return { owner, positions, totalValueUSD };
+  }
+
+  /**
+   * Capture a snapshot from a portfolio result for later PnL comparison.
+   */
+  createSnapshot(portfolio: Portfolio): PortfolioEntrySnapshot {
+    return {
+      owner: portfolio.owner,
+      totalValueUSD: portfolio.totalValueUSD,
+      positions: portfolio.positions.map((p) => ({
+        pairAddress: p.pairAddress,
+        token0Amount: p.token0Amount,
+        token1Amount: p.token1Amount,
+        valueUSD: p.valueUSD,
+      })),
+      capturedAt: Math.floor(Date.now() / 1000),
+    };
+  }
+
+  /**
+   * Compute PnL relative to an entry snapshot after on-chain state changes.
    *
-   * @param address - Stellar account or contract address to analyse
-   * @param options - Price map, pair filter, event window
-   * @returns Aggregate and per-position PnL
+   * @param owner - Wallet address to query
+   * @param entry - Entry snapshot from {@link createSnapshot}
+   * @returns PnL breakdown in USD
    */
   async getPortfolioPnL(
-    address: string,
-    options: GetPortfolioPnLOptions = {},
-  ): Promise<PortfolioPnL> {
-    validateAddress(address, "address");
-
-    const { tokenPricesUSD = {}, pairAddresses } = options;
-
-    const pairs =
-      pairAddresses && pairAddresses.length > 0
-        ? pairAddresses
-        : await this.client.factory.getAllPairs();
-
-    if (pairs.length === 0) {
-      return { totalPnLUSD: 0, totalPnLPercent: 0, byPosition: [] };
-    }
-
-    // Find pairs where the address currently holds LP tokens
-    const positionResults = await Promise.allSettled(
-      pairs.map((addr) => this.positions.getPosition(addr, address)),
-    );
-
-    const activePairs: string[] = [];
-    for (let i = 0; i < positionResults.length; i++) {
-      const result = positionResults[i];
-      if (result.status === "fulfilled" && result.value.balance > 0n) {
-        activePairs.push(pairs[i]);
-      }
-    }
-
-    if (activePairs.length === 0) {
-      return { totalPnLUSD: 0, totalPnLPercent: 0, byPosition: [] };
-    }
-
-    const startLedger =
-      options.startLedger ?? (await this.resolveStartLedger());
-
-    const pnlResults = await Promise.allSettled(
-      activePairs.map((pairAddr) =>
-        this.computePositionPnL(pairAddr, address, tokenPricesUSD, startLedger),
-      ),
-    );
-
-    const byPosition: PositionPnL[] = [];
-    for (const result of pnlResults) {
-      if (result.status === "fulfilled") {
-        byPosition.push(result.value);
-      }
-    }
-
-    const totalEntryUSD = byPosition.reduce((s, p) => s + p.entryValueUSD, 0);
-    const totalPnLUSD = byPosition.reduce((s, p) => s + p.netPnLUSD, 0);
-    const totalPnLPercent =
-      totalEntryUSD > 0 ? (totalPnLUSD / totalEntryUSD) * 100 : 0;
-
-    return { totalPnLUSD, totalPnLPercent, byPosition };
-  }
-
-  // ---------------------------------------------------------------------------
-  // Private helpers
-  // ---------------------------------------------------------------------------
-
-  private async resolveStartLedger(): Promise<number> {
-    const current = await this.client.getCurrentLedger();
-    return Math.max(0, current - DEFAULT_LOOKBACK_LEDGERS);
-  }
-
-  private async computePositionPnL(
-    pairAddress: string,
     owner: string,
-    tokenPricesUSD: Record<string, number>,
-    startLedger: number,
-  ): Promise<PositionPnL> {
-    const [position, addEvents, removeEvents] = await Promise.all([
-      this.positions.getPosition(pairAddress, owner),
-      this.fetchLiquidityEvents(pairAddress, "add_liquidity", startLedger),
-      this.fetchLiquidityEvents(pairAddress, "remove_liquidity", startLedger),
-    ]);
+    entry: PortfolioEntrySnapshot,
+  ): Promise<PortfolioPnL> {
+    validateAddress(owner, "owner");
 
-    // Aggregate deposited and withdrawn token amounts for this address
-    let grossDepositA = 0n;
-    let grossDepositB = 0n;
-    let grossWithdrawA = 0n;
-    let grossWithdrawB = 0n;
+    const pairAddresses = entry.positions.map((p) => p.pairAddress);
+    const current = await this.getPortfolio(owner, { pairAddresses });
 
-    for (const ev of addEvents.filter((e) => e.provider === owner)) {
-      grossDepositA += ev.amountA;
-      grossDepositB += ev.amountB;
-    }
-
-    for (const ev of removeEvents.filter((e) => e.provider === owner)) {
-      grossWithdrawA += ev.amountA;
-      grossWithdrawB += ev.amountB;
-    }
-
-    // Net amounts still notionally "in" the pool from this LP's perspective.
-    // Guards against underflow if withdrawals exceed visible deposits
-    // (e.g. history older than startLedger).
-    const netAmountA =
-      grossDepositA > grossWithdrawA ? grossDepositA - grossWithdrawA : 0n;
-    const netAmountB =
-      grossDepositB > grossWithdrawB ? grossDepositB - grossWithdrawB : 0n;
-
-    const priceA = tokenPricesUSD[position.token0] ?? 0;
-    const priceB = tokenPricesUSD[position.token1] ?? 0;
-
-    const DECIMALS = 1e7; // Soroban standard: 7 decimal places
-
-    // Cost basis: net deposited amounts valued at current prices.
-    // This equals the HODL value (what you'd have if you simply held),
-    // so netPnL captures the structural LP effect (fees vs IL).
-    const entryValueUSD =
-      (Number(netAmountA) / DECIMALS) * priceA +
-      (Number(netAmountB) / DECIMALS) * priceB;
-
-    // Current LP position value
-    const currentValueUSD =
-      position.totalSupply > 0n
-        ? (Number(position.balance) / Number(position.totalSupply)) *
-          ((Number(position.reserve0) / DECIMALS) * priceA +
-            (Number(position.reserve1) / DECIMALS) * priceB)
-        : 0;
-
-    // IL: LP underperformed vs cost basis — always >= 0
-    const ilUSD = Math.max(0, entryValueUSD - currentValueUSD);
-
-    // Fees: LP outperformed cost basis — always >= 0
-    // Exactly one of (ilUSD, feeEarnedUSD) is non-zero.
-    const feeEarnedUSD = Math.max(0, currentValueUSD - entryValueUSD);
-
-    // netPnLUSD === feeEarnedUSD - ilUSD === currentValueUSD - entryValueUSD
-    const netPnLUSD = currentValueUSD - entryValueUSD;
+    const pnlUSD = current.totalValueUSD - entry.totalValueUSD;
+    const pnlPercent =
+      entry.totalValueUSD > 0 ? (pnlUSD / entry.totalValueUSD) * 100 : 0;
 
     return {
-      pairAddress,
-      entryValueUSD,
-      currentValueUSD,
-      feeEarnedUSD,
-      ilUSD,
-      netPnLUSD,
+      entryValueUSD: entry.totalValueUSD,
+      currentValueUSD: current.totalValueUSD,
+      pnlUSD,
+      pnlPercent,
     };
   }
 
-  private async fetchLiquidityEvents(
-    pairAddress: string,
-    type: "add_liquidity" | "remove_liquidity",
-    startLedger: number,
-  ): Promise<ParsedLiquidityEvent[]> {
-    const request: SorobanRpc.Server.GetEventsRequest = {
-      startLedger,
-      filters: [
-        {
-          type: "contract",
-          contractIds: [pairAddress],
-          topics: [[type]],
-        },
-      ],
-      limit: 200,
-    };
+  /**
+   * Build a price map and track which tokens had no price feed.
+   *
+   * Unlike the inherited {@link TreasuryModule.buildPriceMap}, this version
+   * reports missing tokens so callers can decide whether to warn or fail.
+   */
+  private async buildPriceMapTracked(
+    allPairs: string[],
+  ): Promise<{ priceMap: Map<string, number>; missingTokens: string[] }> {
+    const prices = new Map<string, number>();
+    const missingTokens: string[] = [];
 
-    let response: SorobanRpc.Api.GetEventsResponse;
-    try {
-      response = await this.client.server.getEvents(request);
-    } catch {
-      return [];
+    for (const addr of this.stableAddresses) {
+      prices.set(addr, 1.0);
     }
 
-    if (!response || !Array.isArray(response.events)) return [];
+    if (this.stableAddresses.size > 0) {
+      for (const pairAddress of allPairs) {
+        try {
+          const pair = this.portfolioClient.pair(pairAddress);
+          const [{ token0, token1 }, { reserve0, reserve1 }] = await Promise.all([
+            pair.getTokens(),
+            pair.getReserves(),
+          ]);
 
-    const results: ParsedLiquidityEvent[] = [];
-    for (const ev of response.events as unknown as RawEvent[]) {
-      const data = decodeMapEvent(ev.value);
-      if (!data) continue;
+          if (reserve0 === 0n || reserve1 === 0n) continue;
 
-      const provider = readAddress(data, "provider");
-      if (!provider) continue;
-
-      results.push({
-        provider,
-        amountA: readI128(data, "amount_a") ?? 0n,
-        amountB: readI128(data, "amount_b") ?? 0n,
-        liquidity: readI128(data, "liquidity") ?? 0n,
-      });
+          if (this.stableAddresses.has(token0) && !prices.has(token1)) {
+            prices.set(token1, Number(reserve0) / Number(reserve1));
+          } else if (this.stableAddresses.has(token1) && !prices.has(token0)) {
+            prices.set(token0, Number(reserve1) / Number(reserve0));
+          }
+        } catch {
+          continue;
+        }
+      }
     }
 
-    return results;
+    // Collect tokens that appear in pairs but have no price
+    const allTokens = new Set<string>();
+    for (const pairAddress of allPairs) {
+      try {
+        const pair = this.portfolioClient.pair(pairAddress);
+        const { token0, token1 } = await pair.getTokens();
+        allTokens.add(token0);
+        allTokens.add(token1);
+      } catch {
+        continue;
+      }
+    }
+
+    for (const token of allTokens) {
+      if (!prices.has(token)) {
+        missingTokens.push(token);
+      }
+    }
+
+    return { priceMap: prices, missingTokens };
   }
 }
 
-// ---------------------------------------------------------------------------
-// Internal raw-event decode helpers (mirrors TaxReportingModule pattern)
-// ---------------------------------------------------------------------------
-
-interface ParsedLiquidityEvent {
-  provider: string;
-  amountA: bigint;
-  amountB: bigint;
-  liquidity: bigint;
-}
-
-interface RawEvent {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  value: any;
-  topic?: string[];
-  txHash?: string;
-  ledgerClosedAt?: string | number;
-  ledger?: number;
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function decodeMapEvent(value: any): Map<string, any> | null {
-  const entries: unknown[] =
-    typeof value?.map === "function" ? value.map() : value?._value;
-  if (!Array.isArray(entries)) return null;
-
-  const map = new Map<string, unknown>();
-  for (const entry of entries as Array<{ key: unknown; val: unknown }>) {
-    const k = entry.key as Record<string, () => { toString(): string }>;
-    let key: string | undefined;
-    try {
-      key = k.sym?.().toString() ?? k.str?.().toString();
-    } catch {
-      /* skip malformed entry */
-    }
-    if (key) map.set(key, entry.val);
-  }
-  return map as Map<string, unknown>;
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function readAddress(map: Map<string, any>, key: string): string | undefined {
-  const val = map.get(key);
-  if (!val) return undefined;
-  try {
-    if (typeof val.address === "function") return val.address().toString();
-    if (typeof val._value?.toString === "function")
-      return val._value.toString();
-  } catch {
-    /* skip */
-  }
-  return undefined;
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function readI128(map: Map<string, any>, key: string): bigint | undefined {
-  const val = map.get(key);
-  if (!val) return undefined;
-  try {
-    if (typeof val.i128 === "function") {
-      const parts = val.i128();
-      return (
-        (BigInt(parts.hi().toString()) << 64n) +
-        BigInt(parts.lo().toString())
-      );
-    }
-  } catch {
-    /* skip */
-  }
-  return undefined;
-}
+export type { TreasuryModuleOptions as PortfolioModuleOptions };

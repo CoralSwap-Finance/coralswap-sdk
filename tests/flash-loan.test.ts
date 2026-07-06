@@ -104,11 +104,15 @@ function buildContractEvent(
 // Base request fixture
 // ---------------------------------------------------------------------------
 
+const MOCK_PAIR = 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC';
+const MOCK_TOKEN = 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM';
+const MOCK_RECEIVER = 'GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFSHONUCEOASW7QC7OX2H';
+
 const FLASH_REQUEST = {
-  pairAddress: 'PAIR_ADDR',
-  token: 'TOKEN_A',
+  pairAddress: MOCK_PAIR,
+  token: MOCK_TOKEN,
   amount: 1_000_000n,
-  receiverAddress: 'RECEIVER_ADDR',
+  receiverAddress: MOCK_RECEIVER,
   callbackData: Buffer.from('test'),
 };
 
@@ -299,7 +303,7 @@ describe('FlashLoanModule.estimateFee()', () => {
     const client = buildMockClient({ flashFeeBps: 9 });
     const module = new FlashLoanModule(client as any);
 
-    const estimate = await module.estimateFee('PAIR_ADDR', 'TOKEN_A', 10_000n);
+    const estimate = await module.estimateFee(MOCK_PAIR, MOCK_TOKEN, 10_000n);
     // 10000 * 9 / 10000 = 9; floor is 5; result is max(9, 5) = 9
     expect(estimate.feeAmount).toBe(9n);
   });
@@ -308,7 +312,7 @@ describe('FlashLoanModule.estimateFee()', () => {
     const client = buildMockClient({ flashFeeBps: 1 });
     const module = new FlashLoanModule(client as any);
 
-    const estimate = await module.estimateFee('PAIR_ADDR', 'TOKEN_A', 1_000n);
+    const estimate = await module.estimateFee(MOCK_PAIR, MOCK_TOKEN, 1_000n);
     // 1000 * 1 / 10000 = 0; floor is 5; result is 5
     expect(estimate.feeAmount).toBe(5n);
   });
