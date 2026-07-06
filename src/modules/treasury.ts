@@ -40,6 +40,11 @@ export class TreasuryModule {
     this.stableSet = new Set(options.stableAddresses ?? []);
   }
 
+  /** Expose stablecoin addresses for subclasses. */
+  protected get stableAddresses(): ReadonlySet<string> {
+    return this.stableSet;
+  }
+
   /**
    * Return the treasury contract address (the protocol fee recipient).
    *
@@ -214,56 +219,68 @@ export class TreasuryModule {
     }
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private parseSwapEventForRevenue(rawEvent: any): {
+  private parseSwapEventForRevenue(rawEvent: unknown): {
     amountIn: bigint;
     feeAmount: bigint;
     tokenIn: string;
   } | null {
     try {
-      const topics: string[] = rawEvent.topic ?? [];
+      if (!rawEvent || typeof rawEvent !== 'object') return null;
+      const eventObj = rawEvent as Record<string, unknown>;
+      const topics = (eventObj.topic as string[]) ?? [];
       if (!topics.length || topics[0] !== 'swap') return null;
 
-      const value = rawEvent.value;
-      if (!value) return null;
+      const value = eventObj.value;
+      if (!value || typeof value !== 'object') return null;
+      const valueObj = value as Record<string, unknown>;
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const map: any[] = typeof value.map === 'function' ? value.map() : value._value;
+      const map = typeof valueObj.map === 'function' 
+        ? (valueObj.map as () => unknown[])() 
+        : (valueObj._value as unknown[]);
       if (!Array.isArray(map)) return null;
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const get = (key: string): any => {
+      const get = (key: string): unknown => {
         for (const entry of map) {
-          const k = entry.key;
+          if (!entry || typeof entry !== 'object') continue;
+          const entryObj = entry as { key: unknown; val: unknown };
+          const k = entryObj.key;
+          if (!k || typeof k !== 'object') continue;
+          const kObj = k as Record<string, unknown>;
           let keyStr: string | undefined;
           try {
-            if (typeof k.sym === 'function') keyStr = k.sym().toString();
-            else if (typeof k.str === 'function') keyStr = k.str().toString();
+            if (typeof kObj.sym === 'function') keyStr = (kObj.sym as () => { toString(): string })().toString();
+            else if (typeof kObj.str === 'function') keyStr = (kObj.str as () => { toString(): string })().toString();
           } catch { /* skip */ }
-          if (keyStr === key) return entry.val;
+          if (keyStr === key) return entryObj.val;
         }
         return undefined;
       };
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const decodeI128 = (val: any): bigint => {
-        if (typeof val?.i128 === 'function') {
-          const parts = val.i128();
-          return (BigInt(parts.hi().toString()) << 64n) + BigInt(parts.lo().toString());
+      const decodeI128 = (val: unknown): bigint => {
+        if (val && typeof val === 'object') {
+          const valObj = val as Record<string, unknown>;
+          if (typeof valObj.i128 === 'function') {
+            const parts = (valObj.i128 as () => { hi(): { toString(): string }; lo(): { toString(): string } })();
+            return (BigInt(parts.hi().toString()) << 64n) + BigInt(parts.lo().toString());
+          }
         }
         throw new Error('cannot decode i128');
       };
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const decodeU32 = (val: any): number => {
-        if (typeof val?.u32 === 'function') return val.u32();
+      const decodeU32 = (val: unknown): number => {
+        if (val && typeof val === 'object') {
+          const valObj = val as Record<string, unknown>;
+          if (typeof valObj.u32 === 'function') return (valObj.u32 as () => number)();
+        }
         throw new Error('cannot decode u32');
       };
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const decodeAddr = (val: any): string => {
-        if (typeof val?.address === 'function') return val.address().toString();
-        if (typeof val?._value?.toString === 'function') return val._value.toString();
+      const decodeAddr = (val: unknown): string => {
+        if (val && typeof val === 'object') {
+          const valObj = val as Record<string, unknown>;
+          if (typeof valObj.address === 'function') return (valObj.address as () => { toString(): string })().toString();
+          if (typeof valObj._value?.toString === 'function') return (valObj._value as { toString(): string }).toString();
+        }
         throw new Error('cannot decode address');
       };
 

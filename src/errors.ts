@@ -25,6 +25,16 @@ export class CoralSwapSDKError extends Error {
     this.details = details;
     Object.setPrototypeOf(this, new.target.prototype);
   }
+
+  toJSON(): Record<string, unknown> {
+    return {
+      name: this.name,
+      code: this.code,
+      message: this.message,
+      details: this.details,
+      stack: this.stack,
+    };
+  }
 }
 
 /**
@@ -67,8 +77,9 @@ export class TransactionError extends CoralSwapSDKError {
     message: string,
     txHash?: string,
     details?: Record<string, unknown>,
+    code: string = "TRANSACTION_ERROR",
   ) {
-    super("TRANSACTION_ERROR", message, details);
+    super(code, message, details);
     this.name = "TransactionError";
     this.txHash = txHash;
   }
@@ -127,6 +138,7 @@ export class InsufficientLiquidityError extends CoralSwapSDKError {
   }
 }
 
+
 /**
  * Pool not found for a token pair.
  */
@@ -141,6 +153,20 @@ export class PairNotFoundError extends CoralSwapSDKError {
 }
 
 /**
+ * Webhook delivery failure.
+ */
+export class WebhookDeliveryError extends CoralSwapSDKError {
+  constructor(webhookId: string, statusCode: number, retryCount: number) {
+    super(
+      "WEBHOOK_DELIVERY_FAILED",
+      `Webhook ${webhookId} failed with status ${statusCode} after ${retryCount} retries`,
+      { webhookId, statusCode, retryCount },
+    );
+    this.name = "WebhookDeliveryError";
+  }
+}
+
+/**
  * Invalid input parameters.
  */
 export class ValidationError extends CoralSwapSDKError {
@@ -151,16 +177,33 @@ export class ValidationError extends CoralSwapSDKError {
 }
 
 /**
+ * Threshold value is invalid.
+ */
+export class InvalidThresholdError extends ValidationError {
+  constructor(alertType: string, value: number, min: number, max: number) {
+    super(
+      `${alertType} threshold ${value} is out of range (${min}-${max})`,
+      { alertType, value, min, max },
+    );
+    this.name = "InvalidThresholdError";
+  }
+}
+
+
+/**
  * Flash loan specific errors.
  *
  * When the contract emits a FlashLoanFailed event, the decoded details are
  * attached as `event` so callers can inspect borrowedAmount and reason without
  * manually parsing XDR.
  */
-export class FlashLoanError extends CoralSwapSDKError {
-  constructor(message: string, details?: Record<string, unknown>) {
-    super("FLASH_LOAN_ERROR", message, details);
+export class FlashLoanError extends TransactionError {
+  constructor(message: string, details?: Record<string, unknown>, txHash?: string) {
+    super(message, txHash, details, "FLASH_LOAN_ERROR");
     this.name = "FlashLoanError";
+    if (details) {
+      Object.assign(this, details);
+    }
   }
 }
 
@@ -222,11 +265,11 @@ export class PriceDeviationError extends CoralSwapSDKError {
  * RedStone oracle payload is stale (older than the allowed staleness window).
  */
 export class StaleOracleError extends CoralSwapSDKError {
-  constructor(payloadTimestamp: number, maxAgeMs: number) {
+  constructor(asset: string, lastUpdate: number, maxAge: number) {
     super(
       "STALE_ORACLE_PAYLOAD",
-      `RedStone payload is stale (timestamp: ${payloadTimestamp}, max age: ${maxAgeMs}ms)`,
-      { payloadTimestamp, maxAgeMs },
+      `RedStone payload for ${asset} is stale (last update: ${lastUpdate}, max age: ${maxAge}ms)`,
+      { asset, lastUpdate, maxAge },
     );
     this.name = "StaleOracleError";
   }
@@ -279,9 +322,127 @@ export class StakingError extends CoralSwapSDKError {
  * Cooldown period has not elapsed.
  */
 export class CooldownError extends CoralSwapSDKError {
-  constructor(cooldownEnd: bigint) {
-    super("COOLDOWN_ERROR", `Cooldown period active until block ${cooldownEnd}`, { cooldownEnd });
+  readonly cooldownEnd: number;
+  readonly canWithdrawAt: Date;
+
+  constructor(cooldownEnd: bigint | number) {
+    const end = typeof cooldownEnd === "bigint" ? Number(cooldownEnd) : cooldownEnd;
+    super("COOLDOWN_ERROR", `Cooldown period active until block ${end}`, { cooldownEnd });
     this.name = "CooldownError";
+    this.cooldownEnd = end;
+    this.canWithdrawAt = new Date(end * 1000);
+  }
+}
+
+/**
+ * Price feed unavailable for a token.
+ *
+ * Thrown when a token's USD price cannot be derived from on-chain reserves
+ * because no stablecoin-paired pool exists or the pool has zero reserves.
+ */
+export class MissingPriceFeedError extends CoralSwapSDKError {
+  readonly tokenAddress: string;
+  readonly fallbackUsed: boolean;
+
+  constructor(tokenAddress: string, fallbackUsed = false) {
+    const message = fallbackUsed
+      ? `Price feed missing for token ${tokenAddress}; using zero-value fallback`
+      : `Price feed missing for token ${tokenAddress}; no stablecoin pair found`;
+    super("MISSING_PRICE_FEED", message, { tokenAddress, fallbackUsed });
+    this.name = "MissingPriceFeedError";
+    this.tokenAddress = tokenAddress;
+    this.fallbackUsed = fallbackUsed;
+  }
+}
+
+/**
+ * Webhook delivery or registration errors.
+ *
+ * Raised for programmer mistakes during registration or dispatch
+ * (invalid webhook id, unsupported URL scheme, etc.). Endpoints that
+ * simply fail to acknowledge a delivery return a
+ * {@link WebhookDeliveryResult} with `delivered: false` rather than
+ * throwing this error.
+ */
+export class WebhookError extends CoralSwapSDKError {
+  constructor(message: string, details?: Record<string, unknown>) {
+    super("WEBHOOK_ERROR", message, details);
+    this.name = "WebhookError";
+  }
+}
+
+/**
+ * Address not found on the network.
+ *
+ * Thrown when a queried address has no on-chain state (no positions, no
+ * contract code) or the RPC cannot resolve it.
+ */
+export class AddressNotFoundError extends CoralSwapSDKError {
+  readonly address: string;
+  readonly network: string;
+
+  constructor(address: string, network: string) {
+    super(
+      "ADDRESS_NOT_FOUND",
+      `Address ${address} not found on ${network}`,
+      { address, network },
+    );
+    this.name = "AddressNotFoundError";
+    this.address = address;
+    this.network = network;
+  }
+}
+
+/**
+ * Portfolio calculation failed for a specific pool.
+ *
+ * Thrown when an error occurs while computing position value, reserves,
+ * or token balances for a particular pool during portfolio aggregation.
+ */
+export class PortfolioCalculationError extends CoralSwapSDKError {
+  readonly failedPool: string;
+  readonly reason: string;
+
+  constructor(failedPool: string, reason: string) {
+    super(
+      "PORTFOLIO_CALCULATION_ERROR",
+      `Portfolio calculation failed for pool ${failedPool}: ${reason}`,
+      { failedPool, reason },
+    );
+    this.name = "PortfolioCalculationError";
+    this.failedPool = failedPool;
+    this.reason = reason;
+  }
+}
+
+/**
+ * Raised by {@link WebhookModule.sendWebhook} when the targeted
+ * webhook has been auto-disabled after recording the configured
+ * number of consecutive delivery failures. Callers can match on
+ * this class — rather than string-matching — to programmatically
+ * decide whether to surface the failure to the user, retry on a
+ * backoff, or call {@link WebhookModule.enableWebhook}.
+ *
+ * Extends {@link WebhookError} so existing `instanceof WebhookError`
+ * checks remain backward-compatible.
+ */
+export class WebhookDisabledError extends WebhookError {
+  override readonly code = "WEBHOOK_DISABLED";
+  readonly webhookId: string;
+  readonly consecutiveFailures: number;
+
+  constructor(
+    webhookId: string,
+    consecutiveFailures: number,
+    details?: Record<string, unknown>,
+  ) {
+    super(
+      `webhook "${webhookId}" is disabled after ${consecutiveFailures} consecutive failures`,
+      { webhookId, consecutiveFailures, ...details },
+    );
+    this.name = "WebhookDisabledError";
+    this.webhookId = webhookId;
+    this.consecutiveFailures = consecutiveFailures;
   }
 }
 

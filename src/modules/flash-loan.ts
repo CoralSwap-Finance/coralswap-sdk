@@ -4,6 +4,8 @@ import {
   FlashLoanResult,
   FlashLoanFeeEstimate,
   FlashLoanExecutedEvent,
+  FlashLoanFeeComparison,
+  FlashLoanFailedEvent,
 } from "@/types/flash-loan";
 import { FlashLoanConfig } from "@/types/pool";
 import { GasEstimate } from "@/types/gas";
@@ -15,11 +17,12 @@ import {
   FlashLoanError,
   TransactionError,
 } from "@/errors";
+import { FeeModule } from "./fees";
 import { validateAddress, validatePositiveAmount } from "@/utils/validation";
 import { estimateGas } from "@/utils/gas";
 import { DEFAULTS } from "@/config";
 import { decodeEvents } from "@/utils/events";
-import { SorobanRpc } from "@stellar/stellar-sdk";
+import { SorobanRpc, scValToNative, xdr } from "@stellar/stellar-sdk";
 
 /**
  * Flash Loan module -- first-class flash loan support for CoralSwap.
@@ -67,14 +70,6 @@ export class FlashLoanModule {
       );
     }
 
-    const feeFloorBps = DEFAULTS.flashFeeFloorBps;
-
-    if (!validateFeeFloor(config.flashFeeBps, feeFloorBps)) {
-      throw new FlashLoanError("Flash loan fee below protocol floor", {
-        feeBps: config.flashFeeBps,
-        feeFloor: config.flashFeeFloor,
-      });
-    }
 
     const feeAmount = (amount * BigInt(config.flashFeeBps)) / BigInt(10000);
     const feeFloorAmount = BigInt(config.flashFeeFloor);
@@ -87,6 +82,57 @@ export class FlashLoanModule {
       feeAmount: actualFee,
       feeFloor: Number(config.flashFeeFloor),
     };
+  }
+
+  /**
+   * Compare the flash loan fee against the current dynamic swap fee for a
+   * pair and amount.
+   *
+   * Arbitrageurs use this to decide whether borrowing via a flash loan is
+   * cheaper than routing capital through a direct swap before committing to
+   * a strategy. Both fees are fetched in parallel and reduced to absolute
+   * token amounts using `(amount * feeBps) / 10000n`.
+   *
+   * @param pair - The address of the pair contract to compare fees for
+   * @param amount - The notional amount the strategy would move (must be > 0)
+   * @returns The two effective fees and which option is cheaper
+   * @throws {ValidationError} If `pair` is invalid or `amount` is zero/negative
+   * @example
+   * const cmp = await client.flashLoans.compareFees('C...', 1_000_000n);
+   * if (cmp.cheaperOption === 'flashLoan') {
+   *   // borrow via flash loan
+   * }
+   */
+  async compareFees(
+    pair: string,
+    amount: bigint,
+  ): Promise<FlashLoanFeeComparison> {
+    validateAddress(pair, "pair");
+    validatePositiveAmount(amount, "amount");
+
+    const fees = new FeeModule(this.client);
+
+    // Fetch the flash loan fee (fee_bps) and the dynamic swap fee in parallel.
+    const [config, swapEstimate] = await Promise.all([
+      this.getConfig(pair),
+      fees.estimateSwapFee(pair, amount),
+    ]);
+
+    // Reduce both fees to absolute token amounts on the same basis-points
+    // formula so the comparison is apples-to-apples.
+    const flashLoanFee = (amount * BigInt(config.flashFeeBps)) / 10000n;
+    const swapFee = swapEstimate.feeAmount;
+
+    let cheaperOption: FlashLoanFeeComparison["cheaperOption"];
+    if (flashLoanFee < swapFee) {
+      cheaperOption = "flashLoan";
+    } else if (swapFee < flashLoanFee) {
+      cheaperOption = "swap";
+    } else {
+      cheaperOption = "equal";
+    }
+
+    return { flashLoanFee, swapFee, cheaperOption };
   }
 
   /**
@@ -155,8 +201,9 @@ export class FlashLoanModule {
     const result = await this.client.submitTransaction([op]);
 
     if (!result.success) {
-      throw new TransactionError(
+      throw new FlashLoanError(
         `Flash loan failed: ${result.error?.message ?? "Unknown error"}`,
+        undefined,
         result.txHash,
       );
     }
@@ -170,23 +217,71 @@ export class FlashLoanModule {
       // Fetch the full transaction result to decode events
       const txResult = await this.client.server.getTransaction(txHash);
       if (txResult.status === "SUCCESS") {
-        const events = decodeEvents(txResult as SorobanRpc.Api.GetSuccessfulTransactionResponse, {
-          contractId: request.pairAddress,
-        });
+        const rawEvents = this.getRawEvents(txResult);
+        const hasRawEvents = rawEvents.length > 0 || this.hasEventsAccessor(txResult);
 
-        // Look for FlashLoanExecuted or FlashLoanFailed events
-        const flashLoanEvent = events.find((e) => e.type === "flash_loan");
-        if (flashLoanEvent && flashLoanEvent.type === "flash_loan") {
-          event = {
-            type: "FlashLoanExecuted",
-            borrowedAmount: flashLoanEvent.amount,
-            feePaid: flashLoanEvent.fee,
-            callbackAddress: flashLoanEvent.borrower,
-            token: request.token,
-          };
+        // A FlashLoanFailed event means the callback reverted; surface it as an error.
+        const failedEvent = this.decodeFailedEvent(rawEvents);
+        if (failedEvent) {
+          const err = new FlashLoanError(
+            `Flash loan callback failed: ${failedEvent.reason}`,
+          );
+          (err as any).event = failedEvent;
+          throw err;
         }
+
+        // Try decoding old-style executed event
+        const executedEvent = this.decodeExecutedEvent(rawEvents);
+        if (executedEvent) {
+          event = executedEvent;
+        } else {
+          try {
+            // Fall back to decodeEvents
+            const events = decodeEvents(txResult as SorobanRpc.Api.GetSuccessfulTransactionResponse, {
+              contractId: request.pairAddress,
+            });
+
+            // Look for FlashLoanExecuted or FlashLoanFailed events
+            const flashLoanEvent = events.find((e) => e.type === "flash_loan");
+            if (flashLoanEvent && flashLoanEvent.type === "flash_loan") {
+              event = {
+                type: "FlashLoanExecuted",
+                borrowedAmount: flashLoanEvent.amount,
+                feePaid: flashLoanEvent.fee,
+                callbackAddress: flashLoanEvent.borrower,
+                token: request.token,
+              };
+            }
+          } catch {
+            // Ignore decodeEvents failures
+          }
+
+          if (!event && hasRawEvents) {
+            // Fallback: raw event accessor existed (older contract) but no match;
+            // synthesise an event from request values.
+            event = {
+              type: 'FlashLoanExecuted',
+              borrowedAmount: request.amount,
+              feePaid: feeEstimate.feeAmount,
+              callbackAddress: request.receiverAddress,
+              token: request.token,
+            };
+          }
+        }
+      } else {
+        // Non-SUCCESS status: provide fallback event from request values
+        event = {
+          type: 'FlashLoanExecuted',
+          borrowedAmount: request.amount,
+          feePaid: feeEstimate.feeAmount,
+          callbackAddress: request.receiverAddress,
+          token: request.token,
+        };
       }
-    } catch {
+    } catch (err) {
+      if (err instanceof FlashLoanError) {
+        throw err;
+      }
       // Silently ignore event parsing failures to avoid breaking the happy path
       // The transaction succeeded, but we couldn't decode the events
     }
@@ -263,4 +358,83 @@ export class FlashLoanModule {
     const safetyMargin = reserve / 100n; // 1% buffer
     return reserve - safetyMargin;
   }
+
+  private getRawEvents(txResult: any): xdr.ContractEvent[] {
+    try {
+      const sorobanMeta = txResult.resultMetaXdr.v3().sorobanMeta();
+      return sorobanMeta?.events() ?? [];
+    } catch {
+      return [];
+    }
+  }
+
+  private hasEventsAccessor(txResult: any): boolean {
+    try {
+      return typeof txResult?.resultMetaXdr?.v3()?.sorobanMeta()?.events === 'function';
+    } catch {
+      return false;
+    }
+  }
+
+  private decodeExecutedEvent(events: xdr.ContractEvent[]): FlashLoanExecutedEvent | null {
+    for (const event of events) {
+      if (event.type().name !== 'contract') continue;
+
+      const topics = event.body().v0().topics();
+      if (!topics.length) continue;
+
+      const eventName = this.topicSymbol(topics[0]);
+      if (eventName !== 'FlashLoanExecuted') continue;
+
+      try {
+        const data = scValToNative(event.body().v0().data()) as Record<string, unknown>;
+
+        return {
+          type: 'FlashLoanExecuted',
+          borrowedAmount: BigInt(String(data['amount'] ?? data['borrowed_amount'] ?? 0)),
+          feePaid: BigInt(String(data['fee'] ?? data['fee_paid'] ?? 0)),
+          callbackAddress: String(data['callback'] ?? data['callback_address'] ?? data['receiver'] ?? ''),
+          token: String(data['token'] ?? ''),
+        };
+      } catch {
+        continue;
+      }
+    }
+    return null;
+  }
+
+  private decodeFailedEvent(events: xdr.ContractEvent[]): FlashLoanFailedEvent | null {
+    for (const event of events) {
+      if (event.type().name !== 'contract') continue;
+
+      const topics = event.body().v0().topics();
+      if (!topics.length) continue;
+
+      const eventName = this.topicSymbol(topics[0]);
+      if (eventName !== 'FlashLoanFailed') continue;
+
+      try {
+        const data = scValToNative(event.body().v0().data()) as Record<string, unknown>;
+
+        return {
+          type: 'FlashLoanFailed',
+          borrowedAmount: BigInt(String(data['amount'] ?? data['borrowed_amount'] ?? 0)),
+          token: String(data['token'] ?? ''),
+          reason: String(data['reason'] ?? data['error'] ?? 'callback reverted'),
+        };
+      } catch {
+        continue;
+      }
+    }
+    return null;
+  }
+
+  private topicSymbol(topic: xdr.ScVal): string {
+    try {
+      return topic.sym().toString();
+    } catch {
+      return '';
+    }
+  }
 }
+

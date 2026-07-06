@@ -1,0 +1,70 @@
+name: CodeQL
+
+on:
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly comprehensive scan (Mondays 06:00 UTC)
+    - cron: '0 6 * * 1'
+
+permissions:
+  actions: read
+  contents: read
+  security-events: write
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [javascript-typescript]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          queries: security-extended
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build TypeScript
+        run: npm run build
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:${{ matrix.language }}
+          output: codeql-results.sarif
+          upload: never
+
+      - name: Upload results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: codeql-results.sarif
+          category: codeql/${{ matrix.language }}
+
+      - name: Block PR on high or critical findings
+        if: github.event_name == 'pull_request'
+        run: |
+          count=$(jq '[.runs[].results[] | select(.level == "error")] | length' codeql-results.sarif)
+          if [ "${count}" -gt 0 ]; then
+            echo "::error::CodeQL found ${count} high or critical severity finding(s). Merge is blocked."
+            jq -r '.runs[].results[] | select(.level == "error") | "- \(.ruleId): \(.message.text)"' codeql-results.sarif
+            exit 1
+          fi
+          echo "No high or critical CodeQL findings detected."

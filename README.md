@@ -2,6 +2,8 @@
 
 TypeScript SDK for the CoralSwap Protocol -- a V2 AMM on Stellar/Soroban with dynamic fees and flash loans.
 
+> **Upgrading from v1?** See the [Migration Guide](./MIGRATION.md) for breaking changes, before/after examples, and step-by-step instructions.
+
 ## Architecture
 
 **Contract-first, API-optional.** This SDK interacts directly with CoralSwap's Soroban smart contracts through Soroban RPC. No centralized API gateway, no API keys, no single points of failure.
@@ -337,6 +339,10 @@ try {
 }
 ```
 
+## Performance
+
+High-throughput integrations (trading bots, aggregators, dashboards) should tune caching, RPC failover, and connection pooling. See **[docs/PERFORMANCE.md](docs/PERFORMANCE.md)** for use-case profiles, TTL guidance, benchmark numbers, and copy-paste configuration examples.
+
 ## Design Principles
 
 | Principle      | Implementation                                 |
@@ -386,6 +392,12 @@ Add the following secrets to your repository (Settings → Secrets → Actions):
 | `TEST_KEYPAIR` | Funded testnet secret key |
 | `TEST_TOKEN_A` | Testnet token A contract address |
 | `TEST_TOKEN_B` | Testnet token B contract address |
+
+## Architecture Decision Records
+
+- [ADR-001 Module Boundary Decisions](docs/adr/ADR-001-module-boundaries.md)
+- [ADR-002 Error Handling Strategy](docs/adr/ADR-002-error-handling.md)
+- [ADR-003 Caching Approach](docs/adr/ADR-003-caching-approach.md)
 
 ## License
 

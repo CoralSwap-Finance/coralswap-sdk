@@ -216,14 +216,19 @@ describe('Multi-hop routing (dedicated methods)', () => {
       ).rejects.toBeInstanceOf(ValidationError);
     });
 
-    it('throws ValidationError for EXACT_OUT trade type', async () => {
-      await expect(
-        swap.getMultiHopQuote({
-          path: [TOKEN_A, TOKEN_B, TOKEN_C],
-          amount: 1_000_000n,
-          tradeType: TradeType.EXACT_OUT,
-        }),
-      ).rejects.toBeInstanceOf(ValidationError);
+    it('returns a MultiHopSwapQuote for EXACT_OUT trade type', async () => {
+      const quote = await swap.getMultiHopQuote({
+        path: [TOKEN_A, TOKEN_B, TOKEN_C],
+        amount: 1_000_000n,
+        tradeType: TradeType.EXACT_OUT,
+      });
+
+      expect(quote.hops).toHaveLength(2);
+      expect(quote.hops[0].tokenIn).toBe(TOKEN_A);
+      expect(quote.hops[0].tokenOut).toBe(TOKEN_B);
+      expect(quote.hops[1].tokenIn).toBe(TOKEN_B);
+      expect(quote.hops[1].tokenOut).toBe(TOKEN_C);
+      expect(quote.hops[1].amountOut).toBe(1_000_000n);
     });
 
     it('throws PairNotFoundError if any intermediate pair is missing', async () => {
