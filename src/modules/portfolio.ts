@@ -9,6 +9,8 @@ import {
 import { TreasuryModule, TreasuryModuleOptions } from "@/modules/treasury";
 import { PositionsModule } from "@/modules/positions";
 import { validateAddress } from "@/utils/validation";
+import { isValidAddress } from "@/utils/addresses";
+import { ValidationError } from "@/errors";
 import {
   MissingPriceFeedError,
   AddressNotFoundError,
@@ -34,6 +36,78 @@ export class PortfolioModule extends TreasuryModule {
     this.positions = new PositionsModule(client);
   }
 
+  // --- Validation helpers local to this module ---
+  private static validatePairAddresses(
+    addrs: string[] | undefined,
+    name = "pairAddresses",
+  ): void {
+    if (addrs === undefined) return;
+    if (!Array.isArray(addrs)) {
+      throw new ValidationError(`${name} must be an array, got ${String(addrs)}`, {
+        [name]: addrs,
+      });
+    }
+
+    for (let i = 0; i < addrs.length; i++) {
+      const a = addrs[i];
+      if (!isValidAddress(a)) {
+        throw new ValidationError(`${name}[${i}] is not a valid Stellar address: ${a}`, {
+          address: a,
+          index: i,
+        });
+      }
+    }
+  }
+
+  private static validateSnapshot(entry: PortfolioEntrySnapshot): void {
+    if (!entry || typeof entry !== "object") {
+      throw new ValidationError(`entry must be an object, got ${String(entry)}`);
+    }
+    // owner
+    if (!isValidAddress(entry.owner)) {
+      throw new ValidationError(`entry.owner is not a valid Stellar address: ${entry.owner}`, {
+        address: entry.owner,
+      });
+    }
+    // capturedAt must not be in the future
+    const now = Math.floor(Date.now() / 1000);
+    if (typeof entry.capturedAt !== "number" || !Number.isFinite(entry.capturedAt)) {
+      throw new ValidationError(`entry.capturedAt must be a valid unix timestamp, got ${String(entry.capturedAt)}`, {
+        capturedAt: entry.capturedAt,
+      });
+    }
+    if (entry.capturedAt > now) {
+      throw new ValidationError(`entry.capturedAt is in the future: ${entry.capturedAt}`, {
+        capturedAt: entry.capturedAt,
+      });
+    }
+
+    if (!Array.isArray(entry.positions)) {
+      throw new ValidationError(`entry.positions must be an array, got ${String(entry.positions)}`);
+    }
+    for (let i = 0; i < entry.positions.length; i++) {
+      const p = entry.positions[i];
+      if (!isValidAddress(p.pairAddress)) {
+        throw new ValidationError(`entry.positions[${i}].pairAddress is not a valid Stellar address: ${p.pairAddress}`, {
+          pairAddress: p.pairAddress,
+          index: i,
+        });
+      }
+    }
+  }
+
+  private static validateLimit(value: unknown, name = "limit"): void {
+    if (typeof value !== "number" || !Number.isFinite(value)) {
+      throw new ValidationError(`${name} must be a finite number, got ${String(value)}`, { [name]: value });
+    }
+    if (!Number.isInteger(value) || value <= 0) {
+      throw new ValidationError(`${name} must be a positive integer, got ${String(value)}`, { [name]: value });
+    }
+    if (value > 1000) {
+      throw new ValidationError(`${name} must be <= 1000, got ${String(value)}`, { [name]: value });
+    }
+  }
+
   /**
    * Get the full portfolio for an owner across one or more pools.
    *
@@ -45,6 +119,10 @@ export class PortfolioModule extends TreasuryModule {
     owner: string,
     options: GetPortfolioOptions = {},
   ): Promise<Portfolio> {
+    // Validation guards
+    validateAddress(owner, "owner");
+    PortfolioModule.validatePairAddresses(options.pairAddresses, "options.pairAddresses");
+
     return this.get(owner, options);
   }
 
@@ -52,7 +130,9 @@ export class PortfolioModule extends TreasuryModule {
     owner: string,
     options: GetPortfolioOptions = {},
   ): Promise<Portfolio> {
+    // Validation guards
     validateAddress(owner, "owner");
+    PortfolioModule.validatePairAddresses(options.pairAddresses, "options.pairAddresses");
 
     let summary;
     try {
@@ -117,6 +197,13 @@ export class PortfolioModule extends TreasuryModule {
    * Capture a snapshot from a portfolio result for later PnL comparison.
    */
   createSnapshot(portfolio: Portfolio): PortfolioEntrySnapshot {
+    // Validation guards
+    validateAddress(portfolio.owner, "portfolio.owner");
+    PortfolioModule.validatePairAddresses(
+      portfolio.positions.map((p) => p.pairAddress),
+      "portfolio.positions.pairAddress",
+    );
+
     return {
       owner: portfolio.owner,
       totalValueUSD: portfolio.totalValueUSD,
@@ -141,7 +228,15 @@ export class PortfolioModule extends TreasuryModule {
     owner: string,
     entry: PortfolioEntrySnapshot,
   ): Promise<PortfolioPnL> {
+    // Validation guards
     validateAddress(owner, "owner");
+    PortfolioModule.validateSnapshot(entry);
+    if (entry.owner !== owner) {
+      throw new ValidationError(
+        `entry.owner does not match owner: entry.owner=${entry.owner}, owner=${owner}`,
+        { entryOwner: entry.owner, owner },
+      );
+    }
 
     const pairAddresses = entry.positions.map((p) => p.pairAddress);
     const current = await this.getPortfolio(owner, { pairAddresses });
@@ -167,6 +262,8 @@ export class PortfolioModule extends TreasuryModule {
   private async buildPriceMapTracked(
     allPairs: string[],
   ): Promise<{ priceMap: Map<string, number>; missingTokens: string[] }> {
+    // Validation guards
+    PortfolioModule.validatePairAddresses(allPairs, "allPairs");
     const prices = new Map<string, number>();
     const missingTokens: string[] = [];
 
