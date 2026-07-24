@@ -9,6 +9,8 @@
  * Tests are grouped by the four main probe functions.
  */
 
+import { SorobanRpc, TransactionBuilder } from '@stellar/stellar-sdk';
+
 import {
   checkRPCHealth,
   percentile,
@@ -16,6 +18,8 @@ import {
   getContractStatus,
   getBestEndpoint,
 } from '../src/modules/health-check';
+import { NETWORK_CONFIGS } from '../src/config';
+import { Network } from '../src/types/common';
 
 // ---------------------------------------------------------------------------
 // SorobanRpc.Server mock
@@ -29,6 +33,8 @@ type ServerMockConfig = {
   getHealthFn?: (url: string) => Promise<unknown>;
   getLatestLedgerFn?: (url: string) => Promise<unknown>;
   getContractDataFn?: (url: string) => Promise<unknown>;
+  getAccountFn?: (url: string) => Promise<unknown>;
+  simulateTransactionFn?: (url: string) => Promise<unknown>;
 };
 
 const serverMockConfig: ServerMockConfig = {};
@@ -57,6 +63,14 @@ jest.mock('@stellar/stellar-sdk', () => {
         async getContractData(): Promise<unknown> {
           if (serverMockConfig.getContractDataFn) return serverMockConfig.getContractDataFn(this.url);
           throw new Error('getContractData not configured');
+        }
+        async getAccount(): Promise<unknown> {
+          if (serverMockConfig.getAccountFn) return serverMockConfig.getAccountFn(this.url);
+          throw new Error('getAccount not configured');
+        }
+        async simulateTransaction(): Promise<unknown> {
+          if (serverMockConfig.simulateTransactionFn) return serverMockConfig.simulateTransactionFn(this.url);
+          throw new Error('simulateTransaction not configured');
         }
       },
     },
@@ -90,6 +104,16 @@ beforeEach(() => {
     if (fn) return fn();
     throw new Error('getContractData not configured');
   };
+  serverMockConfig.getAccountFn = async () => ({}) as Promise<unknown>;
+  serverMockConfig.simulateTransactionFn = async () => ({ resultXdr: 'simulated' });
+
+  jest.spyOn(SorobanRpc.Api, 'isSimulationSuccess').mockReturnValue(true);
+  jest.spyOn(TransactionBuilder.prototype, 'addOperation').mockReturnThis();
+  jest.spyOn(TransactionBuilder.prototype, 'setTimeout').mockReturnThis();
+  jest.spyOn(TransactionBuilder.prototype, 'build').mockReturnValue({} as never);
+
+  NETWORK_CONFIGS[Network.TESTNET].factoryAddress = '';
+  NETWORK_CONFIGS[Network.TESTNET].routerAddress = '';
 });
 
 afterEach(() => {
@@ -289,10 +313,42 @@ describe('getContractStatus()', () => {
     }));
     const status = await getContractStatus('https://rpc.example.com', CONTRACT_ID);
     expect(status.deployed).toBe(true);
+    expect(status.isDeployed).toBe(true);
+    expect(status.isOperational).toBe(true);
     expect(status.ttlValid).toBe(true);
     expect(status.liveUntilLedger).toBe(5000);
     expect(status.remainingLedgers).toBe(4000);
     expect(status.error).toBeNull();
+  });
+
+  it('returns default factory and router statuses from the SDK config', async () => {
+    const factoryAddress = 'CADQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQP5KR';
+    const routerAddress = 'CBYHYT6FQG2F7NWM4SRI2QH5AGDSN5BO4JYH7BHVQZSQ5CPQY43XCN22';
+    NETWORK_CONFIGS[Network.TESTNET].factoryAddress = factoryAddress;
+    NETWORK_CONFIGS[Network.TESTNET].routerAddress = routerAddress;
+
+    setContractHandler('https://soroban-testnet.stellar.org', async () => ({
+      liveUntilLedgerSeq: 5000,
+      latestLedger: 1000,
+    }));
+
+    const statuses = await getContractStatus();
+    expect(Array.isArray(statuses)).toBe(true);
+    expect(statuses).toHaveLength(2);
+    expect((statuses as Array<{ isDeployed: boolean; contractAddress?: string }>)[0].isDeployed).toBe(true);
+    expect((statuses as Array<{ isOperational: boolean }>)[0].isOperational).toBe(true);
+  });
+
+  it('marks a contract non-operational when read-only simulation fails', async () => {
+    setContractHandler('https://rpc.example.com', async () => ({
+      liveUntilLedgerSeq: 5000,
+      latestLedger: 1000,
+    }));
+    jest.spyOn(SorobanRpc.Api, 'isSimulationSuccess').mockReturnValue(false);
+
+    const status = await getContractStatus('https://rpc.example.com', CONTRACT_ID);
+    expect(status.isOperational).toBe(false);
+    expect(status.deployed).toBe(true);
   });
 
   it('reports ttlValid=false when the liveUntilLedger has already passed', async () => {
