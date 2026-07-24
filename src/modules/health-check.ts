@@ -14,8 +14,18 @@
  *  - `getBestEndpoint`     — rank endpoints by latency + error rate
  */
 
-import { SorobanRpc, Contract, xdr, StrKey } from '@stellar/stellar-sdk';
+import {
+  SorobanRpc,
+  Contract,
+  xdr,
+  StrKey,
+  TransactionBuilder,
+  Address,
+  nativeToScVal,
+} from '@stellar/stellar-sdk';
 
+import { NETWORK_CONFIGS, TESTNET_NETWORK } from '@/config';
+import { Network } from '@/types/common';
 import { sleep } from '@/utils/retry';
 
 /** Default RPC health-probe timeout in milliseconds. */
@@ -63,16 +73,24 @@ export interface LatencyStats {
  * Result of a contract deployment/status check.
  */
 export interface ContractStatus {
-  /** True when the contract exists on-chain and responded to a ledger read. */
-  deployed: boolean;
-  /** True when the contract's TTL has not yet expired. */
-  ttlValid: boolean;
-  /** Latest ledger at entry is live. 0 when unknown. */
-  liveUntilLedger: number;
-  /** Number of ledgers remaining until expiry; -1 when not determinable. */
-  remainingLedgers: number;
-  /** Error message when the check failed; `null` on success. */
-  error: string | null;
+  /** True when the contract instance entry is present in the ledger state. */
+  isDeployed: boolean;
+  /** True when the contract responds to a read-only simulation. */
+  isOperational: boolean;
+  /** Number of ledgers remaining before the contract instance TTL expires. */
+  ttlRemaining: number;
+  /** Last ledger sequence known to have touched the contract instance. */
+  lastActivity: number;
+  /** Legacy alias for `isDeployed`. */
+  deployed?: boolean;
+  /** Legacy alias for `ttlRemaining > 0`. */
+  ttlValid?: boolean;
+  /** Legacy alias for the internal live-until ledger sequence. */
+  liveUntilLedger?: number;
+  /** Legacy alias for TTL remaining in ledger counts. */
+  remainingLedgers?: number;
+  /** Error message when the check failed; `null` when healthy. */
+  error?: string | null;
 }
 
 /**
@@ -279,55 +297,78 @@ export async function getRPCLatency(
 /**
  * Check whether a Soroban contract is deployed and still within its TTL.
  *
- * Uses the Stellar RPC `getContractData` with a ledger-key read for the
- * contract instance.  This is cheaper than a full simulation and relies
- * on the ledger entry being present in the live state.
+ * When `contractId` is omitted, the SDK resolves the default Factory and
+ * Router contracts from the configured network defaults and returns an array
+ * of status objects for each of them. When a legacy `(url, contractId)`
+ * pair is supplied, the function preserves the previous behaviour while
+ * adding a simulation-backed operational check.
  *
- * The TTL check reports false if the entry's `liveUntilLedger` is past
- * the current ledger, meaning the contract will expire soon unless bumped.
- *
- * @param url        - The Soroban RPC endpoint URL.
- * @param contractId - The Stellar contract address (C...).
- * @returns ContractStatus with deployment status and TTL information.
- *
- * @example
- * const status = await getContractStatus(
- *   'https://soroban-testnet.stellar.org',
- *   'CA3J7GYCCX7NVPY...',
- * );
- * if (!status.deployed) console.error('Contract is not deployed');
+ * @param contractAddressOrUrl - Optional contract ID, or the legacy RPC URL.
+ * @param maybeContractId      - Optional legacy contract ID when using the old API.
+ * @returns A single `ContractStatus` or an array of statuses when checking defaults.
  */
 export async function getContractStatus(
+  contractAddressOrUrl?: string,
+  maybeContractId?: string,
+): Promise<ContractStatus | ContractStatus[]> {
+  if (typeof maybeContractId === 'string') {
+    return probeContractStatusAtUrl(contractAddressOrUrl ?? '', maybeContractId);
+  }
+
+  if (typeof contractAddressOrUrl === 'string') {
+    const status = await probeContractStatusAtUrl(
+      getDefaultRpcUrl(),
+      contractAddressOrUrl,
+    );
+    return status;
+  }
+
+  const defaultTargets = getDefaultHealthCheckTargets();
+  if (defaultTargets.length === 0) {
+    return [];
+  }
+
+  return Promise.all(
+    defaultTargets.map((target) =>
+      probeContractStatusAtUrl(target.rpcUrl, target.contractAddress, target.kind),
+    ),
+  );
+}
+
+function getDefaultHealthCheckTargets(): Array<{ rpcUrl: string; contractAddress: string; kind: 'factory' | 'router' | 'custom' }> {
+  const rpcUrl = getDefaultRpcUrl();
+  const factoryAddress = NETWORK_CONFIGS[Network.TESTNET].factoryAddress || TESTNET_NETWORK.factoryAddress;
+  const routerAddress = NETWORK_CONFIGS[Network.TESTNET].routerAddress || TESTNET_NETWORK.routerAddress;
+
+  const targets: Array<{ rpcUrl: string; contractAddress: string; kind: 'factory' | 'router' | 'custom' }> = [];
+  if (factoryAddress) targets.push({ rpcUrl, contractAddress: factoryAddress, kind: 'factory' });
+  if (routerAddress) targets.push({ rpcUrl, contractAddress: routerAddress, kind: 'router' });
+  return targets;
+}
+
+function getDefaultRpcUrl(): string {
+  return NETWORK_CONFIGS[Network.TESTNET].rpcUrl || TESTNET_NETWORK.rpcUrl;
+}
+
+async function probeContractStatusAtUrl(
   url: string,
   contractId: string,
+  kind: 'factory' | 'router' | 'custom' = 'custom',
 ): Promise<ContractStatus> {
   if (!url || typeof url !== 'string') {
-    return {
-      deployed: false,
-      ttlValid: false,
-      liveUntilLedger: 0,
-      remainingLedgers: -1,
-      error: 'Invalid RPC URL',
-    };
+    return newContractStatus(false, false, 0, 0, 'Invalid RPC URL');
   }
 
   let server: SorobanRpc.Server;
   try {
     server = makeServer(url);
   } catch (err) {
-    return {
-      deployed: false,
-      ttlValid: false,
-      liveUntilLedger: 0,
-      remainingLedgers: -1,
-      error: err instanceof Error ? err.message : 'Failed to construct RPC server',
-    };
+    return newContractStatus(false, false, 0, 0, err instanceof Error ? err.message : 'Failed to construct RPC server');
   }
 
   try {
     const contract = new Contract(contractId);
     const rawContractId = StrKey.decodeContract(contractId);
-    // Wrap the raw 32-byte contract hash in an ScVal Bytes for the instance key.
     const key = xdr.ScVal.scvBytes(Buffer.from(rawContractId));
 
     const response = await Promise.race([
@@ -337,31 +378,24 @@ export async function getContractStatus(
       ),
     ]);
 
-    const entry = response as any;
-    const result = response as any;
+    const entry = response as { liveUntilLedgerSeq?: number; latestLedger?: number; lastModifiedLedgerSeq?: number };
+    const liveUntilLedger = entry.liveUntilLedgerSeq ?? 0;
+    const latestLedger = entry.latestLedger ?? 0;
+    const lastActivity = entry.lastModifiedLedgerSeq ?? latestLedger;
 
-    if (!result || !('liveUntilLedgerSeq' in result) || (result.liveUntilLedgerSeq as number) <= 0) {
-      return {
-        deployed: false,
-        ttlValid: false,
-        liveUntilLedger: 0,
-        remainingLedgers: -1,
-        error: 'Contract ledger entry not found',
-      };
+    if (!entry || liveUntilLedger <= 0) {
+      return newContractStatus(false, false, 0, 0, 'Contract ledger entry not found');
     }
 
-    const liveUntilLedger = (result.liveUntilLedgerSeq as number) ?? 0;
-    const currentLedger = entry.latestLedger ?? 0;
-    const remainingLedgers =
-      currentLedger > 0 ? liveUntilLedger - currentLedger : -1;
-    const ttlValid = liveUntilLedger > currentLedger;
+    const ttlRemaining = latestLedger > 0 ? liveUntilLedger - latestLedger : 0;
+    const isOperational = await simulateReadOnlyContract(server, contractId, kind);
 
     return {
+      ...newContractStatus(true, isOperational, ttlRemaining, lastActivity, null),
       deployed: true,
-      ttlValid,
+      ttlValid: ttlRemaining > 0,
       liveUntilLedger,
-      remainingLedgers,
-      error: null,
+      remainingLedgers: ttlRemaining,
     };
   } catch (err) {
     const isMissing = err instanceof Error && (
@@ -370,21 +404,71 @@ export async function getContractStatus(
       msgIncludes(err.message, 'missing')
     );
     if (isMissing) {
-      return {
-        deployed: false,
-        ttlValid: false,
-        liveUntilLedger: 0,
-        remainingLedgers: -1,
-        error: 'Contract not deployed',
-      };
+      return newContractStatus(false, false, 0, 0, 'Contract not deployed');
     }
-    return {
-      deployed: false,
-      ttlValid: false,
-      liveUntilLedger: 0,
-      remainingLedgers: -1,
-      error: err instanceof Error ? err.message : 'Unknown error',
-    };
+    return newContractStatus(false, false, 0, 0, err instanceof Error ? err.message : 'Unknown error');
+  }
+}
+
+function newContractStatus(
+  isDeployed: boolean,
+  isOperational: boolean,
+  ttlRemaining: number,
+  lastActivity: number,
+  error: string | null,
+): ContractStatus {
+  return {
+    isDeployed,
+    isOperational,
+    ttlRemaining,
+    lastActivity,
+    deployed: isDeployed,
+    ttlValid: ttlRemaining > 0,
+    liveUntilLedger: lastActivity,
+    remainingLedgers: ttlRemaining,
+    error,
+  };
+}
+
+async function simulateReadOnlyContract(
+  server: SorobanRpc.Server,
+  contractAddress: string,
+  kind: 'factory' | 'router' | 'custom',
+): Promise<boolean> {
+  try {
+    const contract = new Contract(contractAddress);
+    const account = await server.getAccount(
+      'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF',
+    );
+
+    const tx = new TransactionBuilder(account, {
+      fee: '100',
+      networkPassphrase: TESTNET_NETWORK.networkPassphrase,
+    });
+
+    if (kind === 'router') {
+      tx.addOperation(
+        contract.call(
+          'get_dynamic_fee',
+          nativeToScVal(Address.fromString('GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF'), { type: 'address' }),
+          nativeToScVal(Address.fromString('GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF'), { type: 'address' }),
+        ),
+      );
+    } else {
+      tx.addOperation(contract.call('get_protocol_version'));
+    }
+
+    const builtTx = tx.setTimeout(30).build();
+    const sim = await Promise.race([
+      server.simulateTransaction(builtTx),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('contract simulation timeout')), 8_000),
+      ),
+    ]);
+
+    return SorobanRpc.Api.isSimulationSuccess(sim);
+  } catch {
+    return false;
   }
 }
 
@@ -507,8 +591,8 @@ export class HealthCheckModule {
    * Check whether a Soroban contract is deployed and within TTL.
    * @see {@link getContractStatus}
    */
-  getContractStatus(url: string, contractId: string): Promise<ContractStatus> {
-    return getContractStatus(url, contractId);
+  getContractStatus(contractAddressOrUrl?: string, maybeContractId?: string): Promise<ContractStatus | ContractStatus[]> {
+    return getContractStatus(contractAddressOrUrl, maybeContractId);
   }
 
   /**
