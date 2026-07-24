@@ -87,6 +87,7 @@ export {
 export type { OptimalPath } from "@/modules/router";
 export type { TWAPObservation, TWAPResult, TraderRanking, GetTopTradersOptions } from "@/modules";
 export type { TreasuryModuleOptions, LeaderboardEntry, LeaderboardOptions } from "@/modules";
+export type { MonitoringModuleOptions } from "@/modules";
 
 // Utilities
 export {

@@ -8,6 +8,7 @@
  * @module monitoring
  */
 
+import { SorobanRpc } from '@stellar/stellar-sdk';
 import { CoralSwapClient } from '@/client';
 import {
   MetricConfig,
@@ -17,9 +18,27 @@ import {
   MetricGranularity,
   MetricQueryOptions,
   MonitoringDashboard,
+  SystemMetrics,
+  SystemMetricsPeriod,
+  MetricChange,
+  PoolTvlChange,
 } from '@/types/monitoring';
 import { ValidationError } from '@/errors';
 import { validateAddress } from '@/utils/validation';
+
+/** ~1 day of Soroban ledgers (5s/ledger). */
+const LEDGERS_PER_DAY = 17_280;
+
+/**
+ * Optional construction knobs for {@link MonitoringModule}.
+ */
+export interface MonitoringModuleOptions {
+  /**
+   * Addresses of tokens treated as $1 USD stablecoins.
+   * Anchors USD valuations for TVL, volume, and revenue.
+   */
+  stableAddresses?: string[];
+}
 
 // ---------------------------------------------------------------------------
 // Built-in metric definitions
@@ -136,6 +155,7 @@ const DEFAULT_GRANULARITY: MetricGranularity = '1h';
  * // Protocol-level health
  * const summary = await monitor.getProtocolSummary();
  * const health = await monitor.checkSystemHealth();
+ * const kpis = await monitor.getSystemMetrics('7d');
  * const poolHealth = await monitor.getPoolHealth('CA3D...');
  *
  * // Custom metric collection
@@ -150,9 +170,11 @@ const DEFAULT_GRANULARITY: MetricGranularity = '1h';
 export class MonitoringModule {
   private readonly client: CoralSwapClient;
   private readonly metrics: Map<string, MetricInstance> = new Map();
+  private readonly stableSet: Set<string>;
 
-  constructor(client: CoralSwapClient) {
+  constructor(client: CoralSwapClient, options: MonitoringModuleOptions = {}) {
     this.client = client;
+    this.stableSet = new Set(options.stableAddresses ?? []);
   }
 
   // -----------------------------------------------------------------------
@@ -244,6 +266,115 @@ export class MonitoringModule {
       activePairCount: active.length,
       totalLPHolders: 0,
       timestamp: new Date().toISOString(),
+    };
+  }
+
+  // -----------------------------------------------------------------------
+  // System metrics (growth KPIs)
+  // -----------------------------------------------------------------------
+
+  /**
+   * High-level protocol KPIs for operators and governance.
+   *
+   * Compares the requested lookback window against the immediately preceding
+   * window of equal length for TVL, volume, and unique users. Fee revenue is
+   * reported for the current window only.
+   *
+   * @param period - Lookback window; defaults to `'24h'`.
+   * @returns Aggregated {@link SystemMetrics}.
+   * @throws {ValidationError} When `period` is not one of `'24h' | '7d' | '30d'`.
+   *
+   * @example
+   * ```ts
+   * const metrics = await monitor.getSystemMetrics('7d');
+   * console.log(metrics.tvlChange.percentage); // e.g. 12.5
+   * ```
+   */
+  async getSystemMetrics(period: SystemMetricsPeriod = '24h'): Promise<SystemMetrics> {
+    if (period !== '24h' && period !== '7d' && period !== '30d') {
+      throw new ValidationError(`Invalid system metrics period: ${period}`);
+    }
+
+    const empty: SystemMetrics = {
+      tvlChange: { absolute: 0, percentage: 0 },
+      volumeChange: { absolute: 0, percentage: 0 },
+      userGrowth: { absolute: 0, percentage: 0 },
+      revenueUSD: 0,
+      topGrowingPool: null,
+      topDecliningPool: null,
+    };
+
+    let allPairs: string[];
+    try {
+      allPairs = await this.client.factory.getAllPairs();
+    } catch {
+      return empty;
+    }
+
+    if (allPairs.length === 0) {
+      return empty;
+    }
+
+    const periodLedgers = this.periodToLedgers(period);
+    const currentLedger = await this.client.getCurrentLedger();
+    const currentStart = Math.max(0, currentLedger - periodLedgers);
+    const previousStart = Math.max(0, currentLedger - periodLedgers * 2);
+    const previousEnd = currentStart;
+
+    const priceMap = await this.buildPriceMap(allPairs);
+
+    const poolChanges: PoolTvlChange[] = [];
+    let currentTvlTotal = 0;
+    let previousTvlTotal = 0;
+
+    let currentVolume = 0;
+    let previousVolume = 0;
+    let currentRevenue = 0;
+    const currentUsers = new Set<string>();
+    const previousUsers = new Set<string>();
+
+    for (const pairAddress of allPairs) {
+      const { currentTvlUSD, previousTvlUSD } = await this.fetchPoolTvlWindow(
+        pairAddress,
+        priceMap,
+        previousStart,
+        previousEnd,
+      );
+
+      currentTvlTotal += currentTvlUSD;
+      previousTvlTotal += previousTvlUSD;
+
+      poolChanges.push({
+        pairAddress,
+        currentTvlUSD,
+        previousTvlUSD,
+        tvlChange: computeMetricChange(currentTvlUSD, previousTvlUSD),
+      });
+
+      const activity = await this.fetchPoolSwapActivity(
+        pairAddress,
+        priceMap,
+        previousStart,
+        currentLedger,
+        currentStart,
+      );
+
+      currentVolume += activity.currentVolumeUSD;
+      previousVolume += activity.previousVolumeUSD;
+      currentRevenue += activity.currentRevenueUSD;
+      for (const u of activity.currentUsers) currentUsers.add(u);
+      for (const u of activity.previousUsers) previousUsers.add(u);
+    }
+
+    const { topGrowingPool, topDecliningPool } = pickTopPools(poolChanges);
+
+    return {
+      tvlChange: computeMetricChange(currentTvlTotal, previousTvlTotal),
+      volumeChange: computeMetricChange(currentVolume, previousVolume),
+      userGrowth: computeMetricChange(currentUsers.size, previousUsers.size),
+      revenueUSD: currentRevenue,
+      topGrowingPool,
+      topDecliningPool,
     };
   }
 
@@ -365,6 +496,202 @@ export class MonitoringModule {
     }
   }
 
+  // -----------------------------------------------------------------------
+  // Private helpers — system metrics
+  // -----------------------------------------------------------------------
+
+  private periodToLedgers(period: SystemMetricsPeriod): number {
+    if (period === '7d') return LEDGERS_PER_DAY * 7;
+    if (period === '30d') return LEDGERS_PER_DAY * 30;
+    return LEDGERS_PER_DAY;
+  }
+
+  private async buildPriceMap(allPairs: string[]): Promise<Map<string, number>> {
+    const prices = new Map<string, number>();
+    for (const addr of this.stableSet) {
+      prices.set(addr, 1.0);
+    }
+    if (this.stableSet.size === 0) return prices;
+
+    for (const pairAddress of allPairs) {
+      try {
+        const pair = this.client.pair(pairAddress);
+        const [{ token0, token1 }, { reserve0, reserve1 }] = await Promise.all([
+          pair.getTokens(),
+          pair.getReserves(),
+        ]);
+        if (reserve0 === 0n || reserve1 === 0n) continue;
+        if (this.stableSet.has(token0) && !prices.has(token1)) {
+          prices.set(token1, Number(reserve0) / Number(reserve1));
+        } else if (this.stableSet.has(token1) && !prices.has(token0)) {
+          prices.set(token0, Number(reserve1) / Number(reserve0));
+        }
+      } catch {
+        continue;
+      }
+    }
+    return prices;
+  }
+
+  private reservesToTvlUSD(
+    reserve0: bigint,
+    reserve1: bigint,
+    token0: string,
+    token1: string,
+    priceMap: Map<string, number>,
+  ): number {
+    const price0 = priceMap.get(token0) ?? 0;
+    const price1 = priceMap.get(token1) ?? 0;
+    return (Number(reserve0) / 1e7) * price0 + (Number(reserve1) / 1e7) * price1;
+  }
+
+  private async fetchPoolTvlWindow(
+    pairAddress: string,
+    priceMap: Map<string, number>,
+    previousStart: number,
+    previousEnd: number,
+  ): Promise<{ currentTvlUSD: number; previousTvlUSD: number }> {
+    try {
+      const pair = this.client.pair(pairAddress);
+      const [{ reserve0, reserve1 }, { token0, token1 }] = await Promise.all([
+        pair.getReserves(),
+        pair.getTokens(),
+      ]);
+      const currentTvlUSD = this.reservesToTvlUSD(reserve0, reserve1, token0, token1, priceMap);
+
+      const previousReserves = await this.fetchPreviousReserves(
+        pairAddress,
+        previousStart,
+        previousEnd,
+      );
+      const previousTvlUSD = previousReserves
+        ? this.reservesToTvlUSD(
+            previousReserves.reserve0,
+            previousReserves.reserve1,
+            token0,
+            token1,
+            priceMap,
+          )
+        : 0;
+
+      return { currentTvlUSD, previousTvlUSD };
+    } catch {
+      return { currentTvlUSD: 0, previousTvlUSD: 0 };
+    }
+  }
+
+  private async fetchPreviousReserves(
+    pairAddress: string,
+    fromLedger: number,
+    toLedger: number,
+  ): Promise<{ reserve0: bigint; reserve1: bigint } | null> {
+    try {
+      const request: SorobanRpc.Server.GetEventsRequest = {
+        startLedger: fromLedger,
+        filters: [
+          {
+            type: 'contract',
+            contractIds: [pairAddress],
+            topics: [['sync']],
+          },
+        ],
+        limit: 10000,
+      };
+      const response = await this.client.server.getEvents(request);
+      if (!Array.isArray(response?.events) || response.events.length === 0) {
+        return null;
+      }
+
+      let best: { ledger: number; reserve0: bigint; reserve1: bigint } | null = null;
+      for (const event of response.events) {
+        if (event.ledger > toLedger) continue;
+        const parsed = parseSyncEvent(event);
+        if (!parsed) continue;
+        if (!best || event.ledger >= best.ledger) {
+          best = { ledger: event.ledger, ...parsed };
+        }
+      }
+      return best ? { reserve0: best.reserve0, reserve1: best.reserve1 } : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async fetchPoolSwapActivity(
+    pairAddress: string,
+    priceMap: Map<string, number>,
+    fromLedger: number,
+    toLedger: number,
+    currentStart: number,
+  ): Promise<{
+    currentVolumeUSD: number;
+    previousVolumeUSD: number;
+    currentRevenueUSD: number;
+    currentUsers: Set<string>;
+    previousUsers: Set<string>;
+  }> {
+    const empty = {
+      currentVolumeUSD: 0,
+      previousVolumeUSD: 0,
+      currentRevenueUSD: 0,
+      currentUsers: new Set<string>(),
+      previousUsers: new Set<string>(),
+    };
+
+    try {
+      const request: SorobanRpc.Server.GetEventsRequest = {
+        startLedger: fromLedger,
+        filters: [
+          {
+            type: 'contract',
+            contractIds: [pairAddress],
+            topics: [['swap']],
+          },
+        ],
+        limit: 10000,
+      };
+      const response = await this.client.server.getEvents(request);
+      if (!Array.isArray(response?.events) || response.events.length === 0) {
+        return empty;
+      }
+
+      let currentVolumeUSD = 0;
+      let previousVolumeUSD = 0;
+      let currentRevenueUSD = 0;
+      const currentUsers = new Set<string>();
+      const previousUsers = new Set<string>();
+
+      for (const event of response.events) {
+        if (event.ledger > toLedger) continue;
+        const parsed = parseSwapEvent(event);
+        if (!parsed) continue;
+
+        const priceUSD = priceMap.get(parsed.tokenIn) ?? 0;
+        const volumeUSD = (Number(parsed.amountIn) / 1e7) * priceUSD;
+        const feeUSD = (Number(parsed.feeAmount) / 1e7) * priceUSD;
+
+        if (event.ledger >= currentStart) {
+          currentVolumeUSD += volumeUSD;
+          currentRevenueUSD += feeUSD;
+          currentUsers.add(parsed.sender);
+        } else {
+          previousVolumeUSD += volumeUSD;
+          previousUsers.add(parsed.sender);
+        }
+      }
+
+      return {
+        currentVolumeUSD,
+        previousVolumeUSD,
+        currentRevenueUSD,
+        currentUsers,
+        previousUsers,
+      };
+    } catch {
+      return empty;
+    }
+  }
+
   private async fetchMetricValue(config: MetricConfig): Promise<number> {
     switch (config.category) {
       case 'liquidity': return this.fetchLiquidityValue(config.targetAddress);
@@ -395,4 +722,199 @@ export class MonitoringModule {
     try { return (await this.client.factory.getAllPairs()).length; }
     catch { return 0; }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Pure helpers (exported for unit tests)
+// ---------------------------------------------------------------------------
+
+/**
+ * Compute absolute + percentage change with correct zero-to-nonzero handling.
+ *
+ * - previous = 0, current = 0 → percentage 0
+ * - previous = 0, current ≠ 0 → percentage 100
+ * - otherwise → ((current − previous) / previous) × 100
+ */
+export function computeMetricChange(current: number, previous: number): MetricChange {
+  const absolute = current - previous;
+  if (previous === 0) {
+    return { absolute, percentage: current === 0 ? 0 : 100 };
+  }
+  return { absolute, percentage: (absolute / previous) * 100 };
+}
+
+/**
+ * Pick distinct top-growing and top-declining pools by absolute TVL change.
+ */
+export function pickTopPools(pools: PoolTvlChange[]): {
+  topGrowingPool: PoolTvlChange | null;
+  topDecliningPool: PoolTvlChange | null;
+} {
+  if (pools.length === 0) {
+    return { topGrowingPool: null, topDecliningPool: null };
+  }
+
+  if (pools.length === 1) {
+    const only = pools[0];
+    if (only.tvlChange.absolute >= 0) {
+      return { topGrowingPool: only, topDecliningPool: null };
+    }
+    return { topGrowingPool: null, topDecliningPool: only };
+  }
+
+  const sorted = [...pools].sort((a, b) => b.tvlChange.absolute - a.tvlChange.absolute);
+  const topGrowingPool = sorted[0];
+  const topDecliningPool = sorted[sorted.length - 1];
+
+  // Guarantee distinct pools even if all changes are equal (already true for length ≥ 2)
+  if (topGrowingPool.pairAddress === topDecliningPool.pairAddress) {
+    return { topGrowingPool, topDecliningPool: null };
+  }
+
+  return { topGrowingPool, topDecliningPool };
+}
+
+function parseSyncEvent(rawEvent: unknown): { reserve0: bigint; reserve1: bigint } | null {
+  try {
+    if (!rawEvent || typeof rawEvent !== 'object') return null;
+    const eventObj = rawEvent as Record<string, unknown>;
+    const topics = (eventObj.topic as unknown[]) ?? [];
+    const topic0 = topics[0];
+    const topicName =
+      typeof topic0 === 'string'
+        ? topic0
+        : topic0 && typeof topic0 === 'object'
+          ? (() => {
+              const t = topic0 as Record<string, () => { toString(): string }>;
+              try {
+                return t.sym?.().toString() ?? t.str?.().toString() ?? '';
+              } catch {
+                return '';
+              }
+            })()
+          : '';
+    if (topicName !== 'sync') return null;
+
+    const map = decodeEventMap(eventObj.value);
+    if (!map) return null;
+    const reserve0 = readI128(map, 'reserve0');
+    const reserve1 = readI128(map, 'reserve1');
+    if (reserve0 === undefined || reserve1 === undefined) return null;
+    return { reserve0, reserve1 };
+  } catch {
+    return null;
+  }
+}
+
+function parseSwapEvent(rawEvent: unknown): {
+  amountIn: bigint;
+  feeAmount: bigint;
+  tokenIn: string;
+  sender: string;
+} | null {
+  try {
+    if (!rawEvent || typeof rawEvent !== 'object') return null;
+    const eventObj = rawEvent as Record<string, unknown>;
+    const topics = (eventObj.topic as unknown[]) ?? [];
+    const topic0 = topics[0];
+    const topicName =
+      typeof topic0 === 'string'
+        ? topic0
+        : topic0 && typeof topic0 === 'object'
+          ? (() => {
+              const t = topic0 as Record<string, () => { toString(): string }>;
+              try {
+                return t.sym?.().toString() ?? t.str?.().toString() ?? '';
+              } catch {
+                return '';
+              }
+            })()
+          : '';
+    if (topicName !== 'swap') return null;
+
+    const map = decodeEventMap(eventObj.value);
+    if (!map) return null;
+
+    const amountIn = readI128(map, 'amount_in');
+    const feeBps = readU32(map, 'fee_bps');
+    const tokenIn = readAddress(map, 'token_in');
+    const sender = readAddress(map, 'sender');
+    if (amountIn === undefined || feeBps === undefined || !tokenIn || !sender) return null;
+
+    const feeAmount = (amountIn * BigInt(feeBps)) / 10000n;
+    return { amountIn, feeAmount, tokenIn, sender };
+  } catch {
+    return null;
+  }
+}
+
+function decodeEventMap(value: unknown): Map<string, unknown> | null {
+  if (!value || typeof value !== 'object') return null;
+  const valueObj = value as Record<string, unknown>;
+  const entries: unknown[] =
+    typeof valueObj.map === 'function'
+      ? (valueObj.map as () => unknown[])()
+      : (valueObj._value as unknown[]);
+  if (!Array.isArray(entries)) return null;
+
+  const map = new Map<string, unknown>();
+  for (const entry of entries as Array<{ key: unknown; val: unknown }>) {
+    if (!entry || typeof entry !== 'object') continue;
+    const k = entry.key as Record<string, () => { toString(): string }>;
+    let key: string | undefined;
+    try {
+      key = k.sym?.().toString() ?? k.str?.().toString();
+    } catch {
+      /* skip */
+    }
+    if (key) map.set(key, entry.val);
+  }
+  return map;
+}
+
+function readAddress(map: Map<string, unknown>, key: string): string | undefined {
+  const val = map.get(key);
+  if (!val || typeof val !== 'object') return undefined;
+  try {
+    const v = val as Record<string, unknown>;
+    if (typeof v.address === 'function') {
+      return (v.address as () => { toString(): string })().toString();
+    }
+    if (v._value && typeof (v._value as { toString(): string }).toString === 'function') {
+      return (v._value as { toString(): string }).toString();
+    }
+  } catch {
+    /* skip */
+  }
+  return undefined;
+}
+
+function readI128(map: Map<string, unknown>, key: string): bigint | undefined {
+  const val = map.get(key);
+  if (!val || typeof val !== 'object') return undefined;
+  try {
+    const v = val as Record<string, unknown>;
+    if (typeof v.i128 === 'function') {
+      const parts = (v.i128 as () => {
+        hi(): { toString(): string };
+        lo(): { toString(): string };
+      })();
+      return (BigInt(parts.hi().toString()) << 64n) + BigInt(parts.lo().toString());
+    }
+  } catch {
+    /* skip */
+  }
+  return undefined;
+}
+
+function readU32(map: Map<string, unknown>, key: string): number | undefined {
+  const val = map.get(key);
+  if (!val || typeof val !== 'object') return undefined;
+  try {
+    const v = val as Record<string, unknown>;
+    if (typeof v.u32 === 'function') return (v.u32 as () => number)();
+  } catch {
+    /* skip */
+  }
+  return undefined;
 }
