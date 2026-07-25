@@ -23,11 +23,15 @@
     "examples:simple-swap": "ts-node examples/simple-swap.ts",
     "examples:provide-liquidity": "ts-node examples/provide-liquidity.ts",
     "examples:read-reserves": "ts-node examples/read-reserves.ts",
+    "examples:alert-setup": "ts-node --transpile-only --require tsconfig-paths/register examples/alert-setup.ts",
     "examples:rwa-pool": "ts-node examples/rwa-pool.ts",
     "examples:governance-vote": "ts-node examples/governance-vote.ts",
+    "examples:alert-setup": "ts-node --transpile-only --require tsconfig-paths/register examples/alert-setup.ts",
     "docs": "typedoc",
     "fuzz": "jest --testPathPattern=fuzz --no-coverage",
-    "benchmark": "ts-node benchmarks/run.ts"
+    "benchmark": "ts-node benchmarks/run.ts",
+    "load-test": "ts-node benchmarks/load-test.ts",
+    "load-test:report": "ts-node benchmarks/load-test.ts --output benchmarks/load-test-report.json"
   },
   "keywords": [
     "coralswap",
@@ -47,12 +51,12 @@
   },
   "dependencies": {
     "@stellar/stellar-sdk": "^12.3.0",
-    "zod": "^4.4.3"
+    "zod": "^3.23.8"
   },
   "devDependencies": {
     "@types/jest": "^29.5.0",
-    "@types/node": "^22.0.0",
-    "@typescript-eslint/eslint-plugin": "^8.62.0",
+    "@types/node": "^26.0.1",
+    "@typescript-eslint/eslint-plugin": "^8.62.1",
     "@typescript-eslint/parser": "^8.0.0",
     "dotenv": "^17.4.2",
     "eslint": "^10.6.0",
@@ -63,7 +67,7 @@
     "ts-node": "^10.9.2",
     "tsconfig-paths": "^4.2.0",
     "typedoc": "^0.28.19",
-    "typescript": "^6.0.3"
+    "typescript": "^5.6.0"
   },
   "engines": {
     "node": ">=20.0.0"

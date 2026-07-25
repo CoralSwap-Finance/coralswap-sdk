@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 /**
  * Mappings for CoralSwap contract error codes to human-readable messages.
  *
@@ -73,8 +72,19 @@ export class ErrorParser {
      * @param error - The raw error from the RPC or SDK.
      * @returns The parsed numerical code, or null if none found.
      */
-    static extractErrorCode(error: any): number | null {
-        const message = typeof error === 'string' ? error : error?.message || '';
+    static extractErrorCode(error: unknown): number | null {
+        if (!error) return null;
+        let message = '';
+        if (typeof error === 'string') {
+            message = error;
+        } else if (typeof error === 'object') {
+            const errObj = error as Record<string, unknown>;
+            if (typeof errObj.message === 'string') {
+                message = errObj.message;
+            } else if (errObj.message !== undefined && errObj.message !== null) {
+                message = String(errObj.message);
+            }
+        }
         if (!message) return null;
 
         // Look for Error(Contract, #XXX) or Error(Contract, XXX)
@@ -92,7 +102,7 @@ export class ErrorParser {
      * @param error - The raw error to process.
      * @returns A descriptive error message.
      */
-    static toHumanMessage(error: any): string {
+    static toHumanMessage(error: unknown): string {
         const code = this.extractErrorCode(error);
         if (code !== null) {
             const description = this.parseContractError(code);
@@ -102,6 +112,11 @@ export class ErrorParser {
             return `Contract Error (${code})`;
         }
 
-        return typeof error === 'string' ? error : error?.message || 'Unknown error';
+        if (typeof error === 'string') return error;
+        if (error && typeof error === 'object') {
+            const errObj = error as Record<string, unknown>;
+            if (typeof errObj.message === 'string') return errObj.message;
+        }
+        return 'Unknown error';
     }
 }

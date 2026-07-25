@@ -13,6 +13,7 @@ import { RouterClient } from '@/contracts/router';
 import { LPTokenClient } from '@/contracts/lp-token';
 import { TokenListModule } from '@/modules/tokens';
 import { FactoryModule } from '@/modules/factory';
+import { PortfolioModule } from '@/modules/portfolio';
 import { KeypairSigner } from '@/utils/signer';
 import { TransactionPoller, PollingStrategy, PollingOptions } from '@/utils/polling';
 import { buildSimulationResult } from '@/utils/simulation';
@@ -44,6 +45,7 @@ export class CoralSwapClient {
   private _factory: FactoryClient | null = null;
   private _router: RouterClient | null = null;
   private _factoryModule: FactoryModule | null = null;
+  private _portfolio: PortfolioModule | null = null;
   private _poller: TransactionPoller | null = null;
   private readonly logger?: Logger;
 
@@ -66,7 +68,7 @@ export class CoralSwapClient {
       maxDelayMs: this.config.maxRetryDelayMs ?? DEFAULTS.maxRetryDelayMs,
     };
 
-    let lastError: any;
+    let lastError: unknown;
     const initialIndex = this._currentRpcIndex;
 
     // We try each RPC URL at least once if needed
@@ -130,7 +132,7 @@ export class CoralSwapClient {
    * @private
    */
   private createRpcServer(url: string): SorobanRpc.Server {
-    const options: any = {
+    const options: Record<string, unknown> = {
       headers: this.config.rpcHeaders,
       ...this.config.fetchOptions,
     };
@@ -336,7 +338,7 @@ export class CoralSwapClient {
 
     this.logger?.info("setNetwork: network switched", {
       network: this.network,
-      rpcUrl: (this.networkConfig as any).rpcUrl,
+      rpcUrl: this.networkConfig.rpcUrl,
     });
   }
 
@@ -368,6 +370,16 @@ export class CoralSwapClient {
       this._factoryModule = new FactoryModule(this);
     }
     return this._factoryModule;
+  }
+
+  /**
+   * Access the Portfolio module.
+   */
+  get portfolio(): PortfolioModule {
+    if (!this._portfolio) {
+      this._portfolio = new PortfolioModule(this);
+    }
+    return this._portfolio;
   }
 
   /**

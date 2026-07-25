@@ -209,4 +209,14 @@ export class OracleModule {
   getObservationCount(pairAddress: string): number {
     return this.observationCache.get(pairAddress)?.length ?? 0;
   }
+
+  /**
+   * Return the cached observation history for a pair.
+   *
+   * @param pairAddress - The address of the pair contract.
+   * @returns A cloned array of cached observations.
+   */
+  getObservationSeries(pairAddress: string): TWAPObservation[] {
+    return this.observationCache.get(pairAddress)?.slice() ?? [];
+  }
 }

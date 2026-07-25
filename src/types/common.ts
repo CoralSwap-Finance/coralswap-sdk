@@ -88,6 +88,8 @@ export interface Logger {
   debug(msg: string, data?: unknown): void;
   /** Info-level log for successful operations. */
   info(msg: string, data?: unknown): void;
+  /** Warning-level log for warnings and non-fatal errors. */
+  warn?(msg: string, data?: unknown): void;
   /** Error-level log for failed simulations, submissions, and exceptions. */
   error(msg: string, err?: unknown): void;
 }

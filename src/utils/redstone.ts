@@ -31,8 +31,10 @@ export function verifyRedStonePayload(
 ): void {
   const now = Date.now();
   if (now - payload.timestampMs > config.maxPayloadAgeMs) {
-    throw new StaleOracleError(payload.timestampMs, config.maxPayloadAgeMs);
+    throw new StaleOracleError(tokenInSymbol, payload.timestampMs, config.maxPayloadAgeMs);
   }
+
+
 
   const priceIn = payload.prices[tokenInSymbol.toUpperCase()];
   const priceOut = payload.prices[tokenOutSymbol.toUpperCase()];

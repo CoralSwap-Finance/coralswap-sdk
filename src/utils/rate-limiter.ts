@@ -1,20 +1,27 @@
 /**
  * Token-bucket rate limiter for throttling outbound RPC requests.
  *
- * Implements the classic token-bucket algorithm:
- *  - The bucket holds at most `capacity` tokens.
- *  - Tokens refill at `refillRate` tokens per `refillIntervalMs` milliseconds.
- *  - Each call to `acquire()` waits until a token is available, then consumes it.
- *  - Requests are served in FIFO order so starvation is impossible.
+ * Implements the token-bucket algorithm with configurable sustained rate
+ * and burst capacity.  Uses `setTimeout` internally — no CPU spinning.
+ *
+ * @example
+ * ```ts
+ * const limiter = new RateLimiter({ maxRequestsPerSecond: 10, maxBurst: 20 });
+ *
+ * // Each call to acquire() consumes one token, blocking until one is available.
+ * await limiter.acquire();
+ * await someRpcCall();
+ *
+ * // Check remaining capacity without consuming.
+ * console.log(limiter.getRemainingCapacity());
+ * ```
  */
 
 export interface RateLimiterOptions {
+  /** Maximum sustained requests per second (e.g. 10). */
+  maxRequestsPerSecond: number;
   /** Maximum number of tokens the bucket can hold (burst size). */
-  capacity: number;
-  /** Number of tokens added per refill interval. */
-  refillRate: number;
-  /** Milliseconds between refills. */
-  refillIntervalMs: number;
+  maxBurst: number;
 }
 
 interface PendingRequest {
@@ -23,30 +30,27 @@ interface PendingRequest {
 
 export class RateLimiter {
   private tokens: number;
-  private readonly capacity: number;
-  private readonly refillRate: number;
-  private readonly refillIntervalMs: number;
+  private readonly maxBurst: number;
+  private readonly maxRequestsPerSecond: number;
   private lastRefillTime: number;
   private readonly queue: PendingRequest[] = [];
-  private refillTimer: ReturnType<typeof setInterval> | null = null;
+  private timer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(options: RateLimiterOptions) {
-    if (options.capacity <= 0) throw new Error('capacity must be > 0');
-    if (options.refillRate <= 0) throw new Error('refillRate must be > 0');
-    if (options.refillIntervalMs <= 0) throw new Error('refillIntervalMs must be > 0');
+    if (options.maxRequestsPerSecond <= 0) throw new Error('maxRequestsPerSecond must be > 0');
+    if (options.maxBurst <= 0) throw new Error('maxBurst must be > 0');
 
-    this.capacity = options.capacity;
-    this.refillRate = options.refillRate;
-    this.refillIntervalMs = options.refillIntervalMs;
-    this.tokens = options.capacity;
+    this.maxRequestsPerSecond = options.maxRequestsPerSecond;
+    this.maxBurst = options.maxBurst;
+    this.tokens = options.maxBurst;
     this.lastRefillTime = Date.now();
   }
 
   /**
-   * Current number of tokens available (read-only snapshot).
-   * Triggers an internal refill calculation to return the latest count.
+   * Number of tokens currently available (read-only snapshot).
+   * Triggers an internal refill calculation so the value is current.
    */
-  get availableTokens(): number {
+  getRemainingCapacity(): number {
     this._refill();
     return this.tokens;
   }
@@ -62,7 +66,7 @@ export class RateLimiter {
    * Consume one token, waiting if none are available.
    *
    * Returns a Promise that resolves once the token has been granted.
-   * Requests are granted in FIFO order.
+   * Requests are granted in FIFO order so starvation is impossible.
    */
   acquire(): Promise<void> {
     this._refill();
@@ -74,7 +78,7 @@ export class RateLimiter {
 
     return new Promise<void>((resolve) => {
       this.queue.push({ resolve });
-      this._scheduleRefill();
+      this._scheduleNext();
     });
   }
 
@@ -93,15 +97,14 @@ export class RateLimiter {
   }
 
   /**
-   * Stop the internal refill timer and drain the pending queue.
+   * Stop the internal timer and drain the pending queue.
    * Pending requests are resolved immediately (tokens are "gifted").
    */
   destroy(): void {
-    if (this.refillTimer !== null) {
-      clearInterval(this.refillTimer);
-      this.refillTimer = null;
+    if (this.timer !== null) {
+      clearTimeout(this.timer);
+      this.timer = null;
     }
-    // Resolve all waiting requests so they don't leak
     for (const pending of this.queue.splice(0)) {
       pending.resolve();
     }
@@ -115,27 +118,26 @@ export class RateLimiter {
   private _refill(): void {
     const now = Date.now();
     const elapsed = now - this.lastRefillTime;
-    const intervals = Math.floor(elapsed / this.refillIntervalMs);
-
-    if (intervals > 0) {
-      this.tokens = Math.min(this.capacity, this.tokens + intervals * this.refillRate);
-      this.lastRefillTime += intervals * this.refillIntervalMs;
+    const tokensToAdd = Math.floor((elapsed * this.maxRequestsPerSecond) / 1000);
+    if (tokensToAdd > 0) {
+      this.tokens = Math.min(this.maxBurst, this.tokens + tokensToAdd);
+      this.lastRefillTime += Math.floor((tokensToAdd * 1000) / this.maxRequestsPerSecond);
     }
   }
 
-  /** Start a periodic timer to flush the queue as tokens become available. */
-  private _scheduleRefill(): void {
-    if (this.refillTimer !== null) return;
+  /** Schedule a one-shot timer to flush the queue when the next token arrives. */
+  private _scheduleNext(): void {
+    if (this.timer !== null) return;
 
-    this.refillTimer = setInterval(() => {
+    const delay = Math.max(1, Math.ceil(1000 / this.maxRequestsPerSecond));
+    this.timer = setTimeout(() => {
+      this.timer = null;
       this._refill();
       this._flush();
-
-      if (this.queue.length === 0) {
-        clearInterval(this.refillTimer!);
-        this.refillTimer = null;
+      if (this.queue.length > 0 && this.tokens < 1) {
+        this._scheduleNext();
       }
-    }, this.refillIntervalMs);
+    }, delay);
   }
 
   /** Grant tokens to waiting requests in FIFO order. */

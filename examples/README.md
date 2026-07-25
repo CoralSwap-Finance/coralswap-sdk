@@ -135,6 +135,35 @@ The example simulates both a happy path (within deviation) and a failure case (s
 
 ---
 
+### `alert-setup.ts` ← **New**
+
+**Run:** `npm run examples:alert-setup`
+
+End-to-end reference for builders wiring up off-chain monitoring on top of CoralSwap: define price and impermanent-loss alert rules, register a signed delivery webhook, and verify the full trigger → dispatch → acknowledgement pipeline.
+
+**Flow:**
+1. **SDK bootstrap** — initialise the `CoralSwapClient` against Stellar Testnet and resolve a pair address (degrades gracefully to a synthetic address if RPC is unreachable).
+2. **Local webhook receiver** — start a Node `http` server bound to an ephemeral port. Every inbound `POST /alerts` is HMAC-SHA256 verified.
+3. **Price alert** — fires when the pool-implied price for `deJTRSY` crosses above $1.10 (≈ +5 % vs. a $1.052 baseline NAV). Inline comments walk through the threshold rationale for stable/stable vs. stable/volatile vs. volatile/volatile pairs.
+4. **IL alert** — fires when an LP position's constant-product impermanent loss exceeds 3.00 % (≈ ±75 % price drift). Inline comments table the IL magnitude at common price-ratio values.
+5. **Trigger observations** — synthetic price and reserve shifts fan out via the `AlertService` dispatcher.
+6. **Verification log** — both the outbound delivery log (from the alert service) and the inbound receiver log (from the HTTP server) are printed, and the script exits non-zero if any signature is invalid.
+
+The webhook signing scheme (`X-CoralSwap-Signature` HMAC header, JSON body) matches the conventions an external Slack/Discord/PagerDuty adapter would expect, so the example can be lifted into a production observer without re-wiring.
+
+**Required environment variables**
+
+None — the webhook receiver is in-process so the script runs end-to-end with `npx ts-node examples/alert-setup.ts`. Optional vars (matching `simple-swap.ts`):
+
+| Variable | Description | Default |
+|---|---|---|
+| `CORALSWAP_RPC_URL` | Soroban RPC endpoint | testnet default |
+| `CORALSWAP_NETWORK` | `testnet` or `mainnet` | `testnet` |
+| `CORALSWAP_TOKEN_A` | First token address for real pair lookup | testnet USDC |
+| `CORALSWAP_TOKEN_B` | Second token address for real pair lookup | testnet deJTRSY |
+
+---
+
 ## Common environment variables
 
 All examples share these base variables:

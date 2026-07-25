@@ -105,6 +105,75 @@ describe('AlertModule', () => {
     });
   });
 
+  describe('createPriceAlert()', () => {
+    it('returns a triggered above alert when the pool price rises to the threshold', async () => {
+      const alerts = new AlertModule(makeClient({ reserve0: 100n, reserve1: 250n }));
+
+      const id = await alerts.createPriceAlert(makePriceConfig({
+        thresholdPrice: 2_000_000_000_000_000_000n,
+        direction: 'above',
+      }));
+
+      const results = await alerts.checkAlerts(PAIR);
+
+      expect(results).toHaveLength(1);
+      expect(results[0]).toMatchObject({
+        id,
+        type: 'price',
+        status: 'triggered',
+        triggered: true,
+      });
+    });
+
+    it('returns a triggered below alert when the pool price falls to the threshold', async () => {
+      const alerts = new AlertModule(makeClient({ reserve0: 100n, reserve1: 150n }));
+
+      const id = await alerts.createPriceAlert(makePriceConfig({
+        thresholdPrice: 2_000_000_000_000_000_000n,
+        direction: 'below',
+      }));
+
+      const results = await alerts.checkAlerts(PAIR);
+
+      expect(results).toHaveLength(1);
+      expect(results[0]).toMatchObject({
+        id,
+        type: 'price',
+        currentPrice: 1_500_000_000_000_000_000n,
+        triggered: true,
+      });
+    });
+
+    it('does not retrigger a stored price alert after it has fired once', async () => {
+      const alerts = new AlertModule(makeClient({ reserve0: 100n, reserve1: 250n }));
+
+      await alerts.createPriceAlert(makePriceConfig({
+        thresholdPrice: 2_000_000_000_000_000_000n,
+        direction: 'above',
+      }));
+
+      const firstCheck = await alerts.checkAlerts(PAIR);
+      const secondCheck = await alerts.checkAlerts(PAIR);
+
+      expect(firstCheck).toHaveLength(1);
+      expect(firstCheck[0].triggered).toBe(true);
+      expect(secondCheck).toEqual([]);
+    });
+
+    it('returns an empty array while a stored price alert has not triggered', async () => {
+      const alerts = new AlertModule(makeClient({ reserve0: 100n, reserve1: 150n }));
+
+      await alerts.createPriceAlert(makePriceConfig({
+        thresholdPrice: 2_000_000_000_000_000_000n,
+        direction: 'above',
+      }));
+
+      const results = await alerts.checkAlerts(PAIR);
+
+      expect(results).toEqual([]);
+    });
+  });
+
   describe('checkILAlert()', () => {
     it('triggers when impermanent loss reaches the configured threshold', async () => {
       const alerts = new AlertModule(makeClient({ reserve0: 100n, reserve1: 400n }));
@@ -140,6 +209,36 @@ describe('AlertModule', () => {
       await expect(
         alerts.checkILAlert(makeILConfig({ maxImpermanentLossBps: 10001 }), 'il-3'),
       ).rejects.toThrow(ValidationError);
+    });
+  });
+
+  describe('createILAlert()', () => {
+    it('returns a triggered IL alert using the pool impermanent-loss computation', async () => {
+      const alerts = new AlertModule(makeClient({ reserve0: 100n, reserve1: 400n }));
+
+      const id = await alerts.createILAlert(makeILConfig({
+        maxImpermanentLossBps: 500,
+      }));
+
+      const results = await alerts.checkAlerts(PAIR);
+
+      expect(results).toHaveLength(1);
+      expect(results[0]).toMatchObject({
+        id,
+        type: 'il',
+        currentILBps: 2000,
+        triggered: true,
+      });
+    });
+
+    it('rejects an invalid IL threshold before storing the alert', async () => {
+      const alerts = new AlertModule(makeClient({ reserve0: 100n, reserve1: 400n }));
+
+      await expect(
+        alerts.createILAlert(makeILConfig({ maxImpermanentLossBps: 10001 })),
+      ).rejects.toThrow(ValidationError);
+
+      await expect(alerts.checkAlerts(PAIR)).resolves.toEqual([]);
     });
   });
 
@@ -314,7 +413,7 @@ describe('AlertModule', () => {
       expect(results).toHaveLength(0);
     });
 
-    it('returns active alerts that have not yet triggered', async () => {
+    it('returns empty array when matching alerts have not triggered', async () => {
       const alerts = new AlertModule(makeClient({ reserve0: 100n, reserve1: 250n }));
 
       await alerts.createAlert({
@@ -326,9 +425,26 @@ describe('AlertModule', () => {
 
       const results = await alerts.checkAlerts(PAIR);
 
+      expect(results).toEqual([]);
+    });
+
+    it('returns only triggered alerts for the requested address', async () => {
+      const alerts = new AlertModule(makeClient({ reserve0: 100n, reserve1: 250n }));
+
+      await alerts.createPriceAlert(makePriceConfig({
+        thresholdPrice: 2_000_000_000_000_000_000n,
+        direction: 'above',
+      }));
+      await alerts.createPriceAlert(makePriceConfig({
+        thresholdPrice: 3_000_000_000_000_000_000n,
+        direction: 'above',
+      }));
+
+      const results = await alerts.checkAlerts(PAIR);
+
       expect(results).toHaveLength(1);
-      expect(results[0].triggered).toBe(false);
-      expect(results[0].status).toBe('active');
+      expect(results[0].triggered).toBe(true);
+      expect(results[0].type).toBe('price');
     });
   });
 
