@@ -145,6 +145,11 @@ export interface ProposalEvent extends ContractEvent {
 }
 
 /**
+ * Pool lifecycle events delivered by {@link FactoryModule.watchPool}.
+ */
+export type PoolEvent = SwapEvent | MintEvent | BurnEvent;
+
+/**
  * Union of all CoralSwap contract events.
  */
 export type CoralSwapEvent =
