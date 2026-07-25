@@ -140,6 +140,11 @@ export class MockProvider {
   /** Configured ledger sequence returned by getLatestLedger(). */
   private _latestLedgerSequence = DEFAULT_LEDGER_SEQUENCE;
 
+  /**
+   * Staged event responses for getEvents(), keyed by contract address.
+   */
+  private _events = new Map<string, SorobanRpc.Api.EventResponse[]>();
+
   // -------------------------------------------------------------------------
   // Expose serverURL so the class structurally satisfies SorobanRpc.Server
   // -------------------------------------------------------------------------
@@ -198,6 +203,17 @@ export class MockProvider {
   }
 
   /**
+   * Stage event responses for the given contract so they are returned
+   * by subsequent getEvents() calls matching the contract filter.
+   *
+   * @param contractId - The contract address to associate events with.
+   * @param events     - The event responses to return.
+   */
+  setEvents(contractId: string, events: SorobanRpc.Api.EventResponse[]): void {
+    this._events.set(contractId, events);
+  }
+
+  /**
    * Reset all staged state.
    *
    * Call this in afterEach() / beforeEach() to guarantee test isolation.
@@ -208,6 +224,7 @@ export class MockProvider {
     this._txQueue = [];
     this._txResults.clear();
     this._latestLedgerSequence = DEFAULT_LEDGER_SEQUENCE;
+    this._events.clear();
   }
 
   // =========================================================================
@@ -450,9 +467,41 @@ export class MockProvider {
   }
 
   async getEvents(
-    _request: SorobanRpc.Server.GetEventsRequest,
+    request: SorobanRpc.Server.GetEventsRequest,
   ): Promise<SorobanRpc.Api.GetEventsResponse> {
-    return MockProvider._notImplemented('getEvents');
+    const collected: SorobanRpc.Api.EventResponse[] = [];
+
+    for (const filter of request.filters) {
+      const contractIds = filter.contractIds ?? [];
+
+      for (const cid of contractIds) {
+        const staged = this._events.get(cid) ?? [];
+
+        for (const evt of staged) {
+          if (request.startLedger !== undefined && evt.ledger < request.startLedger) {
+            continue;
+          }
+
+          if (filter.topics && filter.topics.length > 0) {
+            const eventTopic0 = evt.topic[0]?.toXDR('base64') ?? '';
+            const matches = filter.topics.some(
+              (topicPattern) => topicPattern.length > 0 && topicPattern[0] === eventTopic0,
+            );
+            if (!matches) continue;
+          }
+
+          collected.push(evt);
+        }
+      }
+    }
+
+    collected.sort((a, b) => a.ledger - b.ledger);
+    const events = request.limit ? collected.slice(0, request.limit) : collected;
+
+    return {
+      latestLedger: this._latestLedgerSequence,
+      events,
+    };
   }
 
   async _getEvents(

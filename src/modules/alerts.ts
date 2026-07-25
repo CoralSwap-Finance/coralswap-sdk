@@ -432,6 +432,59 @@ export class AlertModule {
     };
   }
 
+  /**
+   * Poll alert checks on an interval for long-running monitoring.
+   *
+   * When `targetAddress` is provided, only that address is checked each tick.
+   * Otherwise every distinct V2 alert target is checked. Errors during a tick
+   * are swallowed so a single failed check cannot tear down the subscription.
+   *
+   * @param intervalMs - Polling interval in milliseconds (default `5000`).
+   * @param targetAddress - Optional pair/account address to check exclusively.
+   * @returns An unsubscribe function that clears the timer. Idempotent.
+   */
+  startPolling(intervalMs = 5000, targetAddress?: string): () => void {
+    if (
+      typeof intervalMs !== 'number' ||
+      Number.isNaN(intervalMs) ||
+      !Number.isFinite(intervalMs) ||
+      intervalMs <= 0
+    ) {
+      throw new ValidationError('intervalMs must be a positive number', { intervalMs });
+    }
+
+    let active = true;
+
+    const poll = async () => {
+      if (!active) return;
+      try {
+        if (targetAddress) {
+          await this.checkAlerts(targetAddress);
+          return;
+        }
+
+        const targets = new Set<string>();
+        for (const stored of this.alertsV2.values()) {
+          targets.add(stored.target);
+        }
+        for (const target of targets) {
+          if (!active) return;
+          await this.checkAlerts(target);
+        }
+      } catch {
+        // Keep the subscription alive across transient evaluation errors.
+      }
+    };
+
+    poll();
+    const timer = setInterval(poll, intervalMs);
+
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }
+
   protected emit(event: AlertEvent): void {
     const handlers = this.listeners.get('fired');
     if (handlers) {
