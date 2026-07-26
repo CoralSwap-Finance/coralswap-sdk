@@ -462,10 +462,13 @@ describe("Error Hierarchy", () => {
         expect(err.message).toBe("some string error");
       });
 
-      it("preserves original error in details", () => {
+      it("preserves original error name and message in details", () => {
         const original = new Error("custom error");
         const err = mapError(original);
-        expect(err.details?.originalError).toBe(original);
+        expect(err.details?.originalError).toEqual({
+          name: "Error",
+          message: "custom error",
+        });
       });
 
       it("handles non-Error objects", () => {
