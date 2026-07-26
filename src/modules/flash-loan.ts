@@ -13,10 +13,7 @@ import {
   calculateRepayment,
   validateFeeFloor,
 } from "@/contracts/flash-receiver";
-import {
-  FlashLoanError,
-  TransactionError,
-} from "@/errors";
+import { FlashLoanError } from "@/errors";
 import { FeeModule } from "./fees";
 import { validateAddress, validatePositiveAmount } from "@/utils/validation";
 import { estimateGas } from "@/utils/gas";
