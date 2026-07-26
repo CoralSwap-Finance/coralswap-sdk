@@ -13,10 +13,7 @@ import {
   calculateRepayment,
   validateFeeFloor,
 } from "@/contracts/flash-receiver";
-import {
-  FlashLoanError,
-  TransactionError,
-} from "@/errors";
+import { FlashLoanError, TransactionError } from "@/errors";
 import { FeeModule } from "./fees";
 import { validateAddress, validatePositiveAmount } from "@/utils/validation";
 import { estimateGas } from "@/utils/gas";
@@ -69,7 +66,6 @@ export class FlashLoanModule {
         },
       );
     }
-
 
     const feeAmount = (amount * BigInt(config.flashFeeBps)) / BigInt(10000);
     const feeFloorAmount = BigInt(config.flashFeeFloor);
@@ -151,13 +147,25 @@ export class FlashLoanModule {
    * const result = await client.flashLoans.execute({ pairAddress: 'C...', ... });
    * const gas = await client.flashLoans.execute({ pairAddress: 'C...', ... }, { estimateOnly: true });
    */
-  async execute(request: FlashLoanRequest, options: { estimateOnly: true }): Promise<GasEstimate>;
-  async execute(request: FlashLoanRequest, options?: { estimateOnly?: false }): Promise<FlashLoanResult>;
-  async execute(request: FlashLoanRequest, options?: { estimateOnly?: boolean }): Promise<FlashLoanResult | GasEstimate> {
+  async execute(
+    request: FlashLoanRequest,
+    options: { estimateOnly: true },
+  ): Promise<GasEstimate>;
+  async execute(
+    request: FlashLoanRequest,
+    options?: { estimateOnly?: false },
+  ): Promise<FlashLoanResult>;
+  async execute(
+    request: FlashLoanRequest,
+    options?: { estimateOnly?: boolean },
+  ): Promise<FlashLoanResult | GasEstimate> {
     validateAddress(request.pairAddress, "pairAddress");
     validateAddress(request.token, "token");
     validatePositiveAmount(request.amount, "amount");
     validateAddress(request.receiverAddress, "receiverAddress");
+
+    // Verify receiver contract implements the expected interface
+    await this.verifyReceiverInterface(request.receiverAddress);
 
     const pair = this.client.pair(request.pairAddress);
     const config = await pair.getFlashLoanConfig();
@@ -186,6 +194,25 @@ export class FlashLoanModule {
       request.amount,
     );
 
+    // Pre-submission sanity check: verify expected repayment amount
+    const expectedRepayment = calculateRepayment(
+      request.amount,
+      config.flashFeeBps,
+    );
+    const calculatedRepayment = request.amount + feeEstimate.feeAmount;
+
+    if (calculatedRepayment < expectedRepayment) {
+      throw new FlashLoanError(
+        "Repayment validation failed: calculated repayment is below expected minimum",
+        {
+          expectedRepayment: expectedRepayment.toString(),
+          calculatedRepayment: calculatedRepayment.toString(),
+          amount: request.amount.toString(),
+          fee: feeEstimate.feeAmount.toString(),
+        },
+      );
+    }
+
     const op = pair.buildFlashLoan(
       this.client.publicKey,
       request.token,
@@ -195,7 +222,10 @@ export class FlashLoanModule {
     );
 
     if (options?.estimateOnly) {
-      return estimateGas((ops) => this.client.simulateTransaction(ops, {}), [op]);
+      return estimateGas(
+        (ops) => this.client.simulateTransaction(ops, {}),
+        [op],
+      );
     }
 
     const result = await this.client.submitTransaction([op]);
@@ -218,7 +248,8 @@ export class FlashLoanModule {
       const txResult = await this.client.server.getTransaction(txHash);
       if (txResult.status === "SUCCESS") {
         const rawEvents = this.getRawEvents(txResult);
-        const hasRawEvents = rawEvents.length > 0 || this.hasEventsAccessor(txResult);
+        const hasRawEvents =
+          rawEvents.length > 0 || this.hasEventsAccessor(txResult);
 
         // A FlashLoanFailed event means the callback reverted; surface it as an error.
         const failedEvent = this.decodeFailedEvent(rawEvents);
@@ -237,9 +268,12 @@ export class FlashLoanModule {
         } else {
           try {
             // Fall back to decodeEvents
-            const events = decodeEvents(txResult as SorobanRpc.Api.GetSuccessfulTransactionResponse, {
-              contractId: request.pairAddress,
-            });
+            const events = decodeEvents(
+              txResult as SorobanRpc.Api.GetSuccessfulTransactionResponse,
+              {
+                contractId: request.pairAddress,
+              },
+            );
 
             // Look for FlashLoanExecuted or FlashLoanFailed events
             const flashLoanEvent = events.find((e) => e.type === "flash_loan");
@@ -260,7 +294,7 @@ export class FlashLoanModule {
             // Fallback: raw event accessor existed (older contract) but no match;
             // synthesise an event from request values.
             event = {
-              type: 'FlashLoanExecuted',
+              type: "FlashLoanExecuted",
               borrowedAmount: request.amount,
               feePaid: feeEstimate.feeAmount,
               callbackAddress: request.receiverAddress,
@@ -271,7 +305,7 @@ export class FlashLoanModule {
       } else {
         // Non-SUCCESS status: provide fallback event from request values
         event = {
-          type: 'FlashLoanExecuted',
+          type: "FlashLoanExecuted",
           borrowedAmount: request.amount,
           feePaid: feeEstimate.feeAmount,
           callbackAddress: request.receiverAddress,
@@ -370,31 +404,46 @@ export class FlashLoanModule {
 
   private hasEventsAccessor(txResult: any): boolean {
     try {
-      return typeof txResult?.resultMetaXdr?.v3()?.sorobanMeta()?.events === 'function';
+      return (
+        typeof txResult?.resultMetaXdr?.v3()?.sorobanMeta()?.events ===
+        "function"
+      );
     } catch {
       return false;
     }
   }
 
-  private decodeExecutedEvent(events: xdr.ContractEvent[]): FlashLoanExecutedEvent | null {
+  private decodeExecutedEvent(
+    events: xdr.ContractEvent[],
+  ): FlashLoanExecutedEvent | null {
     for (const event of events) {
-      if (event.type().name !== 'contract') continue;
+      if (event.type().name !== "contract") continue;
 
       const topics = event.body().v0().topics();
       if (!topics.length) continue;
 
       const eventName = this.topicSymbol(topics[0]);
-      if (eventName !== 'FlashLoanExecuted') continue;
+      if (eventName !== "FlashLoanExecuted") continue;
 
       try {
-        const data = scValToNative(event.body().v0().data()) as Record<string, unknown>;
+        const data = scValToNative(event.body().v0().data()) as Record<
+          string,
+          unknown
+        >;
 
         return {
-          type: 'FlashLoanExecuted',
-          borrowedAmount: BigInt(String(data['amount'] ?? data['borrowed_amount'] ?? 0)),
-          feePaid: BigInt(String(data['fee'] ?? data['fee_paid'] ?? 0)),
-          callbackAddress: String(data['callback'] ?? data['callback_address'] ?? data['receiver'] ?? ''),
-          token: String(data['token'] ?? ''),
+          type: "FlashLoanExecuted",
+          borrowedAmount: BigInt(
+            String(data["amount"] ?? data["borrowed_amount"] ?? 0),
+          ),
+          feePaid: BigInt(String(data["fee"] ?? data["fee_paid"] ?? 0)),
+          callbackAddress: String(
+            data["callback"] ??
+              data["callback_address"] ??
+              data["receiver"] ??
+              "",
+          ),
+          token: String(data["token"] ?? ""),
         };
       } catch {
         continue;
@@ -403,24 +452,33 @@ export class FlashLoanModule {
     return null;
   }
 
-  private decodeFailedEvent(events: xdr.ContractEvent[]): FlashLoanFailedEvent | null {
+  private decodeFailedEvent(
+    events: xdr.ContractEvent[],
+  ): FlashLoanFailedEvent | null {
     for (const event of events) {
-      if (event.type().name !== 'contract') continue;
+      if (event.type().name !== "contract") continue;
 
       const topics = event.body().v0().topics();
       if (!topics.length) continue;
 
       const eventName = this.topicSymbol(topics[0]);
-      if (eventName !== 'FlashLoanFailed') continue;
+      if (eventName !== "FlashLoanFailed") continue;
 
       try {
-        const data = scValToNative(event.body().v0().data()) as Record<string, unknown>;
+        const data = scValToNative(event.body().v0().data()) as Record<
+          string,
+          unknown
+        >;
 
         return {
-          type: 'FlashLoanFailed',
-          borrowedAmount: BigInt(String(data['amount'] ?? data['borrowed_amount'] ?? 0)),
-          token: String(data['token'] ?? ''),
-          reason: String(data['reason'] ?? data['error'] ?? 'callback reverted'),
+          type: "FlashLoanFailed",
+          borrowedAmount: BigInt(
+            String(data["amount"] ?? data["borrowed_amount"] ?? 0),
+          ),
+          token: String(data["token"] ?? ""),
+          reason: String(
+            data["reason"] ?? data["error"] ?? "callback reverted",
+          ),
         };
       } catch {
         continue;
@@ -433,8 +491,81 @@ export class FlashLoanModule {
     try {
       return topic.sym().toString();
     } catch {
-      return '';
+      return "";
+    }
+  }
+
+  /**
+   * Verify that a receiver contract implements the expected on_flash_loan interface.
+   *
+   * Performs a simulated call to probe for the interface presence before
+   * executing the actual flash loan transaction. This prevents funds from
+   * being sent to a non-compliant contract.
+   *
+   * @param receiverAddress - The address of the receiver contract to verify
+   * @throws {FlashLoanError} If the receiver doesn't implement on_flash_loan
+   * @private
+   */
+  private async verifyReceiverInterface(
+    receiverAddress: string,
+  ): Promise<void> {
+    try {
+      const {
+        Contract: ContractClass,
+        Address: AddressClass,
+        nativeToScVal: toScVal,
+        xdr: xdrTypes,
+      } = await import("@stellar/stellar-sdk");
+
+      const contract = new ContractClass(receiverAddress);
+
+      // Simulate a call to on_flash_loan with dummy parameters
+      // We're only checking if the function exists, not executing it
+      const dummySender = new AddressClass(
+        "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+      );
+      const dummyToken = new AddressClass(
+        "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+      );
+
+      const op = contract.call(
+        "on_flash_loan",
+        dummySender.toScVal(),
+        dummyToken.toScVal(),
+        toScVal(0n, { type: "i128" }),
+        toScVal(0n, { type: "i128" }),
+        xdrTypes.ScVal.scvBytes(Buffer.from([])),
+      );
+
+      const sim = await this.client.simulateTransaction([op], {});
+
+      // If simulation returns an error specifically about missing function,
+      // that means the interface isn't implemented
+      if (!sim.success && sim.error) {
+        const errorMsg = sim.error.message || "";
+        if (
+          errorMsg.includes("unknown function") ||
+          errorMsg.includes("function not found") ||
+          errorMsg.includes("on_flash_loan")
+        ) {
+          throw new FlashLoanError(
+            `Receiver contract at ${receiverAddress} does not implement the on_flash_loan interface`,
+            {
+              receiverAddress,
+              reason: "missing_interface",
+            },
+          );
+        }
+      }
+
+      // If we got here, either the simulation succeeded (function exists)
+      // or failed for a different reason (which we'll catch during actual execution)
+    } catch (err) {
+      if (err instanceof FlashLoanError) {
+        throw err;
+      }
+      // Other errors during verification are non-fatal; we'll let the actual
+      // execution fail with a more specific on-chain error if needed
     }
   }
 }
-
