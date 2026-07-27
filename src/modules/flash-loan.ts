@@ -220,11 +220,14 @@ export class FlashLoanModule {
         // A FlashLoanFailed event means the callback reverted; surface it as an error.
         const failedEvent = this.decodeFailedEvent(rawEvents);
         if (failedEvent) {
-          const err = new FlashLoanError(
+          throw new FlashLoanError(
             `Flash loan callback failed: ${failedEvent.reason}`,
+            {
+              reason: failedEvent.reason,
+              token: failedEvent.token,
+              borrowedAmount: failedEvent.borrowedAmount,
+            },
           );
-          (err as any).event = failedEvent;
-          throw err;
         }
 
         // Try decoding old-style executed event

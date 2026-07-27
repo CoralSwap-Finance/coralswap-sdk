@@ -32,7 +32,6 @@ export class CoralSwapSDKError extends Error {
       code: this.code,
       message: this.message,
       details: this.details,
-      stack: this.stack,
     };
   }
 }
@@ -719,6 +718,9 @@ export function mapError(err: unknown): CoralSwapSDKError {
   }
 
   return new CoralSwapSDKError("UNKNOWN_ERROR", message, {
-    originalError: err,
+    originalError: {
+      name: err instanceof Error ? err.name : typeof err,
+      message: err instanceof Error ? err.message : String(err),
+    },
   });
 }

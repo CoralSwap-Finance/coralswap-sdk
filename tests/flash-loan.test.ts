@@ -246,11 +246,10 @@ describe('FlashLoanModule.execute()', () => {
       }
 
       expect(caught).not.toBeNull();
-      expect(caught!.event).toBeDefined();
-      expect(caught!.event!.type).toBe('FlashLoanFailed');
-      expect(caught!.event!.borrowedAmount).toBe(1_000_000n);
-      expect(caught!.event!.token).toBe('TOKEN_A');
-      expect(caught!.event!.reason).toBe('callback_revert');
+      expect(caught!.message).toContain('callback_revert');
+      expect(caught!.reason).toBe('callback_revert');
+      expect(caught!.token).toBe('TOKEN_A');
+      expect(caught!.borrowedAmount).toBe(1_000_000n);
     });
 
     it('throws FlashLoanError (without event) when submitTransaction fails', async () => {
