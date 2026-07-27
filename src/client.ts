@@ -432,7 +432,12 @@ export class CoralSwapClient {
         "simulateTransaction",
       );
       if (!SorobanRpc.Api.isSimulationSuccess(sim)) {
-        this.logger?.error("simulateTransaction: simulation failed", {
+        const simSummary = {
+          error: SorobanRpc.Api.isSimulationError(sim) ? sim.error : 'restore required',
+          latestLedger: sim.latestLedger,
+        };
+        this.logger?.error("simulateTransaction: simulation failed", simSummary);
+        this.logger?.debug("simulateTransaction: full simulation response", {
           simulation: sim,
         });
         return {
@@ -440,7 +445,7 @@ export class CoralSwapClient {
           error: {
             code: "SIMULATION_FAILED",
             message: "Transaction simulation failed",
-            details: { simulation: sim },
+            details: simSummary,
           },
         };
       }
@@ -471,13 +476,21 @@ export class CoralSwapClient {
       );
 
       if (response.status === "ERROR") {
-        this.logger?.error("sendTransaction: submission failed", { response });
+        const responseSummary = {
+          status: response.status,
+          hash: response.hash,
+          latestLedger: response.latestLedger,
+        };
+        this.logger?.error("sendTransaction: submission failed", responseSummary);
+        this.logger?.debug("sendTransaction: full submission response", {
+          response,
+        });
         return {
           success: false,
           error: {
             code: "SUBMIT_FAILED",
             message: "Transaction submission failed",
-            details: { response },
+            details: responseSummary,
           },
         };
       }
@@ -488,13 +501,19 @@ export class CoralSwapClient {
       const result = await this.pollTransaction(response.hash);
       return result;
     } catch (err) {
-      this.logger?.error("submitTransaction: unexpected error", err);
+      this.logger?.error("submitTransaction: unexpected error", {
+        name: err instanceof Error ? err.name : 'Unknown',
+        message: err instanceof Error ? err.message : String(err),
+      });
       return {
         success: false,
         error: {
           code: "UNEXPECTED_ERROR",
           message: err instanceof Error ? err.message : "Unknown error",
-          details: { error: err },
+          details: {
+            name: err instanceof Error ? err.name : 'Unknown',
+            message: err instanceof Error ? err.message : String(err),
+          },
         },
       };
     }
