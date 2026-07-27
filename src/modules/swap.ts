@@ -25,9 +25,7 @@ import { verifyRedStonePayload, estimateUsdValue, DEFAULT_PRICE_GUARD_CONFIG } f
 
 /** Default ledger window when no fromLedger/toLedger is specified. */
 const DEFAULT_HISTORY_WINDOW = 1000;
-
 /** Default maximum results per query. */
-const DEFAULT_HISTORY_LIMIT = 200;
 
 /**
  * Swap module -- builds, quotes, and executes token swaps.
@@ -717,7 +715,7 @@ export class SwapModule {
    */
 
   async getSwapHistory(filter: SwapHistoryFilter = {}): Promise<SwapHistoryEvent[]> {
-    const { pairAddress, userAddress, limit = DEFAULT_HISTORY_LIMIT } = filter;
+    const { pairAddress, userAddress } = filter;
 
     // Validate optional addresses up-front
     if (pairAddress) validateAddress(pairAddress, 'pairAddress');

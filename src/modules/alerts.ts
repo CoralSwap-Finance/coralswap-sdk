@@ -7,8 +7,6 @@ import {
 } from '@/errors';
 import {
   AlertConfigLegacy,
-  AlertInstanceLegacy,
-  AlertSummaryLegacy,
   AlertStatusLegacy,
   AlertConfig,
   AlertCondition,

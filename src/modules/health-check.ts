@@ -16,8 +16,6 @@
 
 import { SorobanRpc, Contract, xdr, StrKey } from '@stellar/stellar-sdk';
 
-import { sleep } from '@/utils/retry';
-
 /** Default RPC health-probe timeout in milliseconds. */
 const DEFAULT_RPC_TIMEOUT_MS = 5_000;
 
@@ -85,27 +83,6 @@ export interface EndpointScore {
   health: RPCHealthResult;
   /** Computed rank score (lower = better). */
   score: number;
-}
-
-/**
- * Determine whether an error represents a network-level or timeout failure
- * (as opposed to a contract-logic error, which may be retryable).
- */
-function isProbeFailure(err: unknown): boolean {
-  if (err instanceof Error) {
-    const msg = err.message.toLowerCase();
-    return (
-      msg.includes('timeout') ||
-      msg.includes('abort') ||
-      msg.includes('network') ||
-      msg.includes('econnrefused') ||
-      msg.includes('enotfound') ||
-      msg.includes('dns') ||
-      msg.includes('failed to fetch') ||
-      msg.includes('socket')
-    );
-  }
-  return err instanceof TypeError;
 }
 
 /**
