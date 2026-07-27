@@ -87,6 +87,12 @@ export class TransactionPoller {
                 if (status.status === 'FAILED') {
                     this.logger?.error('TransactionPoller: transaction failed on-chain', {
                         txHash,
+                        ledger: status.ledger,
+                        createdAt: status.createdAt,
+                        applicationOrder: status.applicationOrder,
+                    });
+                    this.logger?.debug('TransactionPoller: full failed status', {
+                        txHash,
                         status,
                     });
                     return {
@@ -94,7 +100,12 @@ export class TransactionPoller {
                         error: {
                             code: 'TX_FAILED',
                             message: 'Transaction failed on-chain',
-                            details: { status },
+                            details: {
+                                txHash,
+                                ledger: status.ledger,
+                                createdAt: status.createdAt,
+                                applicationOrder: status.applicationOrder,
+                            },
                         },
                         txHash,
                     };
