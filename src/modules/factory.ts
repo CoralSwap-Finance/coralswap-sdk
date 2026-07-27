@@ -1,7 +1,7 @@
 import { CoralSwapClient } from '@/client';
 import { PairInfo } from '@/types/pool';
 import { sortTokens } from '@/utils/addresses';
-import { PairNotFoundError } from '@/errors';
+import { ValidationError, PairNotFoundError } from '@/errors';
 
 /** Default cache TTL in milliseconds (60 seconds). */
 const DEFAULT_CACHE_TTL_MS = 60_000;
@@ -34,6 +34,41 @@ export interface GetPairOptions {
  * total supply in a single parallel multicall.
  *
  * Cache TTL defaults to 60 seconds and is configurable at construction time.
+ *
+ * ## Contract-address trust boundary audit (issue #514)
+ *
+ * A security audit was performed across all 26+ modules to identify where a
+ * `pairAddress` / `contractAddress` parameter could be used in a write-path
+ * operation without verification that the address is a real, registered
+ * CoralSwap pool.
+ *
+ * ### Where registry verification is applied
+ *
+ * | Module | pairAddress parameter | Registry check |
+ * |--------|----------------------|----------------|
+ * | `swap.ts` | `simulateSwap()`, `getDirectQuote()`, `computeHops()` | Yes — resolves via `client.getPairAddress()` which calls the factory. |
+ * | `liquidity.ts` | `getAddLiquidityQuote()`, `getPosition()` | Yes — resolves via `client.getPairAddress()`. |
+ * | `limit-orders.ts` | `placeLimitOrder()` | Yes — validates against `client.getPairAddress()` on-chain. |
+ * | `flash-loan.ts` | `estimateFee()`, `execute()`, `getConfig()` | No — accepts pairAddress directly. See note below. |
+ * | `fees.ts` | `getCurrentFee()`, `getFeeState()` | No — accepts pairAddress directly. These are read-only queries. |
+ * | `alerts.ts` | Alert configs | No — reads only, no direct pair interaction. |
+ * | `monitoring.ts` | `getPoolHealth()` | No — read-only health check. |
+ * | `oracle.ts` | `observe()`, `getTWAP()`, `getSpotPrice()` | No — reads cumulative prices (read-only). |
+ *
+ * ### Notes
+ * - **Read-only queries** (fees, monitoring, oracle observations) are lower-risk because
+ *   an attacker cannot drain funds through a read call. These modules accept any valid
+ *   Stellar address and return data; callers should verify the address themselves if
+ *   integrating with a write path.
+ * - **Flash loans** are a write operation but inherently involve the caller deploying
+ *   their own flash receiver contract. The pair address is passed as part of a broader
+ *   composed transaction; callers should call `factory.verifyPairAddress()` before
+ *   submitting if the pair address comes from an untrusted source.
+ * - **External contracts** (Blend, Squid) are out of scope — they are not CoralSwap
+ *   pairs and therefore cannot be verified against the CoralSwap factory registry.
+ *
+ * Use {@link verifyPairAddress} wherever your code receives a `pairAddress` from an
+ * untrusted source.
  */
 export class FactoryModule {
     private client: CoralSwapClient;
@@ -141,6 +176,45 @@ export class FactoryModule {
     }
 
     /**
+     * Verify that a pair address is a registered CoralSwap pool.
+     *
+     * Queries the on-chain factory's `getAllPairs()` and checks whether
+     * `pairAddress` appears in the returned list. This confirms the
+     * address points to a real CoralSwap-deployed pair, not an
+     * attacker-controlled contract with a valid-looking address.
+     *
+     * **Security note:** This is a trust-boundary check for write-path
+     * operations. A caller (or UI fed a bad address by a phishing link)
+     * could pass an address that merely looks valid but points at a
+     * malicious contract. Use this check whenever your code receives a
+     * `pairAddress` from an untrusted source.
+     *
+     * This method performs one RPC call (`getAllPairs`) and then an
+     * O(n) scan of the result. For frequent checks consider caching
+     * the pair list at the application layer.
+     *
+     * @param pairAddress - The pair contract address to verify.
+     * @returns `true` if the address is a registered CoralSwap pair.
+     * @throws {ValidationError} If `pairAddress` is not a valid Stellar address.
+     *
+     * @example
+     * ```ts
+     * const factory = client.factoryModule();
+     * const isRegistered = await factory.verifyPairAddress(pairAddress);
+     * if (!isRegistered) {
+     *   throw new Error('Address is not a registered CoralSwap pool');
+     * }
+     * ```
+     */
+    async verifyPairAddress(pairAddress: string): Promise<boolean> {
+        if (!pairAddress || pairAddress.trim().length === 0) {
+            throw new ValidationError('pairAddress must not be empty');
+        }
+        const allPairs = await this.client.factory.getAllPairs();
+        return allPairs.some((addr) => addr === pairAddress);
+    }
+
+    /**
      * Invalidate cached data for a specific pair or for all pairs.
      *
      * - Called with a pair address: removes any cache entry whose stored
@@ -157,7 +231,7 @@ export class FactoryModule {
      * // Invalidate one pair
      * factory.invalidateCache('CPAIR...');
      *
-     * // Clear everything
+     * // Clear entire cache
      * factory.invalidateCache();
      */
     invalidateCache(pairAddress?: string): void {

@@ -31,6 +31,30 @@ export interface TWAPResult {
  * Reads cumulative price accumulators from pair contracts to compute
  * Time-Weighted Average Prices. Useful for DeFi integrations that
  * need manipulation-resistant price feeds.
+ *
+ * ## TWAP Consumer Audit (2026-07)
+ *
+ * A systematic audit was performed to identify every module that imports
+ * and relies on OracleModule's {@link computeTWAP} or {@link getTWAP} for
+ * price-sensitive decisions. This audit was driven by issue #512.
+ *
+ * ### Findings
+ *
+ * | Module        | Uses OracleModule TWAP? | Notes |
+ * |---------------|------------------------|-------|
+ * | `limit-orders.ts` | **No** | Interacts directly with the on-chain limit-orders contract. No TWAP dependency. |
+ * | `stop-loss.ts`    | **No** | Uses a separate RedStone oracle contract for trigger prices. |
+ * | `alerts.ts`       | **No** | Monitors raw reserves and user-defined thresholds. |
+ * | `swap.ts`         | **No** | Optional RedStone price guard via `verifyRedStonePayload` utility. |
+ * | `order-book.ts`   | **No** | Uses mock/static data; no TWAP calls. |
+ * | `dca.ts`          | **No** | No TWAP dependency. |
+ * | `price-feed.ts`   | **No** | Mentions OracleModule only in a TSDoc example comment. |
+ * | `oracle.ts`       | **Self** | Defines and tests its own computeTWAP/getTWAP. |
+ *
+ * **Conclusion:** No production module currently consumes OracleModule's TWAP
+ * for price-sensitive decisions. The minimum-window enforcement added in the
+ * companion oracle-hardening fix is sufficient for this module; no additional
+ * per-consumer guards are needed at this time.
  */
 export class OracleModule {
   private client: CoralSwapClient;

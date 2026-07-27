@@ -61,10 +61,21 @@ jobs:
       - name: Block PR on high or critical findings
         if: github.event_name == 'pull_request'
         run: |
-          count=$(jq '[.runs[].results[] | select(.level == "error")] | length' codeql-results.sarif)
+          # The analyze action's `output` path is a directory of per-language
+          # .sarif files (e.g. codeql-results.sarif/javascript.sarif), not a
+          # single file — jq can't parse a directory directly, so locate the
+          # actual file(s) inside it first. Falls back to treating the path
+          # itself as a file if it's ever not a directory.
+          if [ -d codeql-results.sarif ]; then
+            sarif_files=$(find codeql-results.sarif -type f -name '*.sarif')
+          else
+            sarif_files=codeql-results.sarif
+          fi
+
+          count=$(jq -s '[.[] | .runs[].results[] | select(.level == "error")] | length' $sarif_files)
           if [ "${count}" -gt 0 ]; then
             echo "::error::CodeQL found ${count} high or critical severity finding(s). Merge is blocked."
-            jq -r '.runs[].results[] | select(.level == "error") | "- \(.ruleId): \(.message.text)"' codeql-results.sarif
+            jq -r '.runs[].results[] | select(.level == "error") | "- \(.ruleId): \(.message.text)"' $sarif_files
             exit 1
           fi
           echo "No high or critical CodeQL findings detected."
