@@ -80,3 +80,8 @@ export {
   setVotingPowerQueryProvider,
 } from './voting-power';
 export type { VotingPower, VotingPowerQueryProvider, VotingPowerQueryResult } from './voting-power';
+
+export {
+  ConnectionPool,
+  ConnectionPoolOptions,
+} from './connection-pool';

@@ -147,5 +147,6 @@ export {
   FlashLoanFailedError,
   CircuitBreakerError,
   SignerError,
+  ConnectionPoolExhaustedError,
   mapError,
 } from "@/errors";

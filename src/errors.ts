@@ -38,6 +38,16 @@ export class NetworkError extends CoralSwapSDKError {
 }
 
 /**
+ * Connection pool has no healthy endpoints available.
+ */
+export class ConnectionPoolExhaustedError extends CoralSwapSDKError {
+  constructor(message: string, details?: Record<string, unknown>) {
+    super("CONNECTION_POOL_EXHAUSTED", message, details);
+    this.name = "ConnectionPoolExhaustedError";
+  }
+}
+
+/**
  * RPC endpoint errors (timeouts, rate limits).
  */
 export class RpcError extends CoralSwapSDKError {
