@@ -137,6 +137,10 @@ export {
   batchRequest,
   batchRequestOrThrow,
   DEFAULT_BATCH_CONCURRENCY,
+  checkRPCHealth,
+  checkAllEndpoints,
+  getBestEndpoint,
+  DEFAULT_HEALTH_CHECK_TIMEOUT_MS,
 } from './utils';
 
 
@@ -149,6 +153,7 @@ export type {
   SimulateFn,
   BatchRequestOptions,
   BatchResult,
+  RPCHealth,
 } from "./utils";
 
 // Errors

@@ -96,3 +96,11 @@ export type { VotingPower, VotingPowerQueryProvider, VotingPowerQueryResult } fr
 export { checkCompatibility } from './migration';
 export type { BreakingChange, CompatibilityReport } from './migration';
 export { suppressDeprecationWarnings, deprecated } from './deprecation-warnings';
+
+export {
+  checkRPCHealth,
+  checkAllEndpoints,
+  getBestEndpoint,
+  DEFAULT_HEALTH_CHECK_TIMEOUT_MS,
+} from './health-check';
+export type { RPCHealth } from './health-check';
