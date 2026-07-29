@@ -1,0 +1,30 @@
+name: fix-tests
+on:
+  push:
+    branches:
+      - fix/492-swap-zod-validation
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          sed -i "s/EXPCT_IN/EXACT_IN/g" tests/swap-validation.test.ts
+          sed -i "s/^TOKEN_/const TOKEN_/g" tests/swap-validation.test.ts
+          python3 -c
+          from pathlib import Path
+          import re
+          p = Path('tests/swap-validation.test.ts')
+          t = p.read_text()
+          t = re.sub(r"from '.*zod'", "from 'zod'", t)
+          p.write_text(t)
+          print(p[:120])
+      - run: |
+          git config user.email "isaac4real-art@users.noreply.github.com"
+          git config user.name "isaac4real-art"
+          rm -f .github/workflows/fix-tests.yml
+          git add -A
+          git commit -m "fix(test): correct swap validation test syntax"
+          git push
