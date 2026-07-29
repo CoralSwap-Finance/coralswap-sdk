@@ -20,6 +20,7 @@ import { estimateGas } from "@/utils/gas";
 import { DEFAULTS } from "@/config";
 import { decodeEvents } from "@/utils/events";
 import { SorobanRpc, scValToNative, xdr } from "@stellar/stellar-sdk";
+import { getTransactionStatus, shouldRetrySubmission } from "@/utils/idempotent-resubmission";
 
 /**
  * Flash Loan module -- first-class flash loan support for CoralSwap.
@@ -198,6 +199,35 @@ export class FlashLoanModule {
     const result = await this.client.submitTransaction([op]);
 
     if (!result.success) {
+      if (result.txHash) {
+        const txStatus = await getTransactionStatus(this.client.server, result.txHash);
+        const decision = shouldRetrySubmission(txStatus);
+
+        if (!decision.shouldRetry) {
+          if (txStatus.status === 'SUCCESS') {
+            const event = await this.parseFlashLoanEvents(
+              txStatus.result!,
+              request,
+              feeEstimate.feeAmount,
+            );
+            return {
+              txHash: result.txHash,
+              token: request.token,
+              amount: request.amount,
+              fee: feeEstimate.feeAmount,
+              ledger: txStatus.ledger,
+              event,
+            };
+          }
+
+          throw new FlashLoanError(
+            `Flash loan failed: ${result.error?.message ?? "Transaction failed on-chain"}`,
+            undefined,
+            result.txHash,
+          );
+        }
+      }
+
       throw new FlashLoanError(
         `Flash loan failed: ${result.error?.message ?? "Unknown error"}`,
         undefined,
@@ -205,19 +235,16 @@ export class FlashLoanModule {
       );
     }
 
-    // Parse events from the transaction result
     const txHash = result.txHash!;
     const ledger = result.data!.ledger;
     let event: FlashLoanExecutedEvent | undefined;
 
     try {
-      // Fetch the full transaction result to decode events
       const txResult = await this.client.server.getTransaction(txHash);
       if (txResult.status === "SUCCESS") {
         const rawEvents = this.getRawEvents(txResult);
         const hasRawEvents = rawEvents.length > 0 || this.hasEventsAccessor(txResult);
 
-        // A FlashLoanFailed event means the callback reverted; surface it as an error.
         const failedEvent = this.decodeFailedEvent(rawEvents);
         if (failedEvent) {
           throw new FlashLoanError(
@@ -230,18 +257,15 @@ export class FlashLoanModule {
           );
         }
 
-        // Try decoding old-style executed event
         const executedEvent = this.decodeExecutedEvent(rawEvents);
         if (executedEvent) {
           event = executedEvent;
         } else {
           try {
-            // Fall back to decodeEvents
             const events = decodeEvents(txResult as SorobanRpc.Api.GetSuccessfulTransactionResponse, {
               contractId: request.pairAddress,
             });
 
-            // Look for FlashLoanExecuted or FlashLoanFailed events
             const flashLoanEvent = events.find((e) => e.type === "flash_loan");
             if (flashLoanEvent && flashLoanEvent.type === "flash_loan") {
               event = {
@@ -253,12 +277,9 @@ export class FlashLoanModule {
               };
             }
           } catch {
-            // Ignore decodeEvents failures
           }
 
           if (!event && hasRawEvents) {
-            // Fallback: raw event accessor existed (older contract) but no match;
-            // synthesise an event from request values.
             event = {
               type: 'FlashLoanExecuted',
               borrowedAmount: request.amount,
@@ -269,7 +290,6 @@ export class FlashLoanModule {
           }
         }
       } else {
-        // Non-SUCCESS status: provide fallback event from request values
         event = {
           type: 'FlashLoanExecuted',
           borrowedAmount: request.amount,
@@ -282,8 +302,6 @@ export class FlashLoanModule {
       if (err instanceof FlashLoanError) {
         throw err;
       }
-      // Silently ignore event parsing failures to avoid breaking the happy path
-      // The transaction succeeded, but we couldn't decode the events
     }
 
     return {
@@ -357,6 +375,51 @@ export class FlashLoanModule {
     const reserve = tokens.token0 === token ? reserve0 : reserve1;
     const safetyMargin = reserve / 100n; // 1% buffer
     return reserve - safetyMargin;
+  }
+
+  private async parseFlashLoanEvents(
+    txResult: SorobanRpc.Api.GetSuccessfulTransactionResponse,
+    request: FlashLoanRequest,
+    feeAmount: bigint,
+  ): Promise<FlashLoanExecutedEvent | undefined> {
+    try {
+      const rawEvents = this.getRawEvents(txResult);
+
+      const failedEvent = this.decodeFailedEvent(rawEvents);
+      if (failedEvent) {
+        throw new FlashLoanError(
+          `Flash loan callback failed: ${failedEvent.reason}`,
+          {
+            reason: failedEvent.reason,
+            token: failedEvent.token,
+            borrowedAmount: failedEvent.borrowedAmount,
+          },
+        );
+      }
+
+      const executedEvent = this.decodeExecutedEvent(rawEvents);
+      if (executedEvent) return executedEvent;
+
+      try {
+        const events = decodeEvents(txResult, {
+          contractId: request.pairAddress,
+        });
+        const flashLoanEvent = events.find((e) => e.type === "flash_loan");
+        if (flashLoanEvent && flashLoanEvent.type === "flash_loan") {
+          return {
+            type: "FlashLoanExecuted",
+            borrowedAmount: flashLoanEvent.amount,
+            feePaid: flashLoanEvent.fee,
+            callbackAddress: flashLoanEvent.borrower,
+            token: request.token,
+          };
+        }
+      } catch {
+      }
+    } catch (err) {
+      if (err instanceof FlashLoanError) throw err;
+    }
+    return undefined;
   }
 
   private getRawEvents(txResult: any): xdr.ContractEvent[] {
