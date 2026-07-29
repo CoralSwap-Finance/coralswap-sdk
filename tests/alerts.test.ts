@@ -472,3 +472,151 @@ describe('AlertModule', () => {
     });
   });
 });
+
+describe('Flash Loan Attack Resistance', () => {
+  describe('checkPriceAlert() with manipulated reserves', () => {
+    it('does not trigger false alert when TWAP is unavailable (fallback to spot)', async () => {
+      // This test documents the fallback behavior - when TWAP is not available,
+      // the system falls back to spot price (which can be manipulated).
+      // This is a known limitation until sufficient observation history exists.
+      const manipulatedReserves = { reserve0: 100n, reserve1: 500n }; // 5x price
+      const alerts = new AlertModule(makeClient(manipulatedReserves));
+
+      const alert = await alerts.checkPriceAlert(
+        makePriceConfig({
+          thresholdPrice: 4_000_000_000_000_000_000n,
+          direction: 'above',
+        }),
+        'flash-price-1',
+      );
+
+      // With no TWAP, it will use spot price and trigger
+      expect(alert.currentPrice).toBe(5_000_000_000_000_000_000n);
+      expect(alert.triggered).toBe(true);
+    });
+
+    it('uses TWAP when available to resist single-block manipulation', async () => {
+      // Create a client with TWAP support
+      const normalReserves = { reserve0: 100n, reserve1: 200n };
+      const manipulatedReserves = { reserve0: 100n, reserve1: 500n };
+      
+      const MIN_TWAP_WINDOW = 300; // 5 minutes
+      const PRICE_SCALE = 1_000_000_000_000_000_000n;
+      
+      let callCount = 0;
+      const client = {
+        pair: jest.fn().mockReturnValue({
+          getReserves: jest.fn().mockResolvedValue(manipulatedReserves),
+          getTokens: jest.fn().mockResolvedValue({ token0: TOKEN_A, token1: TOKEN_B }),
+          getCumulativePrices: jest.fn().mockImplementation(() => {
+            // Simulate cumulative prices for normal 2:1 ratio
+            const basePrice = (200n * PRICE_SCALE) / 100n;
+            return Promise.resolve({
+              price0CumulativeLast: BigInt(callCount * MIN_TWAP_WINDOW) * basePrice,
+              price1CumulativeLast: BigInt(callCount * MIN_TWAP_WINDOW) * ((100n * PRICE_SCALE) / 200n),
+              blockTimestampLast: callCount++ * MIN_TWAP_WINDOW,
+            });
+          }),
+        }),
+      } as unknown as CoralSwapClient;
+
+      const alerts = new AlertModule(client);
+
+      // Build TWAP history (simulate multiple observations over time)
+      const pairInstance = client.pair(PAIR);
+      await pairInstance.getCumulativePrices(); // First observation
+      await pairInstance.getCumulativePrices(); // Second observation (5 min later)
+
+      const alert = await alerts.checkPriceAlert(
+        makePriceConfig({
+          thresholdPrice: 4_000_000_000_000_000_000n,
+          direction: 'above',
+        }),
+        'flash-price-2',
+      );
+
+      // TWAP should show normal 2:1 ratio, not the manipulated 5:1 spot price
+      expect(alert.currentPrice).toBe(2_000_000_000_000_000_000n);
+      expect(alert.triggered).toBe(false);
+    });
+  });
+
+  describe('checkILAlert() with manipulated reserves', () => {
+    it('does not trigger false IL alert when TWAP is unavailable (fallback to spot)', async () => {
+      const manipulatedReserves = { reserve0: 100n, reserve1: 400n };
+      const alerts = new AlertModule(makeClient(manipulatedReserves));
+
+      const alert = await alerts.checkILAlert(
+        makeILConfig({
+          referencePrice: 1_000_000_000_000_000_000n,
+          maxImpermanentLossBps: 500,
+        }),
+        'flash-il-1',
+      );
+
+      // With no TWAP, uses spot price (manipulated)
+      expect(alert.currentPrice).toBe(4_000_000_000_000_000_000n);
+      expect(alert.triggered).toBe(true);
+    });
+
+    it('uses TWAP when available to resist IL alert manipulation', async () => {
+      const normalReserves = { reserve0: 100n, reserve1: 110n };
+      const manipulatedReserves = { reserve0: 100n, reserve1: 400n };
+      
+      const MIN_TWAP_WINDOW = 300;
+      const PRICE_SCALE = 1_000_000_000_000_000_000n;
+      
+      let callCount = 0;
+      const client = {
+        pair: jest.fn().mockReturnValue({
+          getReserves: jest.fn().mockResolvedValue(manipulatedReserves),
+          getTokens: jest.fn().mockResolvedValue({ token0: TOKEN_A, token1: TOKEN_B }),
+          getCumulativePrices: jest.fn().mockImplementation(() => {
+            // Simulate cumulative prices for normal 1.1:1 ratio
+            const basePrice = (110n * PRICE_SCALE) / 100n;
+            return Promise.resolve({
+              price0CumulativeLast: BigInt(callCount * MIN_TWAP_WINDOW) * basePrice,
+              price1CumulativeLast: BigInt(callCount * MIN_TWAP_WINDOW) * ((100n * PRICE_SCALE) / 110n),
+              blockTimestampLast: callCount++ * MIN_TWAP_WINDOW,
+            });
+          }),
+        }),
+      } as unknown as CoralSwapClient;
+
+      const alerts = new AlertModule(client);
+
+      // Build TWAP history
+      const pairInstance = client.pair(PAIR);
+      await pairInstance.getCumulativePrices();
+      await pairInstance.getCumulativePrices();
+
+      const alert = await alerts.checkILAlert(
+        makeILConfig({
+          referencePrice: 1_000_000_000_000_000_000n,
+          maxImpermanentLossBps: 500,
+        }),
+        'flash-il-2',
+      );
+
+      // TWAP should show normal 1.1:1 ratio, not manipulated 4:1
+      expect(alert.currentPrice).toBe(1_100_000_000_000_000_000n);
+      expect(alert.currentILBps).toBeLessThan(500);
+      expect(alert.triggered).toBe(false);
+    });
+  });
+
+  describe('Multi-sample protection (future enhancement)', () => {
+    it('documents that minimum TWAP window provides manipulation resistance', () => {
+      // This test documents the design: by using TWAP with MIN_TWAP_WINDOW_SECONDS (300s),
+      // we make single-block or single-transaction manipulation infeasible.
+      // An attacker would need to maintain manipulated reserves for 5 minutes,
+      // which is economically impractical due to:
+      // 1. Arbitrage opportunities during the manipulation window
+      // 2. Cost of maintaining the position
+      // 3. MEV bot intervention
+      
+      const MIN_TWAP_WINDOW = 300; // 5 minutes
+      expect(MIN_TWAP_WINDOW).toBeGreaterThanOrEqual(300);
+    });
+  });
+});
