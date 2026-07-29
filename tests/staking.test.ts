@@ -608,3 +608,40 @@ describe("StakingModule", () => {
     });
   });
 });
+it("does not resubmit a timed-out stake that actually landed", async () => {
+  const balanceBefore = createMockStakeResult(0n, 0, 0);
+  const balanceAfterLanded = createMockStakeResult(1000n, Math.floor(Date.now() / 1000), 0);
+
+  const client = createSequentialMockClient([balanceBefore, balanceAfterLanded]);
+  (client.submitTransaction as jest.Mock).mockReset();
+  (client.submitTransaction as jest.Mock).mockRejectedValueOnce(
+    Object.assign(new Error("timeout"), { code: "ETIMEDOUT" }),
+  );
+
+  const module = new StakingModule(client);
+  const signer = createMockSigner();
+
+  const txHash = await module.stake(MOCK_LP_TOKEN, 1000n, signer);
+
+  expect(txHash).toBe("landed");
+  expect(client.submitTransaction).toHaveBeenCalledTimes(1);
+});
+
+it("resubmits a stake when it genuinely did not land after timeout", async () => {
+  const balanceBefore = createMockStakeResult(0n, 0, 0);
+  const balanceStillZero = createMockStakeResult(0n, 0, 0);
+
+  const client = createSequentialMockClient([balanceBefore, balanceStillZero]);
+  (client.submitTransaction as jest.Mock).mockReset();
+  (client.submitTransaction as jest.Mock)
+    .mockRejectedValueOnce(Object.assign(new Error("timeout"), { code: "ETIMEDOUT" }))
+    .mockResolvedValueOnce({ success: true, txHash: MOCK_TX_HASH });
+
+  const module = new StakingModule(client);
+  const signer = createMockSigner();
+
+  const txHash = await module.stake(MOCK_LP_TOKEN, 1000n, signer);
+
+  expect(txHash).toBe(MOCK_TX_HASH);
+  expect(client.submitTransaction).toHaveBeenCalledTimes(2);
+});
