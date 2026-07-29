@@ -22,6 +22,7 @@ import { GasEstimate } from '../types/gas';
 import { estimateGas } from '../utils/gas';
 import { resolveTokenIdentifier } from '../utils/addresses';
 import { simulateSwapParamsSchema, multiHopSwapRequestSchema, swapHistoryFilterSchema, priceGuardConfigSchema, parseWithValidationError } from '../schemas/swap';
+import { simulateSwapParamsSchema, multiHopSwapRequestSchema, swapHistoryFilterSchema, priceGuardConfigSchema, parseWithValidationError } from '../schemas/swap';
 import { verifyRedStonePayload, estimateUsdValue, DEFAULT_PRICE_GUARD_CONFIG } from '../utils/redstone';
 
 /** Default ledger window when no fromLedger/toLedger is specified. */
@@ -115,7 +116,7 @@ export class SwapModule {
     parseWithValidationError(
       simulateSwapParamsSchema,
       { tokenIn: resolvedTokenIn, tokenOut: resolvedTokenOut, amountIn },
-      { tokenIn: 'tokenIn', tokenOut: 'tokemOut', amountIn: 'amountIn' },
+      { tokenIn: 'tokenIn', tokenOut: 'tokenOut', amountIn: 'amountIn' },
     );
 
     // Resolve pair address via factory if not provided
