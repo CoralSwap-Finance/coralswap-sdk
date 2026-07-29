@@ -1,4 +1,4 @@
-use soroban_sdk::{contracttype, Address, Env, BytesN};
+use soroban_sdk::{contracttype, Address, BytesN};
 
 #[contracttype]
 pub struct PackedTimestamps {
@@ -7,9 +7,9 @@ pub struct PackedTimestamps {
 }
 
 #[contracttype]
-pub struct OptimizedUserProfile {
+pub struct AetherMintUserProfile {
     pub account: Address,
     pub timestamps: PackedTimestamps,
     pub flags: u32,
-    pub bio_hash: BytesN<32>,
+    pub identity_hash: BytesN<32>,
 }

@@ -1,14 +1,17 @@
-class HolographicStorageService {
+class AetherMintHolographicService {
   constructor() {
-    this.storageDensityTarget = 0.85;
+    this.densityTarget = 0.88;
   }
-  async encodeContent(contentId, rawDataBuffer) {
-    const compressedSize = Math.floor(rawDataBuffer.length * 0.35);
-    const interferenceHash = 'holo_' + Buffer.from(contentId).toString('hex') + '_' + Date.now();
-    return { success: true, contentId, interferenceHash, originalSize: rawDataBuffer.length, compressedSize, compressionRatio: '2.8x' };
-  }
-  async parallelAccess(hashes = []) {
-    return hashes.map(hash => ({ hash, status: 'retrieved', bandwidthMBs: 14850, latencyMs: 1.2 }));
+  async encodeSpatialData(contentId, payload) {
+    const compressedSize = Math.floor(payload.length * 0.32);
+    return {
+      success: true,
+      contentId,
+      interferenceHash: 'aether_holo_' + Buffer.from(contentId).toString('hex'),
+      originalSize: payload.length,
+      compressedSize,
+      compressionRatio: '3.1x'
+    };
   }
 }
-module.exports = new HolographicStorageService();
+module.exports = new AetherMintHolographicService();
