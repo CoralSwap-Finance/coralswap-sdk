@@ -1,7 +1,7 @@
 import { CoralSwapClient } from "@/client";
 import { fromSorobanAmount } from "@/utils/amounts";
 import { validateAddress } from "@/utils/validation";
-import { SorobanRpc } from "@stellar/stellar-sdk";
+import { EventCursor, fieldI128, fieldU32, fieldAddress } from "@/utils/event-cursor";
 
 /**
  * Options for exporting trade history.
@@ -59,6 +59,10 @@ const DEFAULT_HISTORY_WINDOW = 17280; // ~1 day of ledgers
  * USD values are approximated at 0 when no price feed is available
  * (on-chain USD prices are not natively available on Soroban).
  *
+ * Event fetching and decoding is performed via the shared {@link EventCursor}
+ * utility, which uses correctly-typed XDR accessors and avoids the ad-hoc
+ * ScVal duck-typing that was present in earlier versions of this module.
+ *
  * @example
  * const tax = new TaxReportingModule(client);
  * const csv = await tax.exportTradeHistory('G...', { format: 'csv', fromDate: new Date('2024-01-01') });
@@ -88,15 +92,14 @@ export class TaxReportingModule {
     const currentLedger = await this.client.getCurrentLedger();
     const startLedger = Math.max(0, currentLedger - DEFAULT_HISTORY_WINDOW);
 
-    const [swapEvents, liquidityEvents] = await Promise.all([
+    const [swapRows, liquidityRows] = await Promise.all([
       this.fetchSwapEvents(address, startLedger),
       this.fetchLiquidityEvents(address, startLedger),
     ]);
 
-    const rows: TaxReportRow[] = [
-      ...swapEvents,
-      ...liquidityEvents,
-    ].sort((a, b) => a.date.localeCompare(b.date));
+    const rows: TaxReportRow[] = [...swapRows, ...liquidityRows].sort((a, b) =>
+      a.date.localeCompare(b.date),
+    );
 
     const filtered = rows.filter((row) => {
       const d = new Date(row.date);
@@ -124,31 +127,64 @@ export class TaxReportingModule {
     address: string,
     startLedger: number,
   ): Promise<TaxReportRow[]> {
-    const response = await this.fetchEvents(startLedger, ["swap"]);
+    const cursor = new EventCursor({
+      server: this.client.server,
+      startLedger,
+      topics: ["swap"],
+      contractIds: [],
+      limit: 200,
+    });
+
+    const events = await cursor.fetch();
     const rows: TaxReportRow[] = [];
 
-    for (const ev of response) {
-      const data = decodeMapEvent(ev.value);
-      if (!data) continue;
+    for (const ev of events) {
+      // Filter by sender address
+      const senderVal = ev.fields.get("sender");
+      if (!senderVal) continue;
+      let sender: string;
+      try {
+        sender = fieldAddress(senderVal);
+      } catch {
+        continue;
+      }
+      if (sender !== address) continue;
 
-      const sender = readAddress(data, "sender");
-      if (sender && sender !== address) continue;
+      // Decode required fields
+      const tokenInVal = ev.fields.get("token_in");
+      const tokenOutVal = ev.fields.get("token_out");
+      const amountInVal = ev.fields.get("amount_in");
+      const amountOutVal = ev.fields.get("amount_out");
+      const feeBpsVal = ev.fields.get("fee_bps");
+      if (!tokenInVal || !tokenOutVal || !amountInVal || !amountOutVal) continue;
 
-      const amountIn = readI128(data, "amount_in") ?? 0n;
-      const amountOut = readI128(data, "amount_out") ?? 0n;
-      const feeBps = readU32(data, "fee_bps") ?? 0;
+      let tokenIn: string;
+      let tokenOut: string;
+      let amountIn: bigint;
+      let amountOut: bigint;
+      let feeBps: number;
+      try {
+        tokenIn = fieldAddress(tokenInVal);
+        tokenOut = fieldAddress(tokenOutVal);
+        amountIn = fieldI128(amountInVal);
+        amountOut = fieldI128(amountOutVal);
+        feeBps = feeBpsVal ? fieldU32(feeBpsVal) : 0;
+      } catch {
+        continue;
+      }
+
       const feeAmount = (amountIn * BigInt(feeBps)) / 10000n;
 
       rows.push({
-        date: new Date(ev.ledgerClosedAt ?? 0).toISOString(),
+        date: new Date(ev.timestamp * 1000).toISOString(),
         type: "swap",
-        tokenIn: readAddress(data, "token_in") ?? "",
+        tokenIn,
         amountIn: fromSorobanAmount(amountIn, TOKEN_DECIMALS),
-        tokenOut: readAddress(data, "token_out") ?? "",
+        tokenOut,
         amountOut: fromSorobanAmount(amountOut, TOKEN_DECIMALS),
         fee: fromSorobanAmount(feeAmount, TOKEN_DECIMALS),
         usdValue: "0.00",
-        txHash: ev.txHash ?? "",
+        txHash: ev.txHash,
       });
     }
 
@@ -159,28 +195,66 @@ export class TaxReportingModule {
     address: string,
     startLedger: number,
   ): Promise<TaxReportRow[]> {
+    const [addCursor, removeCursor] = [
+      new EventCursor({
+        server: this.client.server,
+        startLedger,
+        topics: ["add_liquidity"],
+        contractIds: [],
+        limit: 200,
+      }),
+      new EventCursor({
+        server: this.client.server,
+        startLedger,
+        topics: ["remove_liquidity"],
+        contractIds: [],
+        limit: 200,
+      }),
+    ];
+
     const [addEvents, removeEvents] = await Promise.all([
-      this.fetchEvents(startLedger, ["add_liquidity"]),
-      this.fetchEvents(startLedger, ["remove_liquidity"]),
+      addCursor.fetch(),
+      removeCursor.fetch(),
     ]);
 
     const rows: TaxReportRow[] = [];
 
     for (const ev of [...addEvents, ...removeEvents]) {
-      const isAdd = (ev.topic?.[0] ?? "") === "add_liquidity";
-      const data = decodeMapEvent(ev.value);
-      if (!data) continue;
+      const isAdd = ev.topicName === "add_liquidity";
 
-      const provider = readAddress(data, "provider");
-      if (provider && provider !== address) continue;
+      // Filter by provider address
+      const providerVal = ev.fields.get("provider");
+      if (!providerVal) continue;
+      let provider: string;
+      try {
+        provider = fieldAddress(providerVal);
+      } catch {
+        continue;
+      }
+      if (provider !== address) continue;
 
-      const amountA = readI128(data, "amount_a") ?? 0n;
-      const amountB = readI128(data, "amount_b") ?? 0n;
-      const tokenA = readAddress(data, "token_a") ?? "";
-      const tokenB = readAddress(data, "token_b") ?? "";
+      // Decode required fields
+      const tokenAVal = ev.fields.get("token_a");
+      const tokenBVal = ev.fields.get("token_b");
+      const amountAVal = ev.fields.get("amount_a");
+      const amountBVal = ev.fields.get("amount_b");
+      if (!tokenAVal || !tokenBVal || !amountAVal || !amountBVal) continue;
+
+      let tokenA: string;
+      let tokenB: string;
+      let amountA: bigint;
+      let amountB: bigint;
+      try {
+        tokenA = fieldAddress(tokenAVal);
+        tokenB = fieldAddress(tokenBVal);
+        amountA = fieldI128(amountAVal);
+        amountB = fieldI128(amountBVal);
+      } catch {
+        continue;
+      }
 
       rows.push({
-        date: new Date(ev.ledgerClosedAt ?? 0).toISOString(),
+        date: new Date(ev.timestamp * 1000).toISOString(),
         type: isAdd ? "add_liquidity" : "remove_liquidity",
         tokenIn: tokenA,
         amountIn: fromSorobanAmount(amountA, TOKEN_DECIMALS),
@@ -188,93 +262,17 @@ export class TaxReportingModule {
         amountOut: fromSorobanAmount(amountB, TOKEN_DECIMALS),
         fee: "0.0000000",
         usdValue: "0.00",
-        txHash: ev.txHash ?? "",
+        txHash: ev.txHash,
       });
     }
 
     return rows;
   }
-
-  private async fetchEvents(
-    startLedger: number,
-    topics: string[],
-  ): Promise<RawEvent[]> {
-    const request: SorobanRpc.Server.GetEventsRequest = {
-      startLedger,
-      filters: [{ type: "contract", contractIds: [], topics: [topics] }],
-      limit: 200,
-    };
-
-    const response = await this.client.server.getEvents(request);
-    if (!response || !Array.isArray(response.events)) return [];
-    return response.events as unknown as RawEvent[];
-  }
 }
 
 // ---------------------------------------------------------------------------
-// Internal types & helpers
+// Formatting helpers
 // ---------------------------------------------------------------------------
-
-interface RawEvent {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  value: any;
-  topic?: string[];
-  txHash?: string;
-  ledgerClosedAt?: string | number;
-  ledger?: number;
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function decodeMapEvent(value: any): Map<string, any> | null {
-  const entries: unknown[] =
-    typeof value?.map === "function" ? value.map() : value?._value;
-  if (!Array.isArray(entries)) return null;
-
-  const map = new Map<string, unknown>();
-  for (const entry of entries as Array<{ key: unknown; val: unknown }>) {
-    const k = entry.key as Record<string, () => { toString(): string }>;
-    let key: string | undefined;
-    try {
-      key = k.sym?.().toString() ?? k.str?.().toString();
-    } catch { /* skip */ }
-    if (key) map.set(key, entry.val);
-  }
-  return map as Map<string, unknown>;
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function readAddress(map: Map<string, any>, key: string): string | undefined {
-  const val = map.get(key);
-  if (!val) return undefined;
-  try {
-    if (typeof val.address === "function") return val.address().toString();
-    if (typeof val._value?.toString === "function") return val._value.toString();
-  } catch { /* skip */ }
-  return undefined;
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function readI128(map: Map<string, any>, key: string): bigint | undefined {
-  const val = map.get(key);
-  if (!val) return undefined;
-  try {
-    if (typeof val.i128 === "function") {
-      const parts = val.i128();
-      return (BigInt(parts.hi().toString()) << 64n) + BigInt(parts.lo().toString());
-    }
-  } catch { /* skip */ }
-  return undefined;
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function readU32(map: Map<string, any>, key: string): number | undefined {
-  const val = map.get(key);
-  if (!val) return undefined;
-  try {
-    if (typeof val.u32 === "function") return val.u32();
-  } catch { /* skip */ }
-  return undefined;
-}
 
 function formatDate(date: Date, timezone: string): string {
   try {

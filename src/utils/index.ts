@@ -93,3 +93,11 @@ export type { VotingPower, VotingPowerQueryProvider, VotingPowerQueryResult } fr
 
 export { checkCompatibility } from './migration';
 export type { BreakingChange, CompatibilityReport } from './migration';
+
+export {
+  EventCursor,
+  fieldI128,
+  fieldU32,
+  fieldAddress,
+} from './event-cursor';
+export type { EventCursorOptions, RpcEvent } from './event-cursor';
