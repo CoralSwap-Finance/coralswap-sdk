@@ -2,7 +2,7 @@ import { CoralSwapClient } from "../src/client";
 import { LeaderboardModule } from "../src/modules/leaderboard";
 import { Network } from "../src/types/common";
 import { ValidationError } from "../src/errors";
-import { SorobanRpc } from "@stellar/stellar-sdk";
+import { SorobanRpc, xdr } from "@stellar/stellar-sdk";
 import { SwapModule } from "../src/modules/swap";
 
 // ---------------------------------------------------------------------------
@@ -57,10 +57,12 @@ function makeRawSwapEvent(opts: {
   ];
 
   return {
-    topic: ["swap"],
+    // Real getEvents responses carry topics as XDR ScVals, never bare strings.
+    topic: [xdr.ScVal.scvSymbol("swap")],
     value: { map: () => mapEntries },
     contractId: opts.contractId,
     ledger: opts.ledger,
+    pagingToken: `${opts.ledger}-1`,
   };
 }
 
@@ -95,10 +97,11 @@ function makeRawAddLiquidityEvent(opts: {
   ];
 
   return {
-    topic: ["add_liquidity"],
+    topic: [xdr.ScVal.scvSymbol("add_liquidity")],
     value: { map: () => mapEntries },
     contractId: opts.contractId,
     ledger: opts.ledger,
+    pagingToken: `${opts.ledger}-1`,
   };
 }
 
@@ -484,5 +487,95 @@ describe("LeaderboardModule.getTopTraders()", () => {
     expect(result).toHaveLength(2);
     expect(result[0].address).toBe("USER_3"); // 300 USD
     expect(result[1].address).toBe("USER_2"); // 200 USD
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getEvents topic-filter / ledger-anchoring audit (#437)
+// ---------------------------------------------------------------------------
+
+describe("LeaderboardModule getEvents encoding", () => {
+  let client: CoralSwapClient;
+  let leaderboard: LeaderboardModule;
+
+  /** Decode a topic filter segment the way a real RPC node does. */
+  function decodeTopicFilter(segment: string): string {
+    if (segment === "*") return segment;
+    const decoded = xdr.ScVal.fromXDR(segment, "base64");
+    if (decoded.switch().name !== "scvSymbol") {
+      throw new Error(`topic filter must be an scvSymbol, got ${decoded.switch().name}`);
+    }
+    return decoded.sym().toString();
+  }
+
+  beforeEach(() => {
+    client = new CoralSwapClient({ network: Network.TESTNET, secretKey: TEST_SECRET });
+    leaderboard = new LeaderboardModule(client);
+    jest.spyOn(client, "getCurrentLedger").mockResolvedValue(50000);
+  });
+
+  afterEach(() => jest.restoreAllMocks());
+
+  it("encodes the swap topic as a base64 XDR ScVal symbol", async () => {
+    const spy = jest
+      .spyOn(client.server, "getEvents")
+      .mockResolvedValue(makeEventsResponse([]));
+
+    await leaderboard.getLeaderboard("trader", { period: "24h" });
+
+    const request = spy.mock.calls[0][0];
+    const [segment] = request.filters[0].topics![0];
+    expect(segment).toBe(xdr.ScVal.scvSymbol("swap").toXDR("base64"));
+    expect(decodeTopicFilter(segment)).toBe("swap");
+  });
+
+  it("encodes the add_liquidity topic for LP leaderboards", async () => {
+    const spy = jest
+      .spyOn(client.server, "getEvents")
+      .mockResolvedValue(makeEventsResponse([]));
+
+    await leaderboard.getLeaderboard("lp", { period: "7d" });
+
+    const segment = spy.mock.calls[0][0].filters[0].topics![0][0];
+    expect(decodeTopicFilter(segment)).toBe("add_liquidity");
+  });
+
+  it("anchors startLedger to the chain head, never to ledger 0", async () => {
+    // Head below the 30d window: the naive Math.max(0, ...) produced 0 here.
+    jest.spyOn(client, "getCurrentLedger").mockResolvedValue(100);
+    const spy = jest
+      .spyOn(client.server, "getEvents")
+      .mockResolvedValue(makeEventsResponse([]));
+
+    await leaderboard.getLeaderboard("trader", { period: "30d" });
+
+    const request = spy.mock.calls[0][0];
+    expect(request.startLedger).toBeGreaterThanOrEqual(1);
+    expect(request.startLedger).toBeLessThanOrEqual(100);
+  });
+
+  it("keeps the period window below the chain head", async () => {
+    const spy = jest
+      .spyOn(client.server, "getEvents")
+      .mockResolvedValue(makeEventsResponse([]));
+
+    await leaderboard.getLeaderboard("trader", { period: "24h" });
+
+    // 24h period + 1 day of comparison baseline = 2 × 17280 ledgers.
+    expect(spy.mock.calls[0][0].startLedger).toBe(50000 - 17280 * 2);
+  });
+
+  it("skips events whose decoded topic does not match the query", async () => {
+    const events = [
+      makeRawSwapEvent({ contractId: PAIR_A, sender: USER_1, amountIn: 1000n, ledger: 40000 }),
+      // An add_liquidity event leaking into a trader query must be ignored.
+      makeRawAddLiquidityEvent({ contractId: PAIR_A, provider: USER_2, liquidity: 9999n, ledger: 40001 }),
+    ];
+    jest.spyOn(client.server, "getEvents").mockResolvedValue(makeEventsResponse(events));
+
+    const result = await leaderboard.getLeaderboard("trader", { period: "24h" });
+
+    expect(result).toHaveLength(1);
+    expect(result[0].address).toBe(USER_1);
   });
 });
