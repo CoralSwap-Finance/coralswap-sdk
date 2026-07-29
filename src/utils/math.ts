@@ -49,6 +49,10 @@ export class Fraction {
    * @returns A new Fraction with numerator and denominator swapped.
    */
   public invert(): Fraction {
+    // Normalize sign onto the numerator so denominator stays positive
+    if (this.numerator < 0n) {
+      return new Fraction(-this.denominator, -this.numerator);
+    }
     return new Fraction(this.denominator, this.numerator);
   }
 
@@ -108,10 +112,14 @@ export class Fraction {
    */
   public divide(other: Fraction | bigint | number | string): Fraction {
     const otherParsed = other instanceof Fraction ? other : new Fraction(BigInt(other));
-    return new Fraction(
-      this.numerator * otherParsed.denominator,
-      this.denominator * otherParsed.numerator
-    );
+    // Normalize sign onto the numerator so denominator stays positive
+    const newNumerator = this.numerator * otherParsed.denominator;
+    const newDenominator = this.denominator * otherParsed.numerator;
+    
+    if (newDenominator < 0n) {
+      return new Fraction(-newNumerator, -newDenominator);
+    }
+    return new Fraction(newNumerator, newDenominator);
   }
 
   /**
