@@ -15,6 +15,10 @@ import {
   getRPCLatency,
   getContractStatus,
   getBestEndpoint,
+  __resetLatencyCache,
+  __evictStaleLatencyWindows,
+  __latencyCacheSize,
+  __latencyWindowTtlMs,
 } from '../src/modules/health-check';
 
 // ---------------------------------------------------------------------------
@@ -75,6 +79,9 @@ beforeEach(() => {
   perEndpointHealth.clear();
   perEndpointLedger.clear();
   perEndpointContract.clear();
+  // Latency windows are cached across calls — clear them so no test reads a
+  // window recorded by another one.
+  __resetLatencyCache();
   serverMockConfig.getHealthFn = async (url) => {
     const fn = perEndpointHealth.get(url);
     if (fn) return fn();
@@ -388,5 +395,144 @@ describe('getBestEndpoint()', () => {
       'https://slow-but-alive.example.com',
     ]);
     expect(result).toBe('https://slow-but-alive.example.com');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Latency-window cache eviction (#438)
+//
+// Latency samples drive endpoint routing, so a window must expire once it is
+// older than LATENCY_WINDOW_TTL_MS rather than being retained indefinitely.
+// ---------------------------------------------------------------------------
+
+describe('latency window cache', () => {
+  const URL = 'https://rpc-cache.example.com';
+
+  /** Count getLatestLedger round-trips so re-probes are observable. */
+  function countingLedgerHandler(): { probes: () => number } {
+    let probes = 0;
+    setLedgerHandler(URL, async () => {
+      probes++;
+      return { sequence: 1, id: 'x', protocolVersion: '21' };
+    });
+    return { probes: () => probes };
+  }
+
+  it('serves a second call from the cached window', async () => {
+    const counter = countingLedgerHandler();
+
+    const first = await getRPCLatency(URL, 3, 1_000);
+    const second = await getRPCLatency(URL, 3, 1_000);
+
+    expect(counter.probes()).toBe(3);
+    expect(second).toEqual(first);
+    expect(__latencyCacheSize()).toBe(1);
+  });
+
+  it('re-probes once the window outlives its TTL', async () => {
+    jest.useFakeTimers();
+    try {
+      const counter = countingLedgerHandler();
+
+      await getRPCLatency(URL, 3, 1_000);
+      expect(counter.probes()).toBe(3);
+
+      // Still inside the TTL — served from cache.
+      jest.setSystemTime(Date.now() + __latencyWindowTtlMs() - 1);
+      await getRPCLatency(URL, 3, 1_000);
+      expect(counter.probes()).toBe(3);
+
+      // Past the TTL — the stale window is evicted and the endpoint re-probed.
+      jest.setSystemTime(Date.now() + 2);
+      await getRPCLatency(URL, 3, 1_000);
+      expect(counter.probes()).toBe(6);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('evicts expired entries instead of retaining them', async () => {
+    jest.useFakeTimers();
+    try {
+      countingLedgerHandler();
+      await getRPCLatency(URL, 3, 1_000);
+      expect(__latencyCacheSize()).toBe(1);
+
+      jest.setSystemTime(Date.now() + __latencyWindowTtlMs());
+
+      expect(__evictStaleLatencyWindows()).toBe(1);
+      expect(__latencyCacheSize()).toBe(0);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('keeps fresh entries when sweeping', async () => {
+    jest.useFakeTimers();
+    try {
+      countingLedgerHandler();
+      await getRPCLatency(URL, 3, 1_000);
+
+      expect(__evictStaleLatencyWindows()).toBe(0);
+      expect(__latencyCacheSize()).toBe(1);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('keys windows by sample count as well as URL', async () => {
+    const counter = countingLedgerHandler();
+
+    await getRPCLatency(URL, 3, 1_000);
+    await getRPCLatency(URL, 5, 1_000);
+
+    // A 3-sample window cannot answer a 5-sample request.
+    expect(counter.probes()).toBe(8);
+    expect(__latencyCacheSize()).toBe(2);
+  });
+
+  it('bypasses the cache when fresh samples are requested', async () => {
+    const counter = countingLedgerHandler();
+
+    await getRPCLatency(URL, 3, 1_000);
+    await getRPCLatency(URL, 3, 1_000, { fresh: true });
+
+    expect(counter.probes()).toBe(6);
+  });
+
+  it('does not store a window when caching is disabled', async () => {
+    countingLedgerHandler();
+
+    await getRPCLatency(URL, 3, 1_000, { cache: false });
+
+    expect(__latencyCacheSize()).toBe(0);
+  });
+
+  it('__resetLatencyCache() clears every window and reports the count', async () => {
+    countingLedgerHandler();
+    await getRPCLatency(URL, 3, 1_000);
+    await getRPCLatency(URL, 5, 1_000);
+
+    expect(__resetLatencyCache()).toBe(2);
+    expect(__latencyCacheSize()).toBe(0);
+  });
+
+  it('does not cache anything for an invalid URL', async () => {
+    await getRPCLatency('', 3, 1_000);
+    expect(__latencyCacheSize()).toBe(0);
+  });
+
+  it('reuses the cached window when scoring endpoints', async () => {
+    const counter = countingLedgerHandler();
+    setHealthHandler(URL, async () => ({ status: 'healthy' }));
+
+    // Seed the 3-sample window getBestEndpoint scores against.
+    await getRPCLatency(URL, 3, 3_000);
+    expect(counter.probes()).toBe(3);
+
+    const best = await getBestEndpoint([URL]);
+
+    expect(best).toBe(URL);
+    expect(counter.probes()).toBe(3);
   });
 });
