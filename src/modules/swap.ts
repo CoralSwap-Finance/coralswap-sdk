@@ -202,43 +202,46 @@ export class SwapModule {
   /**
    * Execute a swap transaction on-chain, or estimate its fee.
    */
-  async execute(request: SwapRequest, options: { estimateOnly: true }): Promise<GasEstimate>;
-  async execute(request: SwapRequest, options?: { estimateOnly?: false }): Promise<SwapResult>;
-  async execute(request: SwapRequest, options?: { estimateOnly?: boolean }): Promise<SwapResult | GasEstimate> {
+  buildSwapOperation(
+    request: SwapRequest,
+    quote: SwapQuote,
+  ): import('@stellar/stellar-sdk').xdr.Operation {
     const path = this.resolvePath(request);
-    const quote = await this.getQuote(request);
-
-    let op: import('@stellar/stellar-sdk').xdr.Operation;
 
     if (path.length > 2) {
-      // Multi-hop: router handles the full path
-      op = this.client.router.buildSwapExactTokensForTokens(
+      return this.client.router.buildSwapExactTokensForTokens(
         request.to ?? this.client.publicKey,
         path,
         quote.amountIn,
         quote.amountOutMin,
         quote.deadline,
       );
-    } else {
-      op =
-        request.tradeType === TradeType.EXACT_IN
-          ? this.client.router.buildSwapExactIn(
-              request.to ?? this.client.publicKey,
-              request.tokenIn,
-              request.tokenOut,
-              quote.amountIn,
-              quote.amountOutMin,
-              quote.deadline,
-            )
-          : this.client.router.buildSwapExactOut(
-              request.to ?? this.client.publicKey,
-              request.tokenIn,
-              request.tokenOut,
-              quote.amountOut,
-              quote.amountIn,
-              quote.deadline,
-            );
     }
+
+    return request.tradeType === TradeType.EXACT_IN
+      ? this.client.router.buildSwapExactIn(
+          request.to ?? this.client.publicKey,
+          request.tokenIn,
+          request.tokenOut,
+          quote.amountIn,
+          quote.amountOutMin,
+          quote.deadline,
+        )
+      : this.client.router.buildSwapExactOut(
+          request.to ?? this.client.publicKey,
+          request.tokenIn,
+          request.tokenOut,
+          quote.amountOut,
+          quote.amountIn,
+          quote.deadline,
+        );
+  }
+
+  async execute(request: SwapRequest, options: { estimateOnly: true }): Promise<GasEstimate>;
+  async execute(request: SwapRequest, options?: { estimateOnly?: false }): Promise<SwapResult>;
+  async execute(request: SwapRequest, options?: { estimateOnly?: boolean }): Promise<SwapResult | GasEstimate> {
+    const quote = await this.getQuote(request);
+    const op = this.buildSwapOperation(request, quote);
 
     if (options?.estimateOnly) {
       return estimateGas((ops) => this.client.simulateTransaction(ops, {}), [op]);
