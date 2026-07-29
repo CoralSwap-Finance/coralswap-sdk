@@ -1,5 +1,8 @@
 import { xdr } from "@stellar/stellar-sdk";
-import EventCursor from "../src/utils/event-cursor";
+import EventCursor, {
+  decodeEventTopic,
+  MIN_START_LEDGER,
+} from "../src/utils/event-cursor";
 
 describe("EventCursor", () => {
   it("anchors initial cursor via getLatestLedger and uses defaultWindow", async () => {
@@ -64,5 +67,55 @@ describe("EventCursor", () => {
 
     expect(server.getEvents).toHaveBeenCalledTimes(2);
     expect(all.map((e: any) => e.txHash)).toEqual(['a','b','c','d','e']);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Ledger anchoring floor (#437)
+  // ---------------------------------------------------------------------------
+  it("clamps the anchored cursor to ledger 1, never 0", async () => {
+    const server: any = {
+      // Chain head is younger than the default 1000-ledger window, so
+      // `sequence - defaultWindow` is negative.
+      getLatestLedger: jest.fn().mockResolvedValue({ sequence: 400 }),
+      getEvents: jest.fn().mockResolvedValue({ events: [], latestLedger: 400 }),
+    };
+
+    const cursor = new EventCursor(server);
+    await cursor.scan();
+
+    const req = server.getEvents.mock.calls[0][0];
+    expect(req.startLedger).toBe(MIN_START_LEDGER);
+    expect(req.startLedger).toBeGreaterThan(0);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Response topic decoding (#437)
+  // ---------------------------------------------------------------------------
+  describe("decodeEventTopic", () => {
+    it("decodes a parsed ScVal symbol topic", () => {
+      expect(decodeEventTopic(xdr.ScVal.scvSymbol("swap"))).toBe("swap");
+    });
+
+    it("decodes a base64 XDR topic as returned over raw JSON-RPC", () => {
+      const encoded = xdr.ScVal.scvSymbol("add_liquidity").toXDR("base64");
+      expect(decodeEventTopic(encoded)).toBe("add_liquidity");
+    });
+
+    it("decodes scvString topics as well as symbols", () => {
+      expect(decodeEventTopic(xdr.ScVal.scvString("transfer"))).toBe("transfer");
+    });
+
+    // The whole point of the audit: a fixture that hands back a bare string
+    // must not compare equal to the symbol it is imitating, otherwise mocks
+    // silently hide the raw-string topic bug in the module under test.
+    it("refuses a bare unencoded string", () => {
+      expect(decodeEventTopic("swap")).toBe("");
+    });
+
+    it("returns an empty string for missing or non-topic values", () => {
+      expect(decodeEventTopic(undefined)).toBe("");
+      expect(decodeEventTopic(null)).toBe("");
+      expect(decodeEventTopic(xdr.ScVal.scvU32(7))).toBe("");
+    });
   });
 });

@@ -86,7 +86,8 @@ export {
 } from './events';
 export type { DecodeEventsOptions } from './events';
 
-export { EventCursor } from './event-cursor';
+export { EventCursor, decodeEventTopic, MIN_START_LEDGER } from './event-cursor';
+export type { EventCursorOptions } from './event-cursor';
 export { ConnectionPool } from './connection-pool';
 
 export {
