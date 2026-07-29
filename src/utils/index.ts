@@ -96,3 +96,10 @@ export type { VotingPower, VotingPowerQueryProvider, VotingPowerQueryResult } fr
 export { checkCompatibility } from './migration';
 export type { BreakingChange, CompatibilityReport } from './migration';
 export { suppressDeprecationWarnings, deprecated } from './deprecation-warnings';
+
+export {
+  TransactionFinality,
+  checkTransactionFinality,
+  executeWithIdempotentResubmission,
+} from './idempotent-resubmission';
+export type { IdempotentResubmissionConfig } from './idempotent-resubmission';

@@ -14,7 +14,7 @@ import {
   MultiHopSwapQuote,
 } from '../types/swap';
 import { PRECISION, DEFAULTS } from '../config';
-import { PairNotFoundError, ValidationError, InsufficientLiquidityError, TransactionError } from '../errors';
+import { PairNotFoundError, ValidationError, InsufficientLiquidityError } from '../errors';
 import { PairClient } from '@/contracts/pair';
 import { validateAddress, validatePositiveAmount, validateDistinctTokens, isValidPath } from '@/utils/validation';
 import { SorobanRpc } from '@stellar/stellar-sdk';
@@ -22,6 +22,7 @@ import { GasEstimate } from '../types/gas';
 import { estimateGas } from '../utils/gas';
 import { resolveTokenIdentifier } from '../utils/addresses';
 import { verifyRedStonePayload, estimateUsdValue, DEFAULT_PRICE_GUARD_CONFIG } from '../utils/redstone';
+import { executeWithIdempotentResubmission } from '../utils/idempotent-resubmission';
 
 /** Default ledger window when no fromLedger/toLedger is specified. */
 const DEFAULT_HISTORY_WINDOW = 1000;
@@ -244,23 +245,18 @@ export class SwapModule {
       return estimateGas((ops) => this.client.simulateTransaction(ops, {}), [op]);
     }
 
-    const result = await this.client.submitTransaction([op]);
-
-    if (!result.success) {
-      throw new TransactionError(
-        `Multi-hop swap failed: ${result.error?.message ?? "Unknown error"}`,
-        result.txHash,
-      );
-    }
-
-    return {
-      txHash: result.txHash!,
-      amountIn: quote.amountIn,
-      amountOut: quote.amountOut,
-      feePaid: quote.feeAmount,
-      ledger: result.data!.ledger,
-      timestamp: Math.floor(Date.now() / 1000),
-    };
+    return executeWithIdempotentResubmission(
+      () => this.client.submitTransaction([op]),
+      this.client.server,
+      (txHash, ledger) => ({
+        txHash,
+        amountIn: quote.amountIn,
+        amountOut: quote.amountOut,
+        feePaid: quote.feeAmount,
+        ledger,
+        timestamp: Math.floor(Date.now() / 1000),
+      }),
+    );
   }
 
   /**
@@ -522,23 +518,18 @@ export class SwapModule {
       quote.deadline,
     );
 
-    const result = await this.client.submitTransaction([op]);
-
-    if (!result.success) {
-      throw new TransactionError(
-        `Multi-hop swap failed: ${result.error?.message ?? "Unknown error"}`,
-        result.txHash,
-      );
-    }
-
-    return {
-      txHash: result.txHash!,
-      amountIn: quote.amountIn,
-      amountOut: quote.amountOut,
-      feePaid: quote.feeAmount,
-      ledger: result.data!.ledger,
-      timestamp: Math.floor(Date.now() / 1000),
-    };
+    return executeWithIdempotentResubmission(
+      () => this.client.submitTransaction([op]),
+      this.client.server,
+      (txHash, ledger) => ({
+        txHash,
+        amountIn: quote.amountIn,
+        amountOut: quote.amountOut,
+        feePaid: quote.feeAmount,
+        ledger,
+        timestamp: Math.floor(Date.now() / 1000),
+      }),
+    );
   }
 
   computeCompoundedFeeBps(feesBps: number[]): number {
