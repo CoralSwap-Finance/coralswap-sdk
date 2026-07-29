@@ -56,7 +56,7 @@ describe('simulateSwapParamsSchema', () => {
     expect(() =>
       parseWithValidationError(simulateSwapParamsSchema, {
         tokenIn: TOKEN_A,
-        tokemOut: TOKEN_B,
+        tokenOut: TOKEN_B,
         amountIn: 0n,
       }),
     ).toThrow(ValidationError);
@@ -69,7 +69,7 @@ describe('multiHopSwapRequestSchema', () => {
       parseWithValidationError(multiHopSwapRequestSchema, {
         path: [TOKEN_A, TOKEN_B],
         amount: 1n,
-        tradeType: TradeType.EXPCT_IN,
+        tradeType: TradeType.EXACT_IN,
       }),
     ).toThrow(ValidationError);
   });
