@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
 jobs:
   patch:
-    runs-on: ubuntu-atest
+    runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
