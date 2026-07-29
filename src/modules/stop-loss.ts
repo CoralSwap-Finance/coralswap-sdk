@@ -26,6 +26,13 @@ import {
   xdr,
 } from '@stellar/stellar-sdk';
 
+/**
+ * Default maximum age for oracle prices (in milliseconds).
+ * Prices older than this are considered stale and will trigger a StaleOracleError.
+ * Set to 5 minutes to align with TWAP minimum window.
+ */
+export const DEFAULT_STALE_AFTER_MS = 5 * 60 * 1000; // 5 minutes
+
 type DecodedStopLossOrder = Omit<StopLossOrder, 'currentPrice' | 'triggered' | 'distancePercent'>;
 
 interface OraclePriceSnapshot {
@@ -186,7 +193,10 @@ export class StopLossModule {
    * @returns The order state plus the live `currentPrice` and `triggered` flag
    * @throws {ValidationError} If `orderId` is empty or no order exists
    */
-  async getStopLoss(orderId: string): Promise<StopLossOrder> {
+  async getStopLoss(
+    orderId: string,
+    options: TriggerEvaluationOptions = {},
+  ): Promise<StopLossOrder> {
     if (!orderId || orderId.trim().length === 0) {
       throw new ValidationError('orderId must not be empty');
     }
@@ -204,7 +214,7 @@ export class StopLossModule {
     }
 
     const order = this.decodeOrder(sim.returnValue);
-    return this.enrichOrder(order);
+    return this.enrichOrder(order, options);
   }
 
   /**
@@ -214,6 +224,7 @@ export class StopLossModule {
   async getStopLossOrders(
     address: string,
     query: StopLossOrderQuery = {},
+    options: TriggerEvaluationOptions = {},
   ): Promise<StopLossOrder[]> {
     validateAddress(address, 'address');
 
@@ -232,7 +243,7 @@ export class StopLossModule {
     const rawOrders = Array.isArray(native) ? native : [];
     const enriched = await Promise.all(
       rawOrders.map((item) =>
-        this.enrichOrder(this.decodeOrder(nativeToScVal(item))),
+        this.enrichOrder(this.decodeOrder(nativeToScVal(item)), options),
       ),
     );
 
@@ -248,7 +259,8 @@ export class StopLossModule {
     options: TriggerEvaluationOptions = {},
   ): Promise<boolean> {
     const snapshot = await this.getOraclePrice(order.oracleAsset);
-    this.assertOracleFresh(snapshot, order.oracleAsset, options.staleAfterMs);
+    const staleAfterMs = options.staleAfterMs ?? DEFAULT_STALE_AFTER_MS;
+    this.assertOracleFresh(snapshot, order.oracleAsset, staleAfterMs);
     return snapshot.price <= order.triggerPrice;
   }
 
@@ -279,8 +291,16 @@ export class StopLossModule {
     }
   }
 
-  private async enrichOrder(order: DecodedStopLossOrder): Promise<StopLossOrder> {
+  private async enrichOrder(
+    order: DecodedStopLossOrder,
+    options: TriggerEvaluationOptions = {},
+  ): Promise<StopLossOrder> {
     const snapshot = await this.getOraclePrice(order.oracleAsset);
+    
+    // Enforce oracle freshness by default to prevent stale price usage
+    const staleAfterMs = options.staleAfterMs ?? DEFAULT_STALE_AFTER_MS;
+    this.assertOracleFresh(snapshot, order.oracleAsset, staleAfterMs);
+    
     const distancePercent =
       order.triggerPrice > 0n
         ? Number(
@@ -342,9 +362,11 @@ export class StopLossModule {
   private assertOracleFresh(
     snapshot: OraclePriceSnapshot,
     asset: string,
-    staleAfterMs?: number,
+    staleAfterMs: number,
   ): void {
-    if (staleAfterMs === undefined || snapshot.timestamp === undefined) {
+    if (snapshot.timestamp === undefined) {
+      // No timestamp available - cannot verify freshness
+      // This could happen with certain oracle implementations
       return;
     }
 
