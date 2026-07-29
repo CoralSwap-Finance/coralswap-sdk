@@ -50,3 +50,26 @@ export const priceGuardConfigSchema = z.object({
   maxDeviationBps: z.number().int().min(0).max(10000, { message: 'maxDeviationBps must be between 0 and 10000' }),
   minGuardedAmountUsd: z.bigint(),
 });
+
+export function parseWithValidationError<T>(
+  schema: z.ZodType<T>,
+  data: unknown,
+  paramNames?: Record<string, string>,
+): T {
+  try {
+    return schema.parse(data);
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      const messages = err.issues.map((issue) => {
+        const pathStr = issue.path.join('.');
+        const name = (paramNames && pathStr && paramNames[pathStr]) || pathStr;
+        if (name) { return `${name} ${issue.message}`; }
+        return issue.message;
+      });
+      throw new ValidationError(messages.join('; '), {
+        zodIssues: err.issues.map((i) => ({ path: i.path, message: i.message })),
+      });
+    }
+    throw err;
+  }
+}
