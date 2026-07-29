@@ -231,6 +231,16 @@ export class FlashLoanFailedError extends FlashLoanError {
 }
 
 /**
+ * Cross-chain routing or bridge execution errors (Squid Router integration).
+ */
+export class CrossChainError extends TransactionError {
+  constructor(message: string, details?: Record<string, unknown>, txHash?: string) {
+    super(message, txHash, details, "CROSS_CHAIN_ERROR");
+    this.name = "CrossChainError";
+  }
+}
+
+/**
  * Circuit breaker triggered (pool is paused).
  */
 export class CircuitBreakerError extends CoralSwapSDKError {
