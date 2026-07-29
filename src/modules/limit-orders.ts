@@ -333,9 +333,9 @@ export function parseOrderDetails(result: xdr.ScVal): LimitOrderDetails {
 
 
 
-function validatePlaceLimitOrderParams(
-  params: PlaceLimitOrderParams,
-): PlaceLimitOrderParams {
+function validateLimitOrderParams(
+  params: LimitOrderParams,
+): LimitOrderParams {
   if (
     !Number.isFinite(params.targetPrice) ||
     params.targetPrice <= 0
@@ -670,7 +670,7 @@ export class LimitOrderModule {
    * console.log('Placed order:', orderId);
    */
   async placeLimitOrder(params: LimitOrderParams, signer?: string): Promise<PlaceLimitOrderResult> {
-    params = validatePlaceLimitOrderParams(params);
+    params = validateLimitOrderParams(params);
 
     validateAddress(params.tokenIn, 'tokenIn');
     validateAddress(params.tokenOut, 'tokenOut');
