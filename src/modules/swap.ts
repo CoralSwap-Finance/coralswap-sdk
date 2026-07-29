@@ -21,6 +21,7 @@ import { SorobanRpc } from '@stellar/stellar-sdk';
 import { GasEstimate } from '../types/gas';
 import { estimateGas } from '../utils/gas';
 import { resolveTokenIdentifier } from '../utils/addresses';
+import { simulateSwapParamsSchema, multiHopSwapRequestSchema, swapHistoryFilterSchema, priceGuardConfigSchema, parseWithValidationError } from '../schemas/swap';
 import { verifyRedStonePayload, estimateUsdValue, DEFAULT_PRICE_GUARD_CONFIG } from '../utils/redstone';
 
 /** Default ledger window when no fromLedger/toLedger is specified. */
@@ -52,11 +53,7 @@ export class SwapModule {
    * @param maxDeviationBps - Maximum allowed deviation from oracle price in basis points.
    */
   setPriceGuardConfig(minGuardedAmountUsd: bigint, maxDeviationBps: number): void {
-    if (maxDeviationBps < 0 || maxDeviationBps > 10000) {
-      throw new ValidationError("maxDeviationBps must be between 0 and 10000", {
-        maxDeviationBps,
-      });
-    }
+    parseWithValidationError(priceGuardConfigSchema, { minGuardedAmountUsd, maxDeviationBps });
     this.priceGuardConfig = {
       ...this.priceGuardConfig,
       minGuardedAmountUsd,
@@ -115,10 +112,11 @@ export class SwapModule {
     const resolvedTokenIn = resolveTokenIdentifier(tokenIn, passphrase);
     const resolvedTokenOut = resolveTokenIdentifier(tokenOut, passphrase);
 
-    validateAddress(resolvedTokenIn, 'tokenIn');
-    validateAddress(resolvedTokenOut, 'tokenOut');
-    validateDistinctTokens(resolvedTokenIn, resolvedTokenOut);
-    validatePositiveAmount(amountIn, 'amountIn');
+    parseWithValidationError(
+      simulateSwapParamsSchema,
+      { tokenIn: resolvedTokenIn, tokenOut: resolvedTokenOut, amountIn },
+      { tokenIn: 'tokenIn', tokenOut: 'tokemOut', amountIn: 'amountIn' },
+    );
 
     // Resolve pair address via factory if not provided
     const resolvedPair =
@@ -466,14 +464,10 @@ export class SwapModule {
     const passphrase = this.client.networkConfig.networkPassphrase;
     const path = request.path.map((t) => resolveTokenIdentifier(t, passphrase));
 
-    if (!isValidPath(path) || path.length < 3) {
-      throw new ValidationError(
-        'Multi-hop path must contain at least 3 tokens with no identical adjacent tokens',
-        { path },
-      );
-    }
-
-    path.forEach((addr, i) => validateAddress(addr, `path[${i}]`));
+    parseWithValidationError(
+      multiHopSwapRequestSchema,
+      { path, amount: request.amount, tradeType: request.tradeType, slippageBps: request.slippageBps, deadline: request.deadline, to: request.to },
+    );
 
     const hops =
       request.tradeType === TradeType.EXACT_OUT
@@ -717,9 +711,10 @@ export class SwapModule {
   async getSwapHistory(filter: SwapHistoryFilter = {}): Promise<SwapHistoryEvent[]> {
     const { pairAddress, userAddress } = filter;
 
-    // Validate optional addresses up-front
-    if (pairAddress) validateAddress(pairAddress, 'pairAddress');
-    if (userAddress) validateAddress(userAddress, 'userAddress');
+    parseWithValidationError(
+      swapHistoryFilterSchema,
+      filter,
+    );
 
     // Resolve ledger range — default to last DEFAULT_HISTORY_WINDOW ledgers
     const currentLedger = await this.client.getCurrentLedger();
