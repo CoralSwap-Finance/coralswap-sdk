@@ -35,3 +35,18 @@ export const multiHopSwapRequestSchema = z.object({
   deadline: z.number().int().positive().optional(),
   to: stellarAddress.optional(),
 });
+
+export const swapHistoryFilterSchema = z
+  .object({
+    pairAddress: stellarAddress.optional(),
+    userAddress: stellarAddress.optional(),
+    fromLedger: z.number().int().nonnegative().optional(),
+    toLedger: z.number().int().nonnegative().optional(),
+    limit: z.number().int().positive().optional(),
+  })
+  .refine((d) => { if (d.fromLedger !== undefined && d.toLedger !== undefined) { return d.fromLedger <= d.toLedger; } return true; }, (d) => ({ message: `fromLedger (${d.fromLedger}) must not be greater than toLedger (${d.toLedger})` }));
+
+export const priceGuardConfigSchema = z.object({
+  maxDeviationBps: z.number().int().min(0).max(10000, { message: 'maxDeviationBps must be between 0 and 10000' }),
+  minGuardedAmountUsd: z.bigint(),
+});
