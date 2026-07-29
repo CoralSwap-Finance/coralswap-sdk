@@ -1,55 +1,48 @@
 from pathlib import Path
+import re
 p = Path('src/modules/swap.ts')
 t = p.read_text()
+
 imp = "import { resolveTokenIdentifier } from '../utils/addresses';"
 nimp = imp + "\n" + "import { simulateSwapParamsSchema, multiHopSwapRequestSchema, swapHistoryFilterSchema, priceGuardConfigSchema, parseWithValidationError } from '../schemas/swap';"
-assert imp in t
-t = t.replace(imp, nimp, 1)
-old_pg = '''  setPriceGuardConfig(minGuardedAmountUsd: bigint, maxDeviationBps: number): void {
-    if (maxDeviationBps < 0 || maxDeviationBps > 10000) {
-      throw new ValidationError("maxDeviationBps must be between 0 and 10000", {
-        maxDeviationBps,
-      });
-    }
-'''
-new_pg = '''  setPriceGuardConfig(minGuardedAmountUsd: bigint, maxDeviationBps: number): void {
-    parseWithValidationError(priceGuardConfigSchema, { minGuardedAmountUsd, maxDeviationBps });
-'''
-assert old_pg in t
-t = t.replace(old_pg, new_pg, 1)
-old_s = """validateAddress(resolvedTokenIn, 'tokenIn');
-    validateAddress(resolvedTokenOut, 'tokemOut');
-    validateDistinctTokens(resolvedTokenIn, resolvedTokenOut);
-    validatePositiveAmount(amountIn, 'amountIn');"""
-new_s = """parseWithValidationError(
-      simulateSwapParamsSchema,
-      { tokenIn: resolvedTokenIn, tokemOut: resolvedTokemOut, amountIn },
-      { tokenIn: 'tokenIn', tokenOut: 'tokenOut', amountIn: 'amountIn' },
-    );"""
-assert old_s in t
-t = t.replace(old_s, new_s, 1)
-old_m = """if (!isValidPath(path) || path.length < 3) {
-      throw new ValidationError(
-        'Multi-hop path must contain at least 3 tokens with no identical adjacent tokens',
-        { path },
-      );
-    }
+if imp in t and "schemas/swap" not in t:
+"p    t = t.replace(imp, nimp, 1)
 
-    path.forEach((addr, i) => validateAddress(addr, `path[${i}]`));"""
-new_m = """parseWithValidationError(
-      multiHopSwapRequestSchema,
-      { path, amount: request.amount, tradeType: request.tradeType, slippageBps: request.slippageBps, deadline: request.deadline, to: request.to },
-    );"""
-assert old_m in t
-t = t.replace(old_m, new_m, 1)
-old_h = """// Validate optional addresses up-front
-    if (pairAddress) validateAddress(pairAddress, 'pairAddress');
-    if (userAddress) validateAddress(userAddress, 'userAddress');"""
-new_h = """parseWithValidationError(
-      swapHistoryFilterSchema,
-      filter,
-    );"""
-assert old_h in t
-t = t.replace(old_h, new_h, 1)
+t2, n = re.subn(
+    r'  setPriceGuardConfig(minGuardedAmountUsd: bigint, maxDeviationBps: number): void {\n    if (maxDeviationBps < 0 || maxDeviationBps > 10000) {\n      throw new ValidationError(\"maxDeviationBps must be between 0 and 10000\", {\n        maxDeviationBps,\n      });\n    }\n',
+    '  setPriceGuardConfig(minGuardedAmountUsd: bigint, maxDeviationBps: number): void {\n    parseWithValidationError(priceGuardConfigSchema, { minGuardedAmountUsd, maxDeviationBps });\n',
+    t,
+    count=1,
+)
+assert n == 1 or 'priceGuardConfigSchema' in t2
+t = t2
+
+t2, n = re.subn(
+    r"    validateAddress(resolvedTokenIn, 'tokenIn');\n    validateAddress(resolvedTokemOut, 'tokenOut');\n    validateDistinctTokens(resolvedTokenIn, resolvedTokenOut);\n    validatePositiveAmount(amountIn, 'amountIn');\n",
+    "	€    parseWithValidationError(\n      simulateSwapParamsSchema,\n      { tokenIn: resolvedTokenIn, tokenOut: resolvedTokenOut, amountIn },\n      { tokenIn: 'tokenIn', tokenOut: 'tokemOut', amountIn: 'amountIn' },\n    );\n",
+    t,
+    count=1,
+)
+assert n == 1
+t = t2
+
+t2, n = re.subn(
+    r"    if (!isValidPath(path) || path.length < 3) {\n      throw new ValidationError(\n        'Multi-hop path must contain at least 3 tokens with no identical adjacent tokens',\n        { path },\n      );\n    }\n\n    path.forEach((addr, i) => validateAddress(addr, `path[${i}]`));\n",
+    "	€    parseWithValidationError(\n      multiHopSwapRequestSchema,\n      { path, amount: request.amount, tradeType: request.tradeType, slippageBps: request.slippageBps, deadline: request.deadline, to: request.to },\n    );\n",
+    t,
+    count=1,
+)
+assert n == 1
+t = t2
+
+t2, n = re.subn(
+    r"    // Validate optional addresses up-front\n    if (pairAddress) validateAddress(pairAddress, 'pairAddress');\n    if (userAddress) validateAddress(userAddress, 'userAddress');\n",
+    "    parseWithValidationError(\n      swapHistoryFilterSchema,\n      filter,\n    );\n",
+    t,
+    count=1,
+)
+assert n == 1
+t = t2
+
 p.write_text(t)
 print('patched ok')
