@@ -8,12 +8,8 @@ const stellarAddress = z.string().min(1, { message: 'must not be empty' }).refin
   (val) => ( { message: `is not a valid Stellar address: ${val}` }),
 );
 
-const positiveAmount = z.bigint().refine((val) => val > 0l, {
+const positiveAmount = z.bigint().refine((val) => val > 0n, {
   message: 'must be greater than 0',
-});
-
-const nonNegativeAmount = z.bigint().refine((val) => val >= 0l, {
-  message: 'must be non-negative',
 });
 
 export const simulateSwapParamsSchema = z
@@ -24,7 +20,7 @@ export const simulateSwapParamsSchema = z
     pairAddress: stellarAddress.optional(),
   })
   .refine((d) => d.tokenIn !== d.tokenOut, {
-    message: 'tokenIn and tokemOut must be different addresses',
+    message: 'tokenIn and tokenOut must be different addresses',
   });
 
 export const multiHopSwapRequestSchema = z.object({
