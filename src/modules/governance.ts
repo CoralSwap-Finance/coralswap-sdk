@@ -1,4 +1,5 @@
 
+import { z } from 'zod';
 import { CoralSwapClient } from '@/client';
 import {
   Proposal,
@@ -15,9 +16,9 @@ import {
 } from '@/errors';
 import {
   validateAddress,
-  validateStringLength,
   validateEnumValue,
 } from '@/utils/validation';
+import { isValidAddress } from '@/utils/addresses';
 import {
   Contract,
   nativeToScVal,
@@ -25,6 +26,38 @@ import {
   Address,
   scValToNative,
 } from '@stellar/stellar-sdk';
+
+// ---------------------------------------------------------------------------
+// Zod schemas — governance input validation
+// ---------------------------------------------------------------------------
+
+const ProposalActionSchema = z.object({
+  contractAddress: z.string().refine((val) => isValidAddress(val), {
+    message: 'action.contractAddress is not a valid Stellar address',
+  }),
+  functionName: z.string(),
+  args: z.array(z.unknown()),
+});
+
+const CreateProposalInputSchema = z.object({
+  title: z.string()
+    .trim()
+    .min(1, 'title must be at least 1 character(s), got 0')
+    .max(200, 'title must be at most 200 character(s)'),
+  description: z.string()
+    .trim()
+    .min(1, 'description must be at least 1 character(s)')
+    .max(5000, 'description must be at most 5000 character(s)'),
+  actions: z.array(ProposalActionSchema)
+    .min(1, 'actions must be a non-empty array'),
+});
+
+const CastVoteInputSchema = z.object({
+  proposalId: z.string()
+    .trim()
+    .min(1, 'proposalId must not be empty'),
+  voteType: z.enum(['for', 'against', 'abstain']),
+});
 
 /**
  * Governance module — proposal creation, voting, and LP-token delegation.
@@ -144,17 +177,14 @@ export class GovernanceModule {
     actions: ProposalAction[],
     signer: Signer,
   ): Promise<string> {
-    validateStringLength(title, 'title', 1, 200);
-    validateStringLength(description, 'description', 1, 5000);
-    if (!Array.isArray(actions) || actions.length === 0) {
-      throw new ValidationError('actions must be a non-empty array', {
-        field: 'actions',
-        constraint: 'non-empty array',
+    const input = CreateProposalInputSchema.safeParse({ title, description, actions });
+    if (!input.success) {
+      const issue = input.error.issues[0];
+      throw new ValidationError(issue.message, {
+        field: issue.path.join('.'),
+        constraint: issue.code,
         operation: 'createProposal',
       });
-    }
-    for (const action of actions) {
-      validateAddress(action.contractAddress, 'action.contractAddress');
     }
 
     const signerPublicKey = await signer.publicKey();
@@ -218,14 +248,15 @@ export class GovernanceModule {
     voteType: VoteType,
     signer: Signer,
   ): Promise<string> {
-    if (!proposalId || proposalId.trim().length === 0) {
-      throw new ValidationError('proposalId must not be empty', {
-        field: 'proposalId',
-        constraint: 'non-empty string',
+    const input = CastVoteInputSchema.safeParse({ proposalId, voteType });
+    if (!input.success) {
+      const issue = input.error.issues[0];
+      throw new ValidationError(issue.message, {
+        field: issue.path.join('.'),
+        constraint: issue.code,
         operation: 'castVote',
       });
     }
-    validateEnumValue(voteType, 'voteType', ['for', 'against', 'abstain']);
 
     try {
       await this.getProposal(proposalId);
