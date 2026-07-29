@@ -3,8 +3,6 @@ on:
   push:
     branches:
       - fix/492-swap-zod-validation
-    paths:
-      - scripts/trigger-patch.txt
 jobs:
   patch:
     runs-on: ubuntu-latest
@@ -13,8 +11,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: python3 scripts/apply_zod_patch.py
-      - run: git config user.email "isaac4real-art@users.noreply.github.com"
-      - run: git config user.name "isaac4real-art"
-      - run: git add src/modules/swap.ts
-      - run: git commit -m "feat(swap): migrate validation to zod schemas"
-      - run: git push
+      - run: |
+          git config user.email "isaac4real-art@users.noreply.github.com"
+          git config user.name "isaac4real-art"
+          git add src/modules/swap.ts
+          git diff --staged --quiet || exit 0
+          git commit -m "feat(swap): migrate validation to zod schemas" || exit 0
+          git push
