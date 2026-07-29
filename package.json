@@ -15,6 +15,7 @@
     "test:coverage": "jest --coverage",
     "test:integration": "jest --config jest.integration.config.js",
     "test:integration:portfolio": "jest --config jest.integration.config.js --testPathPattern=portfolio.integration",
+    "test:integration:swap": "jest --config jest.integration.config.js --testPathPattern=swap.integration",
     "lint": "eslint src/**/*.ts",
     "lint:fix": "eslint src/**/*.ts --fix",
     "clean": "rimraf dist",
