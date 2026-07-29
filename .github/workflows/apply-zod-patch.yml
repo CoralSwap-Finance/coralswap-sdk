@@ -1,6 +1,10 @@
 name: apply-zod-patch
 on:
-  workflow_dispatch:
+  push:
+    branches:
+      - fix/492-swap-zod-validation
+    paths:
+      - scripts/trigger-patch.txt
 jobs:
   patch:
     runs-on: ubuntu-latest
@@ -8,8 +12,6 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: fix/492-swap-zod-validation
       - run: python3 scripts/apply_zod_patch.py
       - run: git config user.email "isaac4real-art@users.noreply.github.com"
       - run: git config user.name "isaac4real-art"
