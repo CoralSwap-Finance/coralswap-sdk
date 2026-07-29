@@ -14,14 +14,14 @@ import {
 } from "@/types/staking";
 import { Signer } from "@/types/common";
 import {
+  ValidationError,
   TransactionError,
   CooldownError,
   StakingError,
 } from "@/errors";
-import {
-  validateAddress,
-  validatePositiveAmount,
-} from "@/utils/validation";
+import { validateAddress } from "@/utils/validation";
+import { isValidAddress } from "@/utils/addresses";
+import { z } from "zod";
 
 /**
  * Staking module — manages LP token staking for governance weight
@@ -42,6 +42,41 @@ import {
  * console.log('Pending:', rewards.pendingRewards);
  * ```
  */
+// ---------------------------------------------------------------------------
+// Zod schema — validates stake/unstake input parameters
+// ---------------------------------------------------------------------------
+
+const StakeOperationSchema = z.object({
+  lpTokenAddress: z
+    .string()
+    .min(1, "lpTokenAddress must not be empty")
+    .refine(
+      (val) => isValidAddress(val),
+      (val) => ({ message: `lpTokenAddress is not a valid Stellar address: ${val}` }),
+    ),
+  amount: z.bigint().refine(
+    (val) => val > 0n,
+    (val) => ({ message: `amount must be greater than 0, got ${val}` }),
+  ),
+});
+
+/**
+ * Validate stake/unstake parameters against the Zod schema.
+ *
+ * @throws {ValidationError} If any parameter fails validation.
+ */
+function validateStakeParams(lpTokenAddress: string, amount: bigint): void {
+  const result = StakeOperationSchema.safeParse({ lpTokenAddress, amount });
+  if (!result.success) {
+    const issues = result.error.issues
+      .map((i: z.ZodIssue) => `${i.path.join(".")}: ${i.message}`)
+      .join("; ");
+    throw new ValidationError(`Invalid stake parameters: ${issues}`, {
+      zodErrors: result.error.issues,
+    });
+  }
+}
+
 export class StakingModule {
   private client: CoralSwapClient;
 
@@ -70,8 +105,7 @@ export class StakingModule {
     amount: bigint,
     signer: Signer,
   ): Promise<string> {
-    validateAddress(lpTokenAddress, "lpTokenAddress");
-    validatePositiveAmount(amount, "amount");
+    validateStakeParams(lpTokenAddress, amount);
 
     const publicKey = await signer.publicKey();
     const contract = new Contract(lpTokenAddress);
@@ -294,8 +328,7 @@ export class StakingModule {
     amount: bigint,
     signer: Signer,
   ): Promise<string> {
-    validateAddress(lpTokenAddress, "lpTokenAddress");
-    validatePositiveAmount(amount, "amount");
+    validateStakeParams(lpTokenAddress, amount);
 
     const publicKey = await signer.publicKey();
 
