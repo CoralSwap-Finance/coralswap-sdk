@@ -1,3 +1,4 @@
+import { xdr } from "@stellar/stellar-sdk";
 import { CoralSwapClient } from "@/client";
 import {
   AddLiquidityRequest,
@@ -114,9 +115,7 @@ export class LiquidityModule {
    * const result = await client.liquidity.addLiquidity({ tokenA: 'C...', ... });
    * const gas = await client.liquidity.addLiquidity({ tokenA: 'C...', ... }, { estimateOnly: true });
    */
-  async addLiquidity(request: AddLiquidityRequest, options: { estimateOnly: true }): Promise<GasEstimate>;
-  async addLiquidity(request: AddLiquidityRequest, options?: { estimateOnly?: false }): Promise<LiquidityResult>;
-  async addLiquidity(request: AddLiquidityRequest, options?: { estimateOnly?: boolean }): Promise<LiquidityResult | GasEstimate> {
+  buildAddLiquidityOperation(request: AddLiquidityRequest): xdr.Operation {
     validateAddress(request.tokenA, "tokenA");
     validateAddress(request.tokenB, "tokenB");
     validateDistinctTokens(request.tokenA, request.tokenB);
@@ -125,12 +124,14 @@ export class LiquidityModule {
     validatePositiveAmount(request.amountBDesired, "amountBDesired");
     validateNonNegativeAmount(request.amountAMin, "amountAMin");
     validateNonNegativeAmount(request.amountBMin, "amountBMin");
+
     if (request.amountAMin > request.amountADesired) {
       throw new ValidationError("amountAMin must not exceed amountADesired", {
         amountAMin: request.amountAMin.toString(),
         amountADesired: request.amountADesired.toString(),
       });
     }
+
     if (request.amountBMin > request.amountBDesired) {
       throw new ValidationError("amountBMin must not exceed amountBDesired", {
         amountBMin: request.amountBMin.toString(),
@@ -140,7 +141,7 @@ export class LiquidityModule {
 
     const deadline = request.deadline ?? this.client.getDeadline();
 
-    const op = this.client.router.buildAddLiquidity(
+    return this.client.router.buildAddLiquidity(
       request.to,
       request.tokenA,
       request.tokenB,
@@ -150,6 +151,12 @@ export class LiquidityModule {
       request.amountBMin,
       deadline,
     );
+  }
+
+  async addLiquidity(request: AddLiquidityRequest, options: { estimateOnly: true }): Promise<GasEstimate>;
+  async addLiquidity(request: AddLiquidityRequest, options?: { estimateOnly?: false }): Promise<LiquidityResult>;
+  async addLiquidity(request: AddLiquidityRequest, options?: { estimateOnly?: boolean }): Promise<LiquidityResult | GasEstimate> {
+    const op = this.buildAddLiquidityOperation(request);
 
     if (options?.estimateOnly) {
       return estimateGas((ops) => this.client.simulateTransaction(ops, {}), [op]);
@@ -187,12 +194,7 @@ export class LiquidityModule {
    * const result = await client.liquidity.removeLiquidity({ tokenA: 'C...', ... });
    * const gas = await client.liquidity.removeLiquidity({ tokenA: 'C...', ... }, { estimateOnly: true });
    */
-  async removeLiquidity(request: RemoveLiquidityRequest, options: { estimateOnly: true }): Promise<GasEstimate>;
-  async removeLiquidity(request: RemoveLiquidityRequest, options?: { estimateOnly?: false }): Promise<LiquidityResult>;
-  async removeLiquidity(
-    request: RemoveLiquidityRequest,
-    options?: { estimateOnly?: boolean },
-  ): Promise<LiquidityResult | GasEstimate> {
+  buildRemoveLiquidityOperation(request: RemoveLiquidityRequest): xdr.Operation {
     validateAddress(request.tokenA, "tokenA");
     validateAddress(request.tokenB, "tokenB");
     validateDistinctTokens(request.tokenA, request.tokenB);
@@ -203,7 +205,7 @@ export class LiquidityModule {
 
     const deadline = request.deadline ?? this.client.getDeadline();
 
-    const op = this.client.router.buildRemoveLiquidity(
+    return this.client.router.buildRemoveLiquidity(
       request.to,
       request.tokenA,
       request.tokenB,
@@ -212,6 +214,15 @@ export class LiquidityModule {
       request.amountBMin,
       deadline,
     );
+  }
+
+  async removeLiquidity(request: RemoveLiquidityRequest, options: { estimateOnly: true }): Promise<GasEstimate>;
+  async removeLiquidity(request: RemoveLiquidityRequest, options?: { estimateOnly?: false }): Promise<LiquidityResult>;
+  async removeLiquidity(
+    request: RemoveLiquidityRequest,
+    options?: { estimateOnly?: boolean },
+  ): Promise<LiquidityResult | GasEstimate> {
+    const op = this.buildRemoveLiquidityOperation(request);
 
     if (options?.estimateOnly) {
       return estimateGas((ops) => this.client.simulateTransaction(ops, {}), [op]);

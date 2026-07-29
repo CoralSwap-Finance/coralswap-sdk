@@ -174,3 +174,5 @@ export {
   WebhookDisabledError,
   mapError,
 } from "@/errors";
+
+export { TransactionComposer } from "./transaction-composer";

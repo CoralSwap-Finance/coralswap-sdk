@@ -18,6 +18,7 @@ import { KeypairSigner } from '@/utils/signer';
 import { TransactionPoller, PollingStrategy, PollingOptions } from '@/utils/polling';
 import { buildSimulationResult } from '@/utils/simulation';
 import { withRetry, RetryOptions } from '@/utils/retry';
+import { TransactionComposer } from '@/transaction-composer';
 export { KeypairSigner, PollingStrategy, PollingOptions };
 
 /**
@@ -290,6 +291,14 @@ export class CoralSwapClient {
       sourceAccount,
     );
   }
+
+  /**
+   * Create a transaction composer for atomic multi-operation transactions.
+   */
+  transactionComposer(): TransactionComposer {
+    return new TransactionComposer(this);
+  }
+
 
   /**
    * Switch the client to a different network.
