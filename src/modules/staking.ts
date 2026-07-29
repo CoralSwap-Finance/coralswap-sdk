@@ -1,4 +1,4 @@
-import {
+import { idempotentResubmit } from "@/utils/idempotent-resubmit";
   Contract,
   SorobanRpc,
   TransactionBuilder,
@@ -65,35 +65,38 @@ export class StakingModule {
    * const txHash = await staking.stake('CAAAA...', 1000n, mySigner);
    * ```
    */
-  async stake(
-    lpTokenAddress: string,
-    amount: bigint,
-    signer: Signer,
-  ): Promise<string> {
-    validateAddress(lpTokenAddress, "lpTokenAddress");
-    validatePositiveAmount(amount, "amount");
+  aasync stake(lpTokenAddress: string, amount: bigint, signer: Signer): Promise<string> {
+  validateAddress(lpTokenAddress, "lpTokenAddress");
+  validatePositiveAmount(amount, "amount");
 
-    const publicKey = await signer.publicKey();
-    const contract = new Contract(lpTokenAddress);
+  const publicKey = await signer.publicKey();
+  const contract = new Contract(lpTokenAddress);
+  const op = contract.call(
+    "stake",
+    nativeToScVal(Address.fromString(publicKey), { type: "address" }),
+    nativeToScVal(amount, { type: "i128" }),
+  );
 
-    const op = contract.call(
-      "stake",
-      nativeToScVal(Address.fromString(publicKey), { type: "address" }),
-      nativeToScVal(amount, { type: "i128" }),
-    );
+  const balanceBefore = await this.getStakedBalance(publicKey, lpTokenAddress);
 
-    const result = await this.client.submitTransaction([op]);
-
-    if (!result.success) {
-      throw new TransactionError(
-        `Stake failed: ${result.error?.message ?? "Unknown error"}`,
-        result.txHash,
-      );
-    }
-
-    return result.txHash!;
-  }
-
+  return idempotentResubmit(
+    async () => {
+      const result = await this.client.submitTransaction([op]);
+      if (!result.success) {
+        throw new TransactionError(
+          `Stake failed: ${result.error?.message ?? "Unknown error"}`,
+          result.txHash,
+        );
+      }
+      return result.txHash!;
+    },
+    async () => {
+      const balanceAfter = await this.getStakedBalance(publicKey, lpTokenAddress);
+      return balanceAfter.amount >= balanceBefore.amount + amount ? "landed" : null;
+    },
+    { maxRetries: 3, baseDelayMs: 1000, deadlineMs: Date.now() + 30_000 },
+  );
+}
   /**
    * Get the staked LP token position for an address.
    *
@@ -289,53 +292,50 @@ export class StakingModule {
    * const txHash = await staking.unstake('CAAAA...', 500n, mySigner);
    * ```
    */
-  async unstake(
-    lpTokenAddress: string,
-    amount: bigint,
-    signer: Signer,
-  ): Promise<string> {
-    validateAddress(lpTokenAddress, "lpTokenAddress");
-    validatePositiveAmount(amount, "amount");
+ async unstake(lpTokenAddress: string, amount: bigint, signer: Signer): Promise<string> {
+  validateAddress(lpTokenAddress, "lpTokenAddress");
+  validatePositiveAmount(amount, "amount");
 
-    const publicKey = await signer.publicKey();
+  const publicKey = await signer.publicKey();
 
-    // Enforce cooldown period
-    const cooldownStatus = await this.getCooldownStatus(publicKey, lpTokenAddress);
-    if (cooldownStatus.isInCooldown) {
-      throw new CooldownError(BigInt(cooldownStatus.cooldownEnd));
-    }
-
-    // Validate unstake amount does not exceed staked balance
-    const position = await this.getStakedBalance(publicKey, lpTokenAddress);
-    if (amount > position.amount) {
-      throw new StakingError(
-        `Unstake amount ${amount} exceeds staked balance ${position.amount}`,
-        {
-          requested: amount.toString(),
-          staked: position.amount.toString(),
-        },
-      );
-    }
-
-    const contract = new Contract(lpTokenAddress);
-
-    const op = contract.call(
-      "unstake",
-      nativeToScVal(Address.fromString(publicKey), { type: "address" }),
-      nativeToScVal(amount, { type: "i128" }),
-    );
-
-    const result = await this.client.submitTransaction([op]);
-
-    if (!result.success) {
-      throw new TransactionError(
-        `Unstake failed: ${result.error?.message ?? "Unknown error"}`,
-        result.txHash,
-      );
-    }
-
-    return result.txHash!;
+  const cooldownStatus = await this.getCooldownStatus(publicKey, lpTokenAddress);
+  if (cooldownStatus.isInCooldown) {
+    throw new CooldownError(BigInt(cooldownStatus.cooldownEnd));
   }
+
+  const position = await this.getStakedBalance(publicKey, lpTokenAddress);
+  if (amount > position.amount) {
+    throw new StakingError(
+      `Unstake amount ${amount} exceeds staked balance ${position.amount}`,
+      { requested: amount.toString(), staked: position.amount.toString() },
+    );
+  }
+
+  const contract = new Contract(lpTokenAddress);
+  const op = contract.call(
+    "unstake",
+    nativeToScVal(Address.fromString(publicKey), { type: "address" }),
+    nativeToScVal(amount, { type: "i128" }),
+  );
+
+  return idempotentResubmit(
+    async () => {
+      const result = await this.client.submitTransaction([op]);
+      if (!result.success) {
+        throw new TransactionError(
+          `Unstake failed: ${result.error?.message ?? "Unknown error"}`,
+          result.txHash,
+        );
+      }
+      return result.txHash!;
+    },
+    async () => {
+      const balanceAfter = await this.getStakedBalance(publicKey, lpTokenAddress);
+      return balanceAfter.amount <= position.amount - amount ? "landed" : null;
+    },
+    { maxRetries: 3, baseDelayMs: 1000, deadlineMs: Date.now() + 30_000 },
+  );
+}
 
   /**
    * Get the cooldown status for a staker's position.
