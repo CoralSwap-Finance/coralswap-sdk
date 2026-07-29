@@ -93,3 +93,6 @@ export type { VotingPower, VotingPowerQueryProvider, VotingPowerQueryResult } fr
 
 export { checkCompatibility } from './migration';
 export type { BreakingChange, CompatibilityReport } from './migration';
+
+export { submitIdempotent } from './submit-idempotent';
+export type { SubmitIdempotentClient } from './submit-idempotent';

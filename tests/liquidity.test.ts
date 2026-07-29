@@ -992,4 +992,301 @@ describe("LiquidityModule", () => {
       expect(positions[0].token1Amount).toBe(0n);
     });
   });
+
+  // -----------------------------------------------------------------------
+  // Idempotent resubmission — addLiquidity & removeLiquidity
+  //
+  // These tests verify that a client-side polling timeout does not cause a
+  // duplicate on-chain operation when the transaction already landed.
+  // -----------------------------------------------------------------------
+  describe("idempotent resubmission", () => {
+    const TOKEN_A = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM";
+    const TOKEN_B = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4";
+    const TO_ADDRESS = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM";
+    const LANDED_TX_HASH = "landed-tx-hash-abc123";
+    const LANDED_LEDGER = 99999;
+
+    /** Build a mock client whose submitTransaction and server.getTransaction are jest fns. */
+    function buildIdempotentMockClient({
+      submitResult,
+      getTransactionStatus,
+    }: {
+      submitResult: object;
+      getTransactionStatus?: string; // 'SUCCESS' | 'FAILED' | 'NOT_FOUND'
+    }) {
+      const getTransactionMock = jest.fn().mockResolvedValue(
+        getTransactionStatus === "SUCCESS"
+          ? {
+              status: "SUCCESS",
+              ledger: LANDED_LEDGER,
+              latestLedger: LANDED_LEDGER,
+              latestLedgerCloseTime: 0,
+              oldestLedger: 1,
+              oldestLedgerCloseTime: 0,
+            }
+          : getTransactionStatus === "FAILED"
+            ? {
+                status: "FAILED",
+                ledger: LANDED_LEDGER,
+                latestLedger: LANDED_LEDGER,
+                latestLedgerCloseTime: 0,
+                oldestLedger: 1,
+                oldestLedgerCloseTime: 0,
+              }
+            : {
+                status: "NOT_FOUND",
+                latestLedger: LANDED_LEDGER,
+                latestLedgerCloseTime: 0,
+                oldestLedger: 1,
+                oldestLedgerCloseTime: 0,
+              },
+      );
+
+      return {
+        router: {
+          buildAddLiquidity: jest.fn().mockReturnValue({}),
+          buildRemoveLiquidity: jest.fn().mockReturnValue({}),
+        },
+        submitTransaction: jest.fn().mockResolvedValue(submitResult),
+        getDeadline: jest.fn().mockReturnValue(1234567890),
+        server: { getTransaction: getTransactionMock },
+        _getTransactionMock: getTransactionMock,
+      } as any;
+    }
+
+    // ------------------------------------------------------------------ //
+    //  addLiquidity — timeout-after-landed
+    // ------------------------------------------------------------------ //
+    describe("addLiquidity()", () => {
+      it("detects a timed-out-but-landed tx and returns it without resubmitting", async () => {
+        // submitTransaction returns TX_TIMEOUT (polling timed out)
+        const mockClient = buildIdempotentMockClient({
+          submitResult: {
+            success: false,
+            error: { code: "TX_TIMEOUT", message: "Transaction confirmation timed out" },
+            txHash: LANDED_TX_HASH,
+          },
+          // But the transaction actually landed
+          getTransactionStatus: "SUCCESS",
+        });
+
+        const module = new LiquidityModule(mockClient);
+        const request = {
+          tokenA: TOKEN_A,
+          tokenB: TOKEN_B,
+          amountADesired: 1000n,
+          amountBDesired: 2000n,
+          amountAMin: 900n,
+          amountBMin: 1800n,
+          to: TO_ADDRESS,
+        };
+
+        const result = await module.addLiquidity(request);
+
+        // Should resolve successfully using the landed tx hash
+        expect(result.txHash).toBe(LANDED_TX_HASH);
+        expect(result.ledger).toBe(LANDED_LEDGER);
+
+        // submitTransaction was called exactly once — no resubmission
+        expect(mockClient.submitTransaction).toHaveBeenCalledTimes(1);
+
+        // getTransaction was called to verify on-chain status after timeout
+        expect(mockClient.server.getTransaction).toHaveBeenCalledWith(LANDED_TX_HASH);
+      });
+
+      it("throws TransactionError when the tx genuinely failed (non-timeout error)", async () => {
+        const mockClient = buildIdempotentMockClient({
+          submitResult: {
+            success: false,
+            error: { code: "INSUFFICIENT_BALANCE", message: "Insufficient balance" },
+            txHash: "failed-tx-hash",
+          },
+          // getTransaction should NOT be called for non-timeout failures
+          getTransactionStatus: "NOT_FOUND",
+        });
+
+        const module = new LiquidityModule(mockClient);
+        const request = {
+          tokenA: TOKEN_A,
+          tokenB: TOKEN_B,
+          amountADesired: 1000n,
+          amountBDesired: 2000n,
+          amountAMin: 900n,
+          amountBMin: 1800n,
+          to: TO_ADDRESS,
+        };
+
+        await expect(module.addLiquidity(request)).rejects.toThrow(TransactionError);
+        await expect(module.addLiquidity(request)).rejects.toThrow("Insufficient balance");
+
+        // getTransaction should NOT be called because the error was not TX_TIMEOUT
+        expect(mockClient.server.getTransaction).not.toHaveBeenCalled();
+      });
+
+      it("throws TransactionError when tx timed out and was NOT found on-chain", async () => {
+        const mockClient = buildIdempotentMockClient({
+          submitResult: {
+            success: false,
+            error: { code: "TX_TIMEOUT", message: "Transaction confirmation timed out" },
+            txHash: LANDED_TX_HASH,
+          },
+          // Transaction was not seen on-chain — expired
+          getTransactionStatus: "NOT_FOUND",
+        });
+
+        const module = new LiquidityModule(mockClient);
+        const request = {
+          tokenA: TOKEN_A,
+          tokenB: TOKEN_B,
+          amountADesired: 1000n,
+          amountBDesired: 2000n,
+          amountAMin: 900n,
+          amountBMin: 1800n,
+          to: TO_ADDRESS,
+        };
+
+        // Should throw so the caller knows it can resubmit safely
+        await expect(module.addLiquidity(request)).rejects.toThrow(TransactionError);
+        // status check was performed
+        expect(mockClient.server.getTransaction).toHaveBeenCalledWith(LANDED_TX_HASH);
+      });
+
+      it("throws TransactionError when tx timed out and was FAILED on-chain", async () => {
+        const mockClient = buildIdempotentMockClient({
+          submitResult: {
+            success: false,
+            error: { code: "TX_TIMEOUT", message: "Transaction confirmation timed out" },
+            txHash: LANDED_TX_HASH,
+          },
+          getTransactionStatus: "FAILED",
+        });
+
+        const module = new LiquidityModule(mockClient);
+        const request = {
+          tokenA: TOKEN_A,
+          tokenB: TOKEN_B,
+          amountADesired: 1000n,
+          amountBDesired: 2000n,
+          amountAMin: 900n,
+          amountBMin: 1800n,
+          to: TO_ADDRESS,
+        };
+
+        await expect(module.addLiquidity(request)).rejects.toThrow(TransactionError);
+        expect(mockClient.server.getTransaction).toHaveBeenCalledWith(LANDED_TX_HASH);
+      });
+    });
+
+    // ------------------------------------------------------------------ //
+    //  removeLiquidity — timeout-after-landed
+    // ------------------------------------------------------------------ //
+    describe("removeLiquidity()", () => {
+      it("detects a timed-out-but-landed tx and returns it without resubmitting", async () => {
+        const mockClient = buildIdempotentMockClient({
+          submitResult: {
+            success: false,
+            error: { code: "TX_TIMEOUT", message: "Transaction confirmation timed out" },
+            txHash: LANDED_TX_HASH,
+          },
+          getTransactionStatus: "SUCCESS",
+        });
+
+        const module = new LiquidityModule(mockClient);
+        const request = {
+          tokenA: TOKEN_A,
+          tokenB: TOKEN_B,
+          liquidity: 500n,
+          amountAMin: 400n,
+          amountBMin: 800n,
+          to: TO_ADDRESS,
+        };
+
+        const result = await module.removeLiquidity(request);
+
+        expect(result.txHash).toBe(LANDED_TX_HASH);
+        expect(result.ledger).toBe(LANDED_LEDGER);
+
+        // submitTransaction was called exactly once — no resubmission
+        expect(mockClient.submitTransaction).toHaveBeenCalledTimes(1);
+
+        // getTransaction was called to verify on-chain status after timeout
+        expect(mockClient.server.getTransaction).toHaveBeenCalledWith(LANDED_TX_HASH);
+      });
+
+      it("throws TransactionError when the tx genuinely failed (non-timeout error)", async () => {
+        const mockClient = buildIdempotentMockClient({
+          submitResult: {
+            success: false,
+            error: { code: "INSUFFICIENT_LP_BALANCE", message: "Insufficient LP balance" },
+            txHash: "failed-remove-hash",
+          },
+          getTransactionStatus: "NOT_FOUND",
+        });
+
+        const module = new LiquidityModule(mockClient);
+        const request = {
+          tokenA: TOKEN_A,
+          tokenB: TOKEN_B,
+          liquidity: 500n,
+          amountAMin: 400n,
+          amountBMin: 800n,
+          to: TO_ADDRESS,
+        };
+
+        await expect(module.removeLiquidity(request)).rejects.toThrow(TransactionError);
+        await expect(module.removeLiquidity(request)).rejects.toThrow("Insufficient LP balance");
+
+        // getTransaction should NOT be called because the error was not TX_TIMEOUT
+        expect(mockClient.server.getTransaction).not.toHaveBeenCalled();
+      });
+
+      it("throws TransactionError when tx timed out and was NOT found on-chain", async () => {
+        const mockClient = buildIdempotentMockClient({
+          submitResult: {
+            success: false,
+            error: { code: "TX_TIMEOUT", message: "Transaction confirmation timed out" },
+            txHash: LANDED_TX_HASH,
+          },
+          getTransactionStatus: "NOT_FOUND",
+        });
+
+        const module = new LiquidityModule(mockClient);
+        const request = {
+          tokenA: TOKEN_A,
+          tokenB: TOKEN_B,
+          liquidity: 500n,
+          amountAMin: 400n,
+          amountBMin: 800n,
+          to: TO_ADDRESS,
+        };
+
+        await expect(module.removeLiquidity(request)).rejects.toThrow(TransactionError);
+        expect(mockClient.server.getTransaction).toHaveBeenCalledWith(LANDED_TX_HASH);
+      });
+
+      it("throws TransactionError when tx timed out and was FAILED on-chain", async () => {
+        const mockClient = buildIdempotentMockClient({
+          submitResult: {
+            success: false,
+            error: { code: "TX_TIMEOUT", message: "Transaction confirmation timed out" },
+            txHash: LANDED_TX_HASH,
+          },
+          getTransactionStatus: "FAILED",
+        });
+
+        const module = new LiquidityModule(mockClient);
+        const request = {
+          tokenA: TOKEN_A,
+          tokenB: TOKEN_B,
+          liquidity: 500n,
+          amountAMin: 400n,
+          amountBMin: 800n,
+          to: TO_ADDRESS,
+        };
+
+        await expect(module.removeLiquidity(request)).rejects.toThrow(TransactionError);
+        expect(mockClient.server.getTransaction).toHaveBeenCalledWith(LANDED_TX_HASH);
+      });
+    });
+  });
 });

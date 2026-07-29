@@ -125,6 +125,7 @@ export {
   batchRequest,
   batchRequestOrThrow,
   DEFAULT_BATCH_CONCURRENCY,
+  submitIdempotent,
 } from './utils';
 
 
@@ -137,6 +138,7 @@ export type {
   SimulateFn,
   BatchRequestOptions,
   BatchResult,
+  SubmitIdempotentClient,
 } from "./utils";
 
 // Errors
