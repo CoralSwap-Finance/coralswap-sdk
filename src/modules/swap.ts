@@ -17,11 +17,11 @@ import { PRECISION, DEFAULTS } from '../config';
 import { PairNotFoundError, ValidationError, InsufficientLiquidityError, TransactionError } from '../errors';
 import { PairClient } from '@/contracts/pair';
 import { validateAddress, validatePositiveAmount, validateDistinctTokens, isValidPath } from '@/utils/validation';
-import { SorobanRpc } from '@stellar/stellar-sdk';
 import { GasEstimate } from '../types/gas';
 import { estimateGas } from '../utils/gas';
 import { resolveTokenIdentifier } from '../utils/addresses';
 import { verifyRedStonePayload, estimateUsdValue, DEFAULT_PRICE_GUARD_CONFIG } from '../utils/redstone';
+import { EventCursor } from '../utils/event-cursor';
 
 /** Default ledger window when no fromLedger/toLedger is specified. */
 const DEFAULT_HISTORY_WINDOW = 1000;
@@ -733,27 +733,24 @@ export class SwapModule {
       );
     }
 
-    // Build the getEvents request.
-    // When pairAddress is given we scope the query to that contract, which is
-    // the most efficient path. Without it we query all contracts for "swap" topic.
-    const request: SorobanRpc.Server.GetEventsRequest = {
+    // Use the shared EventCursor utility to build and execute the getEvents
+    // request. EventCursor properly encodes topic filters as ScVal symbols,
+    // avoiding the silent failure of hand-rolled raw-string topic encoding.
+    const contractIds = pairAddress ? [pairAddress] : [];
+    const cursor = new EventCursor({
+      server: this.client.server,
+      contractIds,
+      topics: ["swap"],
       startLedger: fromLedger,
-      filters: [
-        {
-          type: "contract",
-          contractIds: filter.pairAddress ? [filter.pairAddress] : [],
-          topics: [["swap"]],
-        },
-      ],
       limit: filter.limit ?? 200,
-    };
+    });
 
-    const response = await this.client.server.getEvents(request);
-    if (!response || !Array.isArray(response.events)) return [];
+    const page = await cursor.fetchNext();
+    if (page.events.length === 0) return [];
 
     const events: SwapHistoryEvent[] = [];
 
-    for (const ev of response.events) {
+    for (const ev of page.events) {
       // Skip events beyond toLedger
       if (ev.ledger > toLedger) continue;
 
@@ -799,7 +796,7 @@ export class SwapModule {
         tokenIn,
         tokenOut,
         sender,
-        pairAddress: ev.contractId?.toString() ?? "",
+        pairAddress: typeof ev.contractId === "string" ? ev.contractId : ev.contractId?.toString() ?? "",
         ledger: ev.ledger,
         timestamp,
         feeBps,
