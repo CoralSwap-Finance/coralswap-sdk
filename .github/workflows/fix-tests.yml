@@ -12,19 +12,10 @@ jobs:
       - uses: actions/checkout@v4
       - run: |
           sed -i "s/EXPCT_IN/EXACT_IN/g" tests/swap-validation.test.ts
-          sed -i "s/^TOKEN_/const TOKEN_/g" tests/swap-validation.test.ts
-          python3 -c
-          from pathlib import Path
-          import re
-          p = Path('tests/swap-validation.test.ts')
-          t = p.read_text()
-          t = re.sub(r"from '.*zod'", "from 'zod'", t)
-          p.write_text(t)
-          print(p[:120])
-      - run: |
+          sed -i "s/tokem/token/g" tests/swap-validation.test.ts
+          rm -f .github/workflows/fix-tests.yml
           git config user.email "isaac4real-art@users.noreply.github.com"
           git config user.name "isaac4real-art"
-          rm -f .github/workflows/fix-tests.yml
           git add -A
-          git commit -m "fix(test): correct swap validation test syntax"
+          git commit -m "fix(test): correct EXACT_IN and tokenOut typos"
           git push
