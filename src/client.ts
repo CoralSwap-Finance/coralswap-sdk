@@ -20,6 +20,7 @@ import { ConnectionPool } from '@/utils/connection-pool';
 import { buildSimulationResult } from '@/utils/simulation';
 import { RateLimiter } from '@/utils/rate-limiter';
 import { withRetry, RetryOptions, isRetryable } from '@/utils/retry';
+import { TransactionComposer } from '@/transaction-composer';
 export { KeypairSigner, PollingStrategy, PollingOptions };
 
 /**
@@ -300,6 +301,14 @@ export class CoralSwapClient {
         sourceAccount,
     );
   }
+
+  /**
+   * Create a transaction composer for atomic multi-operation transactions.
+   */
+  transactionComposer(): TransactionComposer {
+    return new TransactionComposer(this);
+  }
+
 
   /**
    * Switch the client to a different network.
