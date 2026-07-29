@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { xdr } from "@stellar/stellar-sdk";
 import { CoralSwapClient } from "@/client";
 import {
@@ -17,6 +18,98 @@ import {
   validateDistinctTokens,
 } from "@/utils/validation";
 import { estimateGas } from "@/utils/gas";
+
+const AddLiquidityRequestSchema = z
+  .object({
+    tokenA: z.string(),
+    tokenB: z.string(),
+    to: z.string(),
+    amountADesired: z.bigint(),
+    amountBDesired: z.bigint(),
+    amountAMin: z.bigint(),
+    amountBMin: z.bigint(),
+    deadline: z.number().optional(),
+  })
+  .superRefine((value, ctx) => {
+    try {
+      validateAddress(value.tokenA, "tokenA");
+      validateAddress(value.tokenB, "tokenB");
+      validateDistinctTokens(value.tokenA, value.tokenB);
+      validateAddress(value.to, "to");
+      validatePositiveAmount(value.amountADesired, "amountADesired");
+      validatePositiveAmount(value.amountBDesired, "amountBDesired");
+      validateNonNegativeAmount(value.amountAMin, "amountAMin");
+      validateNonNegativeAmount(value.amountBMin, "amountBMin");
+
+      if (value.amountAMin > value.amountADesired) {
+        throw new ValidationError(
+          "amountAMin must not exceed amountADesired",
+          {
+            amountAMin: value.amountAMin.toString(),
+            amountADesired: value.amountADesired.toString(),
+          },
+        );
+      }
+
+      if (value.amountBMin > value.amountBDesired) {
+        throw new ValidationError(
+          "amountBMin must not exceed amountBDesired",
+          {
+            amountBMin: value.amountBMin.toString(),
+            amountBDesired: value.amountBDesired.toString(),
+          },
+        );
+      }
+    } catch (err) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          err instanceof Error ? err.message : "Invalid add liquidity request",
+      });
+    }
+  });
+
+const RemoveLiquidityRequestSchema = z
+  .object({
+    tokenA: z.string(),
+    tokenB: z.string(),
+    to: z.string(),
+    liquidity: z.bigint(),
+    amountAMin: z.bigint(),
+    amountBMin: z.bigint(),
+    deadline: z.number().optional(),
+  })
+  .superRefine((value, ctx) => {
+    try {
+      validateAddress(value.tokenA, "tokenA");
+      validateAddress(value.tokenB, "tokenB");
+      validateDistinctTokens(value.tokenA, value.tokenB);
+      validateAddress(value.to, "to");
+      validatePositiveAmount(value.liquidity, "liquidity");
+      validateNonNegativeAmount(value.amountAMin, "amountAMin");
+      validateNonNegativeAmount(value.amountBMin, "amountBMin");
+    } catch (err) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          err instanceof Error ? err.message : "Invalid remove liquidity request",
+      });
+    }
+  });
+
+function validateWithSchema<T>(
+  schema: z.ZodSchema<T>,
+  value: unknown,
+): T {
+  const result = schema.safeParse(value);
+
+  if (!result.success) {
+    throw new ValidationError(result.error.issues[0]?.message ?? "Validation failed");
+  }
+
+  return result.data;
+}
+
 
 /**
  * Liquidity module -- manages LP positions in CoralSwap pools.
@@ -116,28 +209,7 @@ export class LiquidityModule {
    * const gas = await client.liquidity.addLiquidity({ tokenA: 'C...', ... }, { estimateOnly: true });
    */
   buildAddLiquidityOperation(request: AddLiquidityRequest): xdr.Operation {
-    validateAddress(request.tokenA, "tokenA");
-    validateAddress(request.tokenB, "tokenB");
-    validateDistinctTokens(request.tokenA, request.tokenB);
-    validateAddress(request.to, "to");
-    validatePositiveAmount(request.amountADesired, "amountADesired");
-    validatePositiveAmount(request.amountBDesired, "amountBDesired");
-    validateNonNegativeAmount(request.amountAMin, "amountAMin");
-    validateNonNegativeAmount(request.amountBMin, "amountBMin");
-
-    if (request.amountAMin > request.amountADesired) {
-      throw new ValidationError("amountAMin must not exceed amountADesired", {
-        amountAMin: request.amountAMin.toString(),
-        amountADesired: request.amountADesired.toString(),
-      });
-    }
-
-    if (request.amountBMin > request.amountBDesired) {
-      throw new ValidationError("amountBMin must not exceed amountBDesired", {
-        amountBMin: request.amountBMin.toString(),
-        amountBDesired: request.amountBDesired.toString(),
-      });
-    }
+    validateWithSchema(AddLiquidityRequestSchema, request);
 
     const deadline = request.deadline ?? this.client.getDeadline();
 
@@ -195,13 +267,7 @@ export class LiquidityModule {
    * const gas = await client.liquidity.removeLiquidity({ tokenA: 'C...', ... }, { estimateOnly: true });
    */
   buildRemoveLiquidityOperation(request: RemoveLiquidityRequest): xdr.Operation {
-    validateAddress(request.tokenA, "tokenA");
-    validateAddress(request.tokenB, "tokenB");
-    validateDistinctTokens(request.tokenA, request.tokenB);
-    validateAddress(request.to, "to");
-    validatePositiveAmount(request.liquidity, "liquidity");
-    validateNonNegativeAmount(request.amountAMin, "amountAMin");
-    validateNonNegativeAmount(request.amountBMin, "amountBMin");
+    validateWithSchema(RemoveLiquidityRequestSchema, request);
 
     const deadline = request.deadline ?? this.client.getDeadline();
 
