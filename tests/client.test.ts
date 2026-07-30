@@ -1,5 +1,6 @@
 import { Keypair, SorobanRpc, xdr, Transaction, TransactionBuilder } from '@stellar/stellar-sdk';
 import { CoralSwapClient } from '../src/client';
+import { ConnectionPool } from '../src';
 import { Network, Signer } from '../src/types/common';
 import { SignerError } from '../src/errors';
 import { DEFAULTS } from '../src/config';
@@ -94,6 +95,10 @@ describe('CoralSwapClient', () => {
       });
 
       expect(client.networkConfig.rpcUrl).toBe(customRpcUrl);
+    });
+
+    it('exports ConnectionPool from the package root', () => {
+      expect(ConnectionPool).toBeDefined();
     });
 
     it('allows custom config overrides', () => {

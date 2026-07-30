@@ -86,6 +86,8 @@ export {
 } from './events';
 export type { DecodeEventsOptions } from './events';
 
+export { ConnectionPool } from './connection-pool';
+
 export {
   getVotingPower,
   getVotingPowerAtLedger,

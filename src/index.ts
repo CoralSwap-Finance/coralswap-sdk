@@ -137,6 +137,7 @@ export {
   batchRequest,
   batchRequestOrThrow,
   DEFAULT_BATCH_CONCURRENCY,
+  ConnectionPool,
 } from './utils';
 
 
