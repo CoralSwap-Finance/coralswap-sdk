@@ -21,6 +21,7 @@
     "test:integration:health-check": "jest --config jest.integration.config.js --testPathPattern=health-check.integration",
     "test:integration:liquidity": "jest --config jest.integration.config.js --testPathPattern=liquidity.integration",
     "test:integration:fees": "jest --config jest.integration.config.js --testPathPattern=fees.integration",
+    "test:integration:leaderboard": "jest --config jest.integration.config.js --testPathPattern=leaderboard.integration",
     "lint": "eslint src/**/*.ts",
     "lint:fix": "eslint src/**/*.ts --fix",
     "clean": "rimraf dist",
