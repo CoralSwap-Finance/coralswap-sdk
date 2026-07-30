@@ -1,30 +1,30 @@
-
-import { CoralSwapClient } from '@/client';
+import { CoralSwapClient } from "@/client";
 import {
   Proposal,
   ProposalAction,
   ProposalFilter,
   DelegationState,
   VoteType,
-} from '@/types/governance';
-import { Signer } from '@/types/common';
+} from "@/types/governance";
+import { Signer } from "@/types/common";
 import {
   ValidationError,
   InvalidOperationError,
   TransactionError,
-} from '@/errors';
+} from "@/errors";
 import {
   validateAddress,
   validateStringLength,
   validateEnumValue,
-} from '@/utils/validation';
+} from "@/utils/validation";
 import {
   Contract,
   nativeToScVal,
   xdr,
   Address,
   scValToNative,
-} from '@stellar/stellar-sdk';
+} from "@stellar/stellar-sdk";
+import { getVotingPowerAtLedger } from "@/utils/voting-power";
 
 /**
  * Governance module — proposal creation, voting, and LP-token delegation.
@@ -144,17 +144,17 @@ export class GovernanceModule {
     actions: ProposalAction[],
     signer: Signer,
   ): Promise<string> {
-    validateStringLength(title, 'title', 1, 200);
-    validateStringLength(description, 'description', 1, 5000);
+    validateStringLength(title, "title", 1, 200);
+    validateStringLength(description, "description", 1, 5000);
     if (!Array.isArray(actions) || actions.length === 0) {
-      throw new ValidationError('actions must be a non-empty array', {
-        field: 'actions',
-        constraint: 'non-empty array',
-        operation: 'createProposal',
+      throw new ValidationError("actions must be a non-empty array", {
+        field: "actions",
+        constraint: "non-empty array",
+        operation: "createProposal",
       });
     }
     for (const action of actions) {
-      validateAddress(action.contractAddress, 'action.contractAddress');
+      validateAddress(action.contractAddress, "action.contractAddress");
     }
 
     const signerPublicKey = await signer.publicKey();
@@ -169,9 +169,9 @@ export class GovernanceModule {
     );
 
     const op = contract.call(
-      'create_proposal',
-      nativeToScVal(title, { type: 'string' }),
-      nativeToScVal(description, { type: 'string' }),
+      "create_proposal",
+      nativeToScVal(title, { type: "string" }),
+      nativeToScVal(description, { type: "string" }),
       actionsScVal,
       new Address(signerPublicKey).toScVal(),
     );
@@ -180,9 +180,9 @@ export class GovernanceModule {
 
     if (!result.success) {
       throw new TransactionError(
-        `createProposal failed: ${result.error?.message ?? 'Unknown error'}`,
+        `createProposal failed: ${result.error?.message ?? "Unknown error"}`,
         result.txHash,
-        { operation: 'createProposal', title, description },
+        { operation: "createProposal", title, description },
       );
     }
 
@@ -219,13 +219,13 @@ export class GovernanceModule {
     signer: Signer,
   ): Promise<string> {
     if (!proposalId || proposalId.trim().length === 0) {
-      throw new ValidationError('proposalId must not be empty', {
-        field: 'proposalId',
-        constraint: 'non-empty string',
-        operation: 'castVote',
+      throw new ValidationError("proposalId must not be empty", {
+        field: "proposalId",
+        constraint: "non-empty string",
+        operation: "castVote",
       });
     }
-    validateEnumValue(voteType, 'voteType', ['for', 'against', 'abstain']);
+    validateEnumValue(voteType, "voteType", ["for", "against", "abstain"]);
 
     try {
       await this.getProposal(proposalId);
@@ -234,10 +234,10 @@ export class GovernanceModule {
         throw new ValidationError(
           `proposalId does not reference an existing proposal: ${proposalId}`,
           {
-            field: 'proposalId',
-            constraint: 'existing proposal',
+            field: "proposalId",
+            constraint: "existing proposal",
             proposalId,
-            operation: 'castVote',
+            operation: "castVote",
           },
         );
       }
@@ -248,9 +248,9 @@ export class GovernanceModule {
     const contract = new Contract(this.contractAddress);
 
     const op = contract.call(
-      'cast_vote',
-      nativeToScVal(proposalId, { type: 'string' }),
-      nativeToScVal(voteType, { type: 'symbol' }),
+      "cast_vote",
+      nativeToScVal(proposalId, { type: "string" }),
+      nativeToScVal(voteType, { type: "symbol" }),
       new Address(signerPublicKey).toScVal(),
     );
 
@@ -258,9 +258,9 @@ export class GovernanceModule {
 
     if (!result.success) {
       throw new TransactionError(
-        `castVote failed: ${result.error?.message ?? 'Unknown error'}`,
+        `castVote failed: ${result.error?.message ?? "Unknown error"}`,
         result.txHash,
-        { operation: 'castVote', proposalId, voteType },
+        { operation: "castVote", proposalId, voteType },
       );
     }
 
@@ -294,22 +294,22 @@ export class GovernanceModule {
    * ```
    */
   async delegate(toAddress: string, signer: Signer): Promise<string> {
-    validateAddress(toAddress, 'toAddress');
+    validateAddress(toAddress, "toAddress");
 
     const signerPublicKey = await signer.publicKey();
 
     if (toAddress === signerPublicKey) {
-      throw new ValidationError('Cannot delegate to self', {
-        field: 'toAddress',
-        constraint: 'must differ from signer public key',
+      throw new ValidationError("Cannot delegate to self", {
+        field: "toAddress",
+        constraint: "must differ from signer public key",
         delegateAddress: toAddress,
-        operation: 'delegate',
+        operation: "delegate",
       });
     }
 
     const contract = new Contract(this.contractAddress);
     const op = contract.call(
-      'delegate',
+      "delegate",
       new Address(toAddress).toScVal(),
       new Address(signerPublicKey).toScVal(),
     );
@@ -318,9 +318,9 @@ export class GovernanceModule {
 
     if (!result.success) {
       throw new TransactionError(
-        `delegate failed: ${result.error?.message ?? 'Unknown error'}`,
+        `delegate failed: ${result.error?.message ?? "Unknown error"}`,
         result.txHash,
-        { operation: 'delegate', delegateAddress: toAddress },
+        { operation: "delegate", delegateAddress: toAddress },
       );
     }
 
@@ -351,7 +351,7 @@ export class GovernanceModule {
     const contract = new Contract(this.contractAddress);
 
     const op = contract.call(
-      'undelegate',
+      "undelegate",
       new Address(signerPublicKey).toScVal(),
     );
 
@@ -359,9 +359,9 @@ export class GovernanceModule {
 
     if (!result.success) {
       throw new TransactionError(
-        `undelegate failed: ${result.error?.message ?? 'Unknown error'}`,
+        `undelegate failed: ${result.error?.message ?? "Unknown error"}`,
         result.txHash,
-        { operation: 'undelegate' },
+        { operation: "undelegate" },
       );
     }
 
@@ -396,24 +396,24 @@ export class GovernanceModule {
    */
   async getProposal(proposalId: string): Promise<Proposal> {
     if (!proposalId || proposalId.trim().length === 0) {
-      throw new ValidationError('proposalId must not be empty', {
-        field: 'proposalId',
-        constraint: 'non-empty string',
-        operation: 'getProposal',
+      throw new ValidationError("proposalId must not be empty", {
+        field: "proposalId",
+        constraint: "non-empty string",
+        operation: "getProposal",
       });
     }
 
     const contract = new Contract(this.contractAddress);
     const op = contract.call(
-      'get_proposal',
-      nativeToScVal(proposalId, { type: 'string' }),
+      "get_proposal",
+      nativeToScVal(proposalId, { type: "string" }),
     );
 
     const sim = await this.client.simulateTransaction([op], {});
 
     if (!sim.success || !sim.returnValue) {
-      throw new InvalidOperationError('Proposal not found', {
-        operation: 'getProposal',
+      throw new InvalidOperationError("Proposal not found", {
+        operation: "getProposal",
         proposalId,
       });
     }
@@ -442,7 +442,7 @@ export class GovernanceModule {
    */
   async getActiveProposals(): Promise<Proposal[]> {
     const contract = new Contract(this.contractAddress);
-    const op = contract.call('get_active_proposals');
+    const op = contract.call("get_active_proposals");
 
     const sim = await this.client.simulateTransaction([op], {});
 
@@ -484,47 +484,61 @@ export class GovernanceModule {
    */
   async getProposalHistory(filter?: ProposalFilter): Promise<Proposal[]> {
     if (filter?.limit !== undefined) {
-      if (!Number.isInteger(filter.limit) || filter.limit < 1 || filter.limit > 1000) {
-        throw new ValidationError('filter.limit must be an integer between 1 and 1000', {
-          field: 'filter.limit',
-          constraint: 'integer 1-1000',
-          actual: filter.limit,
-          operation: 'getProposalHistory',
-        });
+      if (
+        !Number.isInteger(filter.limit) ||
+        filter.limit < 1 ||
+        filter.limit > 1000
+      ) {
+        throw new ValidationError(
+          "filter.limit must be an integer between 1 and 1000",
+          {
+            field: "filter.limit",
+            constraint: "integer 1-1000",
+            actual: filter.limit,
+            operation: "getProposalHistory",
+          },
+        );
       }
     }
     if (filter?.fromLedger !== undefined) {
       if (!Number.isInteger(filter.fromLedger) || filter.fromLedger < 0) {
-        throw new ValidationError('filter.fromLedger must be a non-negative integer', {
-          field: 'filter.fromLedger',
-          constraint: 'non-negative integer',
-          actual: filter.fromLedger,
-          operation: 'getProposalHistory',
-        });
+        throw new ValidationError(
+          "filter.fromLedger must be a non-negative integer",
+          {
+            field: "filter.fromLedger",
+            constraint: "non-negative integer",
+            actual: filter.fromLedger,
+            operation: "getProposalHistory",
+          },
+        );
       }
     }
     if (filter?.status !== undefined) {
-      validateEnumValue(filter.status, 'filter.status', ['passed', 'rejected', 'expired']);
+      validateEnumValue(filter.status, "filter.status", [
+        "passed",
+        "rejected",
+        "expired",
+      ]);
     }
 
     const contract = new Contract(this.contractAddress);
 
     const statusArg = filter?.status
-      ? nativeToScVal(filter.status, { type: 'symbol' })
+      ? nativeToScVal(filter.status, { type: "symbol" })
       : xdr.ScVal.scvVoid();
 
     const fromLedgerArg =
       filter?.fromLedger !== undefined
-        ? nativeToScVal(filter.fromLedger, { type: 'u32' })
+        ? nativeToScVal(filter.fromLedger, { type: "u32" })
         : xdr.ScVal.scvVoid();
 
     const limitArg =
       filter?.limit !== undefined
-        ? nativeToScVal(filter.limit, { type: 'u32' })
+        ? nativeToScVal(filter.limit, { type: "u32" })
         : xdr.ScVal.scvVoid();
 
     const op = contract.call(
-      'get_proposal_history',
+      "get_proposal_history",
       statusArg,
       fromLedgerArg,
       limitArg,
@@ -574,11 +588,11 @@ export class GovernanceModule {
    * ```
    */
   async getDelegationState(address: string): Promise<DelegationState> {
-    validateAddress(address, 'address');
+    validateAddress(address, "address");
 
     const contract = new Contract(this.contractAddress);
     const op = contract.call(
-      'get_delegation_state',
+      "get_delegation_state",
       new Address(address).toScVal(),
     );
 
@@ -596,6 +610,46 @@ export class GovernanceModule {
     return this.decodeDelegationState(sim.returnValue);
   }
 
+  /**
+   * Get snapshot-based voting power for an address at a proposal's
+   * creation ledger.
+   *
+   * Uses the proposal's `createdAt` ledger as the snapshot point,
+   * which defends against flash-loan governance attacks (borrowing
+   * stake, voting, repaying in same transaction). The SDK cannot
+   * enforce on-chain snapshot-based weight computation — that is a
+   * contract-level property — but this method enables accurate
+   * client-side display and verification.
+   *
+   * Integrators should use this method in voting UIs rather than
+   * live `getVotingPower()` to show users the actual weight that
+   * will count for a given proposal.
+   *
+   * @param proposalId - Unique proposal identifier
+   * @param address - Stellar address (G…) to query voting power for
+   * @returns Voting power snapshot at the proposal creation ledger
+   * @throws {ValidationError} If `proposalId` is empty or `address` is invalid
+   * @throws {InvalidOperationError} If no proposal exists for the given ID
+   *
+   * @example
+   * ```typescript
+   * const power = await gov.getProposalVotingPower(proposalId, voterAddress);
+   * console.log('Voting weight for this proposal:', power.totalPower.toString());
+   * ```
+   */
+  async getProposalVotingPower(
+    proposalId: string,
+    address: string,
+  ): Promise<{
+    ownStake: bigint;
+    delegatedStake: bigint;
+    totalPower: bigint;
+    percentOfTotal: number;
+  }> {
+    const proposal = await this.getProposal(proposalId);
+    return getVotingPowerAtLedger(address, proposal.createdAt);
+  }
+
   // ---------------------------------------------------------------------------
   // Private helpers
   // ---------------------------------------------------------------------------
@@ -604,19 +658,20 @@ export class GovernanceModule {
     const native = scValToNative(val) as Record<string, unknown>;
 
     return {
-      id: String(native['id'] ?? ''),
-      title: String(native['title'] ?? ''),
-      description: String(native['description'] ?? ''),
-      status: (native['status'] as Proposal['status']) ?? 'active',
-      votesFor: BigInt(String(native['votes_for'] ?? '0')),
-      votesAgainst: BigInt(String(native['votes_against'] ?? '0')),
-      votesAbstain: BigInt(String(native['votes_abstain'] ?? '0')),
-      deadline: Number(native['deadline'] ?? 0),
-      executedAt: native['executed_at'] != null
-        ? Number(native['executed_at'])
-        : undefined,
-      proposer: String(native['proposer'] ?? ''),
-      createdAt: Number(native['created_at'] ?? 0),
+      id: String(native["id"] ?? ""),
+      title: String(native["title"] ?? ""),
+      description: String(native["description"] ?? ""),
+      status: (native["status"] as Proposal["status"]) ?? "active",
+      votesFor: BigInt(String(native["votes_for"] ?? "0")),
+      votesAgainst: BigInt(String(native["votes_against"] ?? "0")),
+      votesAbstain: BigInt(String(native["votes_abstain"] ?? "0")),
+      deadline: Number(native["deadline"] ?? 0),
+      executedAt:
+        native["executed_at"] != null
+          ? Number(native["executed_at"])
+          : undefined,
+      proposer: String(native["proposer"] ?? ""),
+      createdAt: Number(native["created_at"] ?? 0),
       actions: [],
     };
   }
@@ -625,14 +680,13 @@ export class GovernanceModule {
     const native = scValToNative(val) as Record<string, unknown>;
 
     return {
-      delegatedTo: native['delegated_to'] != null
-        ? String(native['delegated_to'])
-        : null,
-      delegatedFrom: Array.isArray(native['delegated_from'])
-        ? (native['delegated_from'] as unknown[]).map(String)
+      delegatedTo:
+        native["delegated_to"] != null ? String(native["delegated_to"]) : null,
+      delegatedFrom: Array.isArray(native["delegated_from"])
+        ? (native["delegated_from"] as unknown[]).map(String)
         : [],
-      totalVotingPower: BigInt(String(native['total_voting_power'] ?? '0')),
-      ownPower: BigInt(String(native['own_power'] ?? '0')),
+      totalVotingPower: BigInt(String(native["total_voting_power"] ?? "0")),
+      ownPower: BigInt(String(native["own_power"] ?? "0")),
     };
   }
 }
