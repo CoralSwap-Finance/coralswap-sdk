@@ -151,6 +151,9 @@ export type {
   BatchResult,
 } from "./utils";
 
+// Schema validation
+export { validateWithSchema, OrderBookAddressSchema, TradeFilterSchema, GetOpenOrdersSchema, GetOrderSummarySchema } from "@/schemas";
+
 // Errors
 export {
   CoralSwapSDKError,
