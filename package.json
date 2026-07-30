@@ -20,6 +20,7 @@
     "test:integration:flash-loan": "jest --config jest.integration.config.js --testPathPattern=flash-loan.integration",
     "test:integration:health-check": "jest --config jest.integration.config.js --testPathPattern=health-check.integration",
     "test:integration:liquidity": "jest --config jest.integration.config.js --testPathPattern=liquidity.integration",
+    "test:integration:positions": "jest --config jest.integration.config.js --testPathPattern=positions.integration",
     "test:integration:fees": "jest --config jest.integration.config.js --testPathPattern=fees.integration",
     "lint": "eslint src/**/*.ts",
     "lint:fix": "eslint src/**/*.ts --fix",
