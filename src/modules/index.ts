@@ -32,7 +32,4 @@ export type {
 export { LeaderboardModule } from './leaderboard';
 export type { LeaderboardEntry, LeaderboardOptions } from './leaderboard';
 export type { TraderRanking, GetTopTradersOptions } from './leaderboard';
-export { TaxReportingModule } from './tax-reporting';
-export { GovernanceModule } from './governance';
-export { DCAModule } from './dca';
-export { LimitOrderModule } from './limit-orders';
+export { WebhookModule } from './webhooks';

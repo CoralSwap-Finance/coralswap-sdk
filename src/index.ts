@@ -78,11 +78,7 @@ export {
   MonitoringModule,
   StopLossModule,
   LeaderboardModule,
-  HealthCheckModule,
-  TaxReportingModule,
-  GovernanceModule,
-  DCAModule,
-  LimitOrderModule,
+  WebhookModule,
 } from "@/modules";
 export type { OptimalPath } from "@/modules/router";
 export type { TWAPObservation, TWAPResult, TraderRanking, GetTopTradersOptions } from "@/modules";

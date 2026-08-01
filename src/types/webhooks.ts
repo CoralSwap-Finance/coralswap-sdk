@@ -1,169 +1,63 @@
-export type WebhookMethod = 'POST' | 'PUT' | 'PATCH';
+/** Event types that a webhook can subscribe to. */
+export type WebhookEventType =
+  | 'swap'
+  | 'liquidity_add'
+  | 'liquidity_remove'
+  | 'flash_loan'
+  | 'price_alert'
+  | 'fee_change';
 
-export type WebhookPayloadFormat = 'json' | 'form';
+/** Current lifecycle state of a registered webhook. */
+export type WebhookStatus = 'active' | 'unverified' | 'disabled';
 
-export type WebhookDeliveryStatus =
-  | 'pending'
-  | 'delivering'
-  | 'success'
-  | 'failed'
-  | 'exhausted';
-
-export interface WebhookConfig {
-  url: string;
-  method?: WebhookMethod;
-  payloadFormat?: WebhookPayloadFormat;
-  headers?: Record<string, string>;
-  secret?: string;
-  label?: string;
-  alertFilter?: string[];
-  enabled?: boolean;
-}
-
-export interface WebhookDelivery {
+/**
+ * A registered webhook endpoint.
+ *
+ * `failCount` tracks consecutive delivery failures; the webhook is
+ * auto-disabled once it exceeds the configured threshold (default 5).
+ */
+export interface Webhook {
+  /** Unique identifier assigned at registration time. */
   id: string;
-  webhookId: string;
-  alertId: string;
-  status: WebhookDeliveryStatus;
-  httpStatus?: number;
-  sentAt: number;
-  completedAt?: number;
-  retryCount: number;
-  errorMessage?: string;
-}
-
-export interface WebhookEndpointHealth {
-  webhookId: string;
+  /** Target URL that receives POST payloads. */
   url: string;
-  enabled: boolean;
-  totalDeliveries: number;
-  successfulDeliveries: number;
-  failedDeliveries: number;
-  successRate: number;
-  averageResponseTimeMs: number;
-  lastDeliveryAt?: number;
-}
-
-export type WebhookDeliveryStatusLegacy = 'pending' | 'delivering' | 'success' | 'failed' | 'exhausted';
-
-export interface WebhookConfigLegacy {
-  url: string;
-  method?: WebhookMethod;
-  payloadFormat?: WebhookPayloadFormat;
-  headers?: Record<string, string>;
-  secret?: string;
-  label?: string;
-  alertFilter?: string[];
-  enabled?: boolean;
-}
-
-export interface WebhookDeliveryLegacy {
-  id: string;
-  webhookId: string;
-  alertId: string;
-  status: WebhookDeliveryStatusLegacy;
-  httpStatus?: number;
-  sentAt: number;
-  completedAt?: number;
-  retryCount: number;
-  errorMessage?: string;
-}
-
-export interface WebhookEndpointHealthLegacy {
-  webhookId: string;
-  url: string;
-  enabled: boolean;
-  totalDeliveries: number;
-  successfulDeliveries: number;
-  failedDeliveries: number;
-  successRate: number;
-  averageResponseTimeMs: number;
-  lastDeliveryAt?: number;
-}
-
-export type WebhookEventName = string;
-
-export interface WebhookConfigV2 {
-  url: string;
-  events: WebhookEventName[];
-  secret?: string;
-}
-
-export type WebhookPayload<T = Record<string, unknown>> = T;
-
-export interface WebhookEnvelope<T = Record<string, unknown>> {
-  id: string;
-  timestamp: number;
-  event?: WebhookEventName;
-  data: T;
-}
-
-export interface WebhookDeliveryResult {
-  statusCode: number;
-  delivered: boolean;
-  retryCount: number;
-}
-
-export interface WebhookOptions {
-  maxRetries?: number;
-  baseDelayMs?: number;
-  maxDelayMs?: number;
-  backoffMultiplier?: number;
-  timeoutMs?: number;
-  fetchImpl?: typeof fetch;
-}
-
-export interface StoredWebhook extends WebhookConfigV2 {
-  id: string;
-  createdAt: number;
-}
-
-export const WEBHOOK_SIGNATURE_HEADER = 'X-Signature';
-export const WEBHOOK_SIGNATURE_ALGORITHM = 'sha256';
-export const WEBHOOK_DEFAULTS = {
-  maxRetries: 3,
-  baseDelayMs: 500,
-  maxDelayMs: 10_000,
-  backoffMultiplier: 2,
-  timeoutMs: 10_000,
-} as const;
-
-export const WEBHOOK_DISABLE_FAILURE_THRESHOLD = 5;
-export const WEBHOOK_HISTORY_CAPACITY = 500;
-export const WEBHOOK_VERIFY_PAYLOAD_TYPE = 'webhook.verify' as const;
-
-export interface WebhookVerifyResult {
+  /** Event types that trigger a delivery to this endpoint. */
+  events: WebhookEventType[];
+  /** Whether the endpoint has passed the verification handshake. */
   verified: boolean;
-  statusCode: number;
-  latencyMs: number;
-  challenge: string;
+  /** ISO-8601 timestamp of the most recent delivery attempt, or null. */
+  lastDelivery: string | null;
+  /** Number of consecutive delivery failures since the last success. */
+  failCount: number;
+  /** Current lifecycle status of the webhook. */
+  status: WebhookStatus;
+}
+
+/** Parameters accepted by `registerWebhook`. */
+export interface RegisterWebhookParams {
+  /** HTTPS URL that will receive event payloads. */
+  url: string;
+  /**
+   * Event types to subscribe to.
+   * Defaults to all event types when omitted.
+   */
+  events?: WebhookEventType[];
+}
+
+/** Fields that may be changed via `updateWebhook`. */
+export interface UpdateWebhookParams {
+  /** New target URL. */
+  url?: string;
+  /** Replacement event filter list. */
+  events?: WebhookEventType[];
+}
+
+/** Outcome returned by `verifyWebhook`. */
+export interface WebhookVerificationResult {
+  /** Whether the test payload was acknowledged with HTTP 200. */
+  success: boolean;
+  /** HTTP status received from the endpoint, or null on network error. */
+  statusCode: number | null;
+  /** Error message when `success` is false. */
   error?: string;
-}
-
-export interface WebhookVerifyOptions {
-  timeoutMs?: number;
-  fetchImpl?: typeof fetch;
-}
-
-export interface WebhookHistoryEntry {
-  deliveryId: string;
-  timestamp: number;
-  statusCode: number;
-  delivered: boolean;
-  attempts: number;
-  retryCount: number;
-  outcome: 'success' | 'network' | 'client' | 'server';
-  errorMessage?: string;
-}
-
-export interface WebhookHistoryQuery {
-  limit?: number;
-  cursor?: string;
-  offset?: number;
-}
-
-export interface WebhookHistoryPage {
-  items: WebhookHistoryEntry[];
-  nextCursor: string | null;
-  total: number;
 }
