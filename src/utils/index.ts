@@ -86,6 +86,9 @@ export {
 } from './events';
 export type { DecodeEventsOptions } from './events';
 
+export { EventCursor } from './event-cursor';
+export type { EventCursorOptions } from './event-cursor';
+
 export {
   getVotingPower,
   getVotingPowerAtLedger,
