@@ -22,6 +22,7 @@ export type { TreasuryModuleOptions } from './treasury';
 export { AlertsModule, AlertModule } from './alerts';
 export { WebhookModule } from './webhooks';
 export { MonitoringModule } from './monitoring';
+export type { MonitoringModuleOptions } from './monitoring';
 export type {
   AlertMetric,
   AlertOperator,
