@@ -96,3 +96,6 @@ export type { VotingPower, VotingPowerQueryProvider, VotingPowerQueryResult } fr
 export { checkCompatibility } from './migration';
 export type { BreakingChange, CompatibilityReport } from './migration';
 export { suppressDeprecationWarnings, deprecated } from './deprecation-warnings';
+
+export { EventCursor, encodeTopicForFilter } from './event-cursor';
+export type { EventCursorOptions, EventCursorPage } from './event-cursor';
