@@ -28,7 +28,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v4
+        uses: github/codeql-action/init@v4.37.3
         with:
           languages: ${{ matrix.language }}
           queries: security-extended
@@ -46,14 +46,14 @@ jobs:
         run: npm run build
 
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v4
+        uses: github/codeql-action/analyze@v4.37.3
         with:
           category: /language:${{ matrix.language }}
           output: codeql-results.sarif
           upload: never
 
       - name: Upload results to GitHub Security tab
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@v4.37.3
         with:
           sarif_file: codeql-results.sarif
           category: codeql/${{ matrix.language }}
