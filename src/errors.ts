@@ -480,6 +480,12 @@ function extractPairAddress(err: unknown): string {
  *
  * Contract error codes are returned in the format: Error(Contract, #XXX)
  * where XXX is the error code defined in the contract.
+ *
+ * Code ownership is defined once in `src/errors/parser.ts`
+ * (`CONTRACT_ERROR_RANGES`): Pair owns 100-119, Router owns 200-219 and
+ * Factory owns 300-319. The cases below must stay inside those ranges so a
+ * code resolves to the same contract here and in
+ * {@link ErrorParser.parseContractError}.
  */
 function mapContractError(
   code: number,
@@ -544,31 +550,57 @@ function mapContractError(
         contractErrorCode: code,
       });
 
-    // Router contract errors (300-306)
-    case 300: // Pair not found
-      return new PairNotFoundError("unknown", "unknown");
-    case 301: // Invalid path
+    // Router contract errors (200-207)
+    case 200: // Router already initialized
+      return new InvalidOperationError(message || "Router already initialized", {
+        contractErrorCode: code,
+      });
+    case 201: // Invalid swap path
       return new ValidationError(message || "Invalid swap path", {
         contractErrorCode: code,
       });
-    case 302: // Slippage exceeded
+    case 202: // Insufficient output amount (slippage)
       return new SlippageError(0n, 0n, 0, {
         contractErrorCode: code,
         message,
       });
-    case 303: // Deadline exceeded
+    case 203: // Excessive input amount
+      return new ValidationError(message || "Excessive input amount", {
+        contractErrorCode: code,
+      });
+    case 204: // Expired deadline
       return new DeadlineError(0);
-    case 304: // Insufficient liquidity
+    case 205: // Insufficient liquidity
       return new InsufficientLiquidityError(extractPairAddress(err), {
         contractErrorCode: code,
         message,
       });
-    case 305: // Excessive input amount
-      return new ValidationError(message || "Excessive input amount", {
+    case 206: // Pair not found
+      return new PairNotFoundError("unknown", "unknown");
+    case 207: // Identical tokens
+      return new ValidationError(message || "Identical tokens", {
         contractErrorCode: code,
       });
-    case 306: // Invalid token
-      return new ValidationError(message || "Invalid token", {
+
+    // Factory contract errors (300-304)
+    case 300: // Factory already initialized
+      return new InvalidOperationError(message || "Factory already initialized", {
+        contractErrorCode: code,
+      });
+    case 301: // Unauthorized caller
+      return new ValidationError(message || "Unauthorized caller", {
+        contractErrorCode: code,
+      });
+    case 302: // Pair already exists
+      return new InvalidOperationError(message || "Pair already exists", {
+        contractErrorCode: code,
+      });
+    case 303: // Zero address provided
+      return new ValidationError(message || "Zero address provided", {
+        contractErrorCode: code,
+      });
+    case 304: // Invalid fee configuration
+      return new ValidationError(message || "Invalid fee configuration", {
         contractErrorCode: code,
       });
 
