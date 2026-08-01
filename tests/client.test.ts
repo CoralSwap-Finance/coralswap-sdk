@@ -4,6 +4,7 @@ import { ConnectionPool } from '../src';
 import { Network, Signer } from '../src/types/common';
 import { SignerError } from '../src/errors';
 import { DEFAULTS } from '../src/config';
+import { resetCircuitBreakers } from '../src/utils/retry';
 
 // Mock transaction for testing
 const mockTx = {
@@ -504,5 +505,77 @@ describe('CoralSwapClient', () => {
       expect(result.error?.message).toContain('timed out');
       expect(result.txHash).toBe('test-tx-hash');
     });
+  });
+});
+
+/**
+ * Isolated tests for executeWithFallback retry / fallback behaviour.
+ *
+ * These tests drive the private method indirectly through isHealthy() which
+ * is a thin single-call wrapper — the simplest public surface that exercises
+ * the fallback loop without needing a full transaction stack.
+ */
+describe('executeWithFallback', () => {
+  const TEST_SECRET = 'SB6K2AINTGNYBFX4M7TRPGSKQ5RKNOXXWB7UZUHRYOVTM7REDUGECKZU';
+
+  beforeEach(() => {
+    resetCircuitBreakers();
+  });
+
+  it('surfaces a non-retryable error immediately without cycling through fallback endpoints', async () => {
+    // Three RPC URLs configured — only the first should ever be attempted.
+    const client = new CoralSwapClient({
+      network: Network.TESTNET,
+      secretKey: TEST_SECRET,
+      rpcUrl: [
+        'https://rpc1.example.com',
+        'https://rpc2.example.com',
+        'https://rpc3.example.com',
+      ],
+      maxRetries: 0,
+      retryDelayMs: 0,
+    });
+
+    // A non-retryable error: plain validation failure with no timeout/429/503 signal.
+    const nonRetryableError = new Error('ValidationError: bad simulation parameters');
+    const mockGetHealth = jest.fn().mockRejectedValue(nonRetryableError);
+    client.server.getHealth = mockGetHealth;
+
+    await expect(client.isHealthy()).resolves.toBe(false);
+
+    // Must only hit the RPC once — no rotation to rpc2 or rpc3.
+    expect(mockGetHealth).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls back across all endpoints for retryable errors (network/timeout/429/503)', async () => {
+    const rpcUrls = [
+      'https://rpc1.example.com',
+      'https://rpc2.example.com',
+      'https://rpc3.example.com',
+    ];
+
+    const client = new CoralSwapClient({
+      network: Network.TESTNET,
+      secretKey: TEST_SECRET,
+      rpcUrl: rpcUrls,
+      maxRetries: 0,   // one attempt per endpoint, no per-endpoint retries
+      retryDelayMs: 0,
+    });
+
+    // Retryable error: 503 Service Unavailable
+    const retryableError = Object.assign(
+      new Error('503 Service Unavailable'),
+      { response: { status: 503 } },
+    );
+
+    // Every endpoint fails with the retryable error.
+    const mockGetHealth = jest.fn().mockRejectedValue(retryableError);
+    client.server.getHealth = mockGetHealth;
+
+    // isHealthy() catches all errors and returns false — confirm it tried all endpoints.
+    await expect(client.isHealthy()).resolves.toBe(false);
+
+    // Should have been called once per RPC endpoint (3 total).
+    expect(mockGetHealth).toHaveBeenCalledTimes(rpcUrls.length);
   });
 });

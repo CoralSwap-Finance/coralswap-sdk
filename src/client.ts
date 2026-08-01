@@ -18,7 +18,7 @@ import { KeypairSigner } from '@/utils/signer';
 import { TransactionPoller, PollingStrategy, PollingOptions } from '@/utils/polling';
 import { ConnectionPool } from '@/utils/connection-pool';
 import { buildSimulationResult } from '@/utils/simulation';
-import { withRetry, RetryOptions } from '@/utils/retry';
+import { withRetry, RetryOptions, isRetryable } from '@/utils/retry';
 export { KeypairSigner, PollingStrategy, PollingOptions };
 
 /**
@@ -98,6 +98,13 @@ export class CoralSwapClient {
         this._connectionPool.reportSuccess(rpcUrl);
         return result;
       } catch (err) {
+        // Non-retryable errors (e.g. ValidationError, bad simulation) must surface
+        // immediately — cycling through every fallback endpoint cannot fix them and
+        // only multiplies latency for a failure that retrying can never resolve.
+        if (!isRetryable(err)) {
+          throw err;
+        }
+
         lastError = err;
         this._connectionPool.reportFailure(rpcUrl);
         this.logger?.info(`executeWithFallback: RPC call failed, trying fallback`, {
