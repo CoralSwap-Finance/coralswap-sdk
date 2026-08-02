@@ -37,7 +37,7 @@ describe('OrderBook Module', () => {
 
   describe('getOpenOrders', () => {
     it('should return an aggregated list of open orders sorted by creation date', async () => {
-      const openOrders = await getOpenOrders('test_address');
+      const openOrders = await getOpenOrders('GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA');
       expect(openOrders).toHaveLength(3);
       expect(openOrders[0].id).toBe('stop-loss-1');
       expect(openOrders[1].id).toBe('limit-1');
@@ -47,7 +47,7 @@ describe('OrderBook Module', () => {
 
   describe('getOrderSummary', () => {
     it('should return a summary of open orders', async () => {
-      const summary = await getOrderSummary('test_address', client);
+      const summary = await getOrderSummary('GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', client);
       expect(summary.totalOpenOrders).toBe(3);
       expect(summary.byType.limit).toBe(1);
       expect(summary.byType.dca).toBe(1);
@@ -55,7 +55,7 @@ describe('OrderBook Module', () => {
     });
 
     it('should calculate the total value locked correctly', async () => {
-        const summary = await getOrderSummary('test_address', client);
+        const summary = await getOrderSummary('GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', client);
         // Expected value:
         // limit-1: 1000000000n (USDC) * 1 = 1000000000
         // dca-1: 5000000000n (USDC) * 1 = 5000000000
