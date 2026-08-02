@@ -242,7 +242,11 @@ export class FactoryModule {
     ): () => void {
       const interval = intervalMs ?? 6000;
       let active = true;
+      // Seeded from getLatestLedger before the first getEvents call. Starting
+      // at 0 would request startLedger: 1, which real Soroban RPC servers
+      // reject once that ledger falls outside their retention window.
       let lastSeenLedger = 0;
+      let ledgerSeeded = false;
       const parser = new EventParser([pairAddress]);
       const logger: Logger | undefined = this.client.config.logger;
 
@@ -250,6 +254,13 @@ export class FactoryModule {
         if (!active) return;
 
         try {
+          if (!ledgerSeeded) {
+            const latest = await this.client.server.getLatestLedger();
+            if (!active) return;
+            lastSeenLedger = latest.sequence;
+            ledgerSeeded = true;
+          }
+
           const topics = ['swap', 'mint', 'burn'].map((t) =>
             xdr.ScVal.scvSymbol(t).toXDR('base64'),
           );

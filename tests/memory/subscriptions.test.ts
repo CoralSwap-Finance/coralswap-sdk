@@ -119,12 +119,18 @@ function makeLimitOrderModule(): LimitOrderModule {
 
 function makeFactoryModule(
   getEvents: jest.Mock,
-): { module: FactoryModule; client: CoralSwapClient } {
+  latestLedgerSequence = 2_500_000,
+): { module: FactoryModule; client: CoralSwapClient; getLatestLedger: jest.Mock } {
+  const getLatestLedger = jest.fn().mockResolvedValue({
+    id: `mock-ledger-${latestLedgerSequence}`,
+    sequence: latestLedgerSequence,
+    protocolVersion: '21',
+  });
   const client = {
     config: {},
-    server: { getEvents },
+    server: { getEvents, getLatestLedger },
   } as unknown as CoralSwapClient;
-  return { module: new FactoryModule(client), client };
+  return { module: new FactoryModule(client), client, getLatestLedger };
 }
 
 function makeAlertModule(): AlertModule {
@@ -259,6 +265,29 @@ describe('subscription memory / cleanup', () => {
   });
 
   describe('watchPool', () => {
+    it('seeds startLedger from getLatestLedger instead of requesting ledger 1', async () => {
+      const LATEST = 3_000_000;
+      const getEvents = jest.fn().mockResolvedValue({ latestLedger: LATEST, events: [] });
+      const { module, getLatestLedger } = makeFactoryModule(getEvents, LATEST);
+
+      const unsub = module.watchPool(PAIR, jest.fn(), 60_000);
+
+      const deadline = Date.now() + 5_000;
+      while (getEvents.mock.calls.length < 1 && Date.now() < deadline) {
+        await new Promise<void>((r) => setImmediate(r));
+      }
+
+      expect(getLatestLedger).toHaveBeenCalled();
+      expect(getEvents).toHaveBeenCalled();
+      expect(getEvents.mock.calls[0][0]).toEqual(
+        expect.objectContaining({ startLedger: LATEST + 1 }),
+      );
+      // Must not request startLedger: 1 (outside RPC retention on real networks).
+      expect(getEvents.mock.calls[0][0].startLedger).not.toBe(1);
+
+      unsub();
+    }, 10_000);
+
     it('keeps heap growth under 1MB across 1000 polling cycles', async () => {
       let pollCount = 0;
       const getEvents = jest.fn().mockImplementation(async () => {
