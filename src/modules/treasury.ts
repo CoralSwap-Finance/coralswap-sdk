@@ -362,6 +362,15 @@ export class TreasuryModule {
   }
 
   /**
+   * Public wrapper around {@link buildPriceMap} for callers outside this
+   * module hierarchy (e.g. MonitoringModule) that need the same
+   * stablecoin-anchored spot pricing used for treasury/portfolio valuations.
+   */
+  async getSpotPriceMap(allPairs: string[]): Promise<Map<string, number>> {
+    return this.buildPriceMap(allPairs);
+  }
+
+  /**
    * Build a token-address → USD-price map using spot rates from pairs.
    * Stablecoin addresses (set at construction) are anchored at $1.
    * Other token prices are derived from stablecoin-paired reserves.

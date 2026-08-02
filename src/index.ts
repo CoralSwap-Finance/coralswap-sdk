@@ -83,6 +83,7 @@ export {
   GovernanceModule,
   DCAModule,
   LimitOrderModule,
+  SquidModule,
 } from "@/modules";
 export type { OptimalPath } from "@/modules/router";
 export type { TWAPObservation, TWAPResult, TraderRanking, GetTopTradersOptions } from "@/modules";
@@ -122,6 +123,8 @@ export {
   withRetry,
   isRetryable,
   sleep,
+  getTransactionStatus,
+  shouldRetrySubmission,
   validateAddress,
   validatePositiveAmount,
   validateNonNegativeAmount,
@@ -137,6 +140,7 @@ export {
   batchRequest,
   batchRequestOrThrow,
   DEFAULT_BATCH_CONCURRENCY,
+  ConnectionPool,
 } from './utils';
 
 
@@ -149,7 +153,12 @@ export type {
   SimulateFn,
   BatchRequestOptions,
   BatchResult,
+  TransactionStatus,
+  RetryDecision,
 } from "./utils";
+
+// Schema validation
+export { validateWithSchema, OrderBookAddressSchema, TradeFilterSchema, GetOpenOrdersSchema, GetOrderSummarySchema } from "@/schemas";
 
 // Errors
 export {
@@ -165,6 +174,7 @@ export {
   ValidationError,
   FlashLoanError,
   FlashLoanFailedError,
+  CrossChainError,
   CircuitBreakerError,
   SignerError,
   MissingPriceFeedError,

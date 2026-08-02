@@ -17,6 +17,8 @@
     "test:integration:portfolio": "jest --config jest.integration.config.js --testPathPattern=portfolio.integration",
     "test:integration:price-feed": "jest --config jest.integration.config.js --testPathPattern=price-feed.integration",
     "test:integration:flash-loan": "jest --config jest.integration.config.js --testPathPattern=flash-loan.integration",
+    "test:integration:health-check": "jest --config jest.integration.config.js --testPathPattern=health-check.integration",
+    "test:integration:liquidity": "jest --config jest.integration.config.js --testPathPattern=liquidity.integration",
     "lint": "eslint src/**/*.ts",
     "lint:fix": "eslint src/**/*.ts --fix",
     "clean": "rimraf dist",
