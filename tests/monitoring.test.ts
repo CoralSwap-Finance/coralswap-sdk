@@ -6,6 +6,7 @@ import {
 import type { PoolTvlChange } from '../src/types/monitoring';
 import { CoralSwapClient } from '../src/client';
 import { ValidationError } from '../src/errors';
+import { xdr } from '@stellar/stellar-sdk';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -20,6 +21,15 @@ const USER_1 = 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF';
 const USER_2 = 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5';
 
 const LEDGERS_PER_DAY = 17_280;
+
+/** Real Soroban RPC topic filters must be base64-encoded XDR ScVal symbols. */
+const TOPIC_SYNC = xdr.ScVal.scvSymbol('sync').toXDR('base64');
+const TOPIC_SWAP = xdr.ScVal.scvSymbol('swap').toXDR('base64');
+
+const ENCODED_TOPIC_TO_NAME: Record<string, string> = {
+  [TOPIC_SYNC]: 'sync',
+  [TOPIC_SWAP]: 'swap',
+};
 
 interface PairSpec {
   reserve0?: bigint;
@@ -127,10 +137,21 @@ function createMockClient(opts: {
       getEvents: jest.fn().mockImplementation(
         (req: { filters?: Array<{ contractIds?: string[]; topics?: string[][] }> }) => {
           const id = req?.filters?.[0]?.contractIds?.[0] ?? '';
-          const topic = req?.filters?.[0]?.topics?.[0]?.[0];
+          const topicFilter = req?.filters?.[0]?.topics?.[0]?.[0];
+
+          // Mirror real Soroban RPC: only base64-encoded XDR ScVal topics match.
+          // Raw strings like 'sync' / 'swap' must yield zero events.
+          const topicName =
+            typeof topicFilter === 'string'
+              ? ENCODED_TOPIC_TO_NAME[topicFilter]
+              : undefined;
+          if (!topicName) {
+            return Promise.resolve({ events: [] });
+          }
+
           const events = (eventsPerPair[id] ?? []).filter((e) => {
             const ev = e as { topic?: string[] };
-            return !topic || ev.topic?.[0] === topic;
+            return ev.topic?.[0] === topicName;
           });
           return Promise.resolve({ events });
         },
@@ -340,6 +361,54 @@ describe('MonitoringModule.getSystemMetrics()', () => {
     });
     await expect(monitor.getSystemMetrics('7d')).resolves.toBeDefined();
     await expect(monitor.getSystemMetrics('30d')).resolves.toBeDefined();
+  });
+
+  it('queries getEvents with base64-encoded XDR symbol topics (not raw strings)', async () => {
+    const currentLedger = 100_000;
+    const currentStart = currentLedger - LEDGERS_PER_DAY;
+    const client = createMockClient({
+      pairs: [PAIR_1],
+      pairSpecs: {
+        [PAIR_1]: {
+          reserve0: 200_000_000n,
+          reserve1: 200_000_000n,
+          token0: STABLE_ADDR,
+          token1: TOKEN_A,
+        },
+      },
+      eventsPerPair: {
+        [PAIR_1]: [
+          makeSyncEvent(currentStart - 50, 100_000_000n, 100_000_000n, PAIR_1),
+          makeSwapEvent({
+            ledger: currentStart + 5,
+            amountIn: 10_000_000n,
+            feeBps: 30,
+            tokenIn: STABLE_ADDR,
+            sender: USER_1,
+            contractId: PAIR_1,
+          }),
+        ],
+      },
+      currentLedger,
+    });
+
+    const monitor = new MonitoringModule(client, { stableAddresses: [STABLE_ADDR] });
+    const metrics = await monitor.getSystemMetrics('24h');
+
+    const getEvents = client.server.getEvents as jest.Mock;
+    expect(getEvents).toHaveBeenCalled();
+
+    const topicFilters = getEvents.mock.calls.map(
+      (call) => call[0]?.filters?.[0]?.topics?.[0]?.[0],
+    );
+    expect(topicFilters).toContain(TOPIC_SYNC);
+    expect(topicFilters).toContain(TOPIC_SWAP);
+    expect(topicFilters).not.toContain('sync');
+    expect(topicFilters).not.toContain('swap');
+
+    // Encoded filters must actually resolve historical events (mock rejects raw strings).
+    expect(metrics.tvlChange.absolute).toBeGreaterThan(0);
+    expect(metrics.volumeChange.absolute).toBeGreaterThan(0);
   });
 
   it('throws ValidationError for an invalid period', async () => {

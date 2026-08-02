@@ -8,7 +8,7 @@
  * @module monitoring
  */
 
-import { SorobanRpc } from '@stellar/stellar-sdk';
+import { SorobanRpc, xdr } from '@stellar/stellar-sdk';
 import { CoralSwapClient } from '@/client';
 import {
   MetricConfig,
@@ -28,6 +28,13 @@ import { validateAddress } from '@/utils/validation';
 
 /** ~1 day of Soroban ledgers (5s/ledger). */
 const LEDGERS_PER_DAY = 17_280;
+
+/**
+ * Base64-encoded XDR `ScVal` symbols for Soroban `getEvents` topic filters.
+ * Raw strings like `'sync'` / `'swap'` are rejected by real RPC servers.
+ */
+const TOPIC_SYNC = xdr.ScVal.scvSymbol('sync').toXDR('base64');
+const TOPIC_SWAP = xdr.ScVal.scvSymbol('swap').toXDR('base64');
 
 /**
  * Optional construction knobs for {@link MonitoringModule}.
@@ -280,6 +287,14 @@ export class MonitoringModule {
    * window of equal length for TVL, volume, and unique users. Fee revenue is
    * reported for the current window only.
    *
+   * **RPC event retention:** the previous window starts at
+   * `currentLedger - 2 * periodLedgers` (~2 days for `'24h'`, ~14 days for
+   * `'7d'`, ~60 days for `'30d'`). Public Soroban RPC providers often retain
+   * only a few days of events; if `startLedger` falls outside that window the
+   * request fails (or returns empty) and previous-period metrics degrade to
+   * zero (false 100% zero-to-nonzero growth). Prefer an archival/long-retention
+   * RPC when using `'7d'` or `'30d'`.
+   *
    * @param period - Lookback window; defaults to `'24h'`.
    * @returns Aggregated {@link SystemMetrics}.
    * @throws {ValidationError} When `period` is not one of `'24h' | '7d' | '30d'`.
@@ -318,6 +333,9 @@ export class MonitoringModule {
     const periodLedgers = this.periodToLedgers(period);
     const currentLedger = await this.client.getCurrentLedger();
     const currentStart = Math.max(0, currentLedger - periodLedgers);
+    // Previous window is the equal-length interval immediately before the
+    // current window. Requires RPC event retention covering ~2× the period
+    // (see getSystemMetrics JSDoc).
     const previousStart = Math.max(0, currentLedger - periodLedgers * 2);
     const previousEnd = currentStart;
 
@@ -592,7 +610,7 @@ export class MonitoringModule {
           {
             type: 'contract',
             contractIds: [pairAddress],
-            topics: [['sync']],
+            topics: [[TOPIC_SYNC]],
           },
         ],
         limit: 10000,
@@ -645,7 +663,7 @@ export class MonitoringModule {
           {
             type: 'contract',
             contractIds: [pairAddress],
-            topics: [['swap']],
+            topics: [[TOPIC_SWAP]],
           },
         ],
         limit: 10000,
