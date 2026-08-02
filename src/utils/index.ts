@@ -86,6 +86,8 @@ export {
 } from './events';
 export type { DecodeEventsOptions } from './events';
 
+export { ConnectionPool } from './connection-pool';
+
 export {
   getVotingPower,
   getVotingPowerAtLedger,
@@ -96,3 +98,28 @@ export type { VotingPower, VotingPowerQueryProvider, VotingPowerQueryResult } fr
 export { checkCompatibility } from './migration';
 export type { BreakingChange, CompatibilityReport } from './migration';
 export { suppressDeprecationWarnings, deprecated } from './deprecation-warnings';
+
+/**
+ * Idempotent-resubmission helpers for state-changing on-chain calls.
+ *
+ * `submitTransaction()` (and similar) can fail with a retryable error
+ * (timeout, connection reset, RPC 503) that says nothing about whether the
+ * transaction actually landed. Before rebuilding and resubmitting on such a
+ * failure, use `getTransactionStatus()` to check the real on-chain outcome
+ * and `shouldRetrySubmission()` to decide whether it's safe to retry.
+ *
+ * @example
+ * const result = await client.submitTransaction([op]);
+ * if (!result.success && result.txHash) {
+ *   const status = await getTransactionStatus(client.server, result.txHash);
+ *   const { shouldRetry } = shouldRetrySubmission(status);
+ *   if (!shouldRetry && status.status === 'SUCCESS') {
+ *     // Already landed -- use status.ledger / status.result, don't resubmit.
+ *   }
+ * }
+ */
+export {
+  getTransactionStatus,
+  shouldRetrySubmission,
+} from './idempotent-resubmission';
+export type { TransactionStatus, RetryDecision } from './idempotent-resubmission';

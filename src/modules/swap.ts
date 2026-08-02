@@ -17,7 +17,7 @@ import { PRECISION, DEFAULTS } from '../config';
 import { PairNotFoundError, ValidationError, InsufficientLiquidityError, TransactionError } from '../errors';
 import { PairClient } from '@/contracts/pair';
 import { validateAddress, validatePositiveAmount, validateDistinctTokens, isValidPath } from '@/utils/validation';
-import { SorobanRpc } from '@stellar/stellar-sdk';
+import { SorobanRpc, xdr } from '@stellar/stellar-sdk';
 import { GasEstimate } from '../types/gas';
 import { estimateGas } from '../utils/gas';
 import { resolveTokenIdentifier } from '../utils/addresses';
@@ -745,7 +745,7 @@ export class SwapModule {
         {
           type: "contract",
           contractIds: filter.pairAddress ? [filter.pairAddress] : [],
-          topics: [["swap"]],
+          topics: [[xdr.ScVal.scvSymbol("swap").toXDR("base64")]],
         },
       ],
       limit: filter.limit ?? 200,

@@ -16,9 +16,9 @@ import { FactoryModule } from '@/modules/factory';
 import { PortfolioModule } from '@/modules/portfolio';
 import { KeypairSigner } from '@/utils/signer';
 import { TransactionPoller, PollingStrategy, PollingOptions } from '@/utils/polling';
+import { ConnectionPool } from '@/utils/connection-pool';
 import { buildSimulationResult } from '@/utils/simulation';
-import { withRetry, RetryOptions } from '@/utils/retry';
-import { TransactionComposer } from '@/transaction-composer';
+import { withRetry, RetryOptions, isRetryable } from '@/utils/retry';
 export { KeypairSigner, PollingStrategy, PollingOptions };
 
 /**
@@ -40,7 +40,8 @@ export class CoralSwapClient {
   networkConfig: NetworkConfig;
   private _server: SorobanRpc.Server;
   private _rpcUrls: string[] = [];
-  private _currentRpcIndex: number = 0;
+  private _activeRpcUrl: string;
+  private _connectionPool: ConnectionPool;
   private signer: Signer | null = null;
   private _publicKeyCache: string | null = null;
   private _factory: FactoryClient | null = null;
@@ -70,32 +71,47 @@ export class CoralSwapClient {
     };
 
     let lastError: unknown;
-    const initialIndex = this._currentRpcIndex;
 
-    // We try each RPC URL at least once if needed
-    for (let i = 0; i < this._rpcUrls.length; i++) {
+    for (let attempt = 0; attempt < this._connectionPool.size; attempt++) {
+      let rpcUrl: string;
       try {
-        return await withRetry(
+        rpcUrl = this._connectionPool.getEndpoint();
+      } catch (err) {
+        throw err;
+      }
+
+      if (rpcUrl !== this._activeRpcUrl) {
+        this._server = this.createRpcServer(rpcUrl);
+        this._poller = null;
+        this._activeRpcUrl = rpcUrl;
+        this.networkConfig.rpcUrl = rpcUrl;
+      }
+
+      try {
+        const result = await withRetry(
           () => fn(this.server),
           options,
           this.logger,
-          `${label}[RPC:${this._currentRpcIndex}]`,
+          `${label}[RPC:${rpcUrl}]`,
         );
+
+        this._connectionPool.reportSuccess(rpcUrl);
+        return result;
       } catch (err) {
+        // Non-retryable errors (e.g. ValidationError, bad simulation) must surface
+        // immediately — cycling through every fallback endpoint cannot fix them and
+        // only multiplies latency for a failure that retrying can never resolve.
+        if (!isRetryable(err)) {
+          throw err;
+        }
+
         lastError = err;
+        this._connectionPool.reportFailure(rpcUrl);
         this.logger?.info(`executeWithFallback: RPC call failed, trying fallback`, {
           label,
-          url: this._rpcUrls[this._currentRpcIndex],
+          url: rpcUrl,
           error: err instanceof Error ? err.message : err,
         });
-
-        if (this._rpcUrls.length > 1) {
-          this.rotateRpcServer();
-          // If we've circled back to the initial index, we've tried all URLs
-          if (this._currentRpcIndex === initialIndex) break;
-        } else {
-          break;
-        }
       }
     }
 
@@ -116,16 +132,7 @@ export class CoralSwapClient {
    */
   set server(s: SorobanRpc.Server) {
     this._server = s;
-  }
-
-  /**
-   * Rotate to the next available RPC server in the fallback list.
-   * @private
-   */
-  private rotateRpcServer(): void {
-    if (this._rpcUrls.length <= 1) return;
-    this._currentRpcIndex = (this._currentRpcIndex + 1) % this._rpcUrls.length;
-    this._server = this.createRpcServer(this._rpcUrls[this._currentRpcIndex]);
+    this._poller = null;
   }
 
   /**
@@ -177,8 +184,9 @@ export class CoralSwapClient {
     // Keep networkConfig.rpcUrl in sync with the active RPC URL
     this.networkConfig.rpcUrl = this._rpcUrls[0];
 
-    this._currentRpcIndex = 0;
-    this._server = this.createRpcServer(this._rpcUrls[0]);
+    this._connectionPool = new ConnectionPool(this._rpcUrls);
+    this._activeRpcUrl = this._rpcUrls[0];
+    this._server = this.createRpcServer(this._activeRpcUrl);
 
     if (config.signer) {
       this.signer = config.signer;
@@ -323,8 +331,9 @@ export class CoralSwapClient {
     // Keep networkConfig.rpcUrl in sync with the active RPC URL
     this.networkConfig.rpcUrl = this._rpcUrls[0];
 
-    this._currentRpcIndex = 0;
-    this._server = this.createRpcServer(this._rpcUrls[0]);
+    this._connectionPool = new ConnectionPool(this._rpcUrls);
+    this._activeRpcUrl = this._rpcUrls[0];
+    this._server = this.createRpcServer(this._activeRpcUrl);
 
     // Reset contract client singletons to trigger re-initialization
     this._factory = null;
