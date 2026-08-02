@@ -36,3 +36,4 @@ export { TaxReportingModule } from './tax-reporting';
 export { GovernanceModule } from './governance';
 export { DCAModule } from './dca';
 export { LimitOrderModule } from './limit-orders';
+export { SquidModule } from './squid';
