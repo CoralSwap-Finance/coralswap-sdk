@@ -89,6 +89,11 @@ export type { DecodeEventsOptions } from './events';
 export { ConnectionPool } from './connection-pool';
 
 export {
+  EventCursor,
+} from './event-cursor';
+export type { EventPage, EventCursorOptions } from './event-cursor';
+
+export {
   getVotingPower,
   getVotingPowerAtLedger,
   setVotingPowerQueryProvider,
