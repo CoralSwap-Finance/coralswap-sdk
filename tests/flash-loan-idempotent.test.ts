@@ -58,6 +58,9 @@ describe("FlashLoanModule - Idempotent Resubmission", () => {
     jest.spyOn(client, "pair").mockReturnValue(mockPairClient);
     mockPairClient.getFlashLoanConfig.mockResolvedValue(mockConfig);
     mockPairClient.buildFlashLoan.mockReturnValue(mockOperation);
+    jest.spyOn(client, "simulateTransaction").mockResolvedValue({
+      success: true,
+    } as any);
   });
 
   afterEach(() => {
