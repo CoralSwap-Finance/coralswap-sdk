@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { CoralSwapClient } from '@/client';
 import {
   StopLossParams,
@@ -12,11 +13,8 @@ import {
   TransactionError,
   StaleOracleError,
 } from '@/errors';
-import {
-  validateAddress,
-  validatePositiveAmount,
-  validateDistinctTokens,
-} from '@/utils/validation';
+import { isValidAddress } from '@/utils/addresses';
+import { validateAddress } from '@/utils/validation';
 import { estimateGas } from '@/utils/gas';
 import {
   Contract,
@@ -43,6 +41,29 @@ interface OraclePriceSnapshot {
 interface TriggerEvaluationOptions {
   staleAfterMs?: number;
 }
+
+const StopLossParamsSchema = z.object({
+  tokenIn: z
+    .string()
+    .min(1, 'tokenIn must not be empty')
+    .refine((v) => isValidAddress(v), 'tokenIn is not a valid Stellar address'),
+  tokenOut: z
+    .string()
+    .min(1, 'tokenOut must not be empty')
+    .refine((v) => isValidAddress(v), 'tokenOut is not a valid Stellar address'),
+  amount: z.bigint().positive('amount must be greater than 0'),
+  triggerPrice: z.bigint().positive('triggerPrice must be greater than 0'),
+  pairAddress: z
+    .string()
+    .min(1, 'pairAddress must not be empty')
+    .refine((v) => isValidAddress(v), 'pairAddress is not a valid Stellar address'),
+  oracleAsset: z
+    .string()
+    .refine((v) => v.trim().length > 0, 'oracleAsset must not be empty'),
+}).refine(
+  (data) => data.tokenIn !== data.tokenOut,
+  { message: 'tokenIn and tokenOut must be different addresses', path: ['tokenIn'] },
+);
 
 /**
  * Stop-Loss module — automated stop-loss orders with RedStone trigger detection.
@@ -269,15 +290,14 @@ export class StopLossModule {
   // ---------------------------------------------------------------------------
 
   private validateStopLossParams(params: StopLossParams): void {
-    validateAddress(params.tokenIn, 'tokenIn');
-    validateAddress(params.tokenOut, 'tokenOut');
-    validateAddress(params.pairAddress, 'pairAddress');
-    validateDistinctTokens(params.tokenIn, params.tokenOut);
-    validatePositiveAmount(params.amount, 'amount');
-    validatePositiveAmount(params.triggerPrice, 'triggerPrice');
-
-    if (!params.oracleAsset || params.oracleAsset.trim().length === 0) {
-      throw new ValidationError('oracleAsset must not be empty');
+    const result = StopLossParamsSchema.safeParse(params);
+    if (!result.success) {
+      const issues = result.error.issues
+        .map((i: z.ZodIssue) => `${i.path.join('.')}: ${i.message}`)
+        .join('; ');
+      throw new ValidationError(`Invalid stop-loss params: ${issues}`, {
+        zodErrors: result.error.issues,
+      });
     }
   }
 
