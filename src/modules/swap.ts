@@ -1,5 +1,5 @@
 import { CoralSwapClient } from '../client';
-import { TradeType } from '../types/common';
+import { TradeType, Result } from '../types/common';
 import {
   SwapRequest,
   SwapQuote,
@@ -14,19 +14,22 @@ import {
   MultiHopSwapQuote,
 } from '../types/swap';
 import { PRECISION, DEFAULTS } from '../config';
-import { PairNotFoundError, ValidationError, InsufficientLiquidityError } from '../errors';
+import { PairNotFoundError, ValidationError, InsufficientLiquidityError, TransactionError } from '../errors';
 import { PairClient } from '@/contracts/pair';
 import { validateAddress, validatePositiveAmount, validateDistinctTokens, isValidPath } from '@/utils/validation';
-import { SorobanRpc } from '@stellar/stellar-sdk';
+import { SorobanRpc, xdr } from '@stellar/stellar-sdk';
 import { GasEstimate } from '../types/gas';
 import { estimateGas } from '../utils/gas';
 import { resolveTokenIdentifier } from '../utils/addresses';
 import { verifyRedStonePayload, estimateUsdValue, DEFAULT_PRICE_GUARD_CONFIG } from '../utils/redstone';
-import { executeWithIdempotentResubmission } from '../utils/idempotent-resubmission';
+import { getTransactionStatus, shouldRetrySubmission } from '../utils/idempotent-resubmission';
+import { sleep } from '../utils/retry';
 
 /** Default ledger window when no fromLedger/toLedger is specified. */
 const DEFAULT_HISTORY_WINDOW = 1000;
-/** Default maximum results per query. */
+
+/** Idempotent resubmission backoff for swap execution. */
+const IDEMPOTENT_RETRY_CONFIG = { maxRetries: 2, retryDelayMs: 2000 } as const;
 
 /**
  * Swap module -- builds, quotes, and executes token swaps.
@@ -245,17 +248,8 @@ export class SwapModule {
       return estimateGas((ops) => this.client.simulateTransaction(ops, {}), [op]);
     }
 
-    return executeWithIdempotentResubmission(
-      () => this.client.submitTransaction([op]),
-      this.client.server,
-      (txHash, ledger) => ({
-        txHash,
-        amountIn: quote.amountIn,
-        amountOut: quote.amountOut,
-        feePaid: quote.feeAmount,
-        ledger,
-        timestamp: Math.floor(Date.now() / 1000),
-      }),
+    return this.submitSwapWithIdempotentResubmission(quote, () =>
+      this.client.submitTransaction([op]),
     );
   }
 
@@ -344,6 +338,69 @@ export class SwapModule {
   // ---------------------------------------------------------------------------
   // Private helpers
   // ---------------------------------------------------------------------------
+
+  /**
+   * Submit a swap transaction with idempotent resubmission.
+   *
+   * A client-side timeout while submitting a swap says nothing about whether
+   * the transaction actually landed. Before rebuilding and resubmitting, the
+   * real on-chain status is checked via `getTransactionStatus()`; if the
+   * transaction already succeeded, the result is returned without
+   * resubmitting, preventing the same trade from executing twice.
+   */
+  private async submitSwapWithIdempotentResubmission(
+    quote: SwapQuote,
+    submit: () => Promise<Result<{ txHash: string; ledger: number }>>,
+  ): Promise<SwapResult> {
+    const { maxRetries, retryDelayMs } = IDEMPOTENT_RETRY_CONFIG;
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      const result = await submit();
+
+      if (result.success) {
+        return this.toSwapResult(quote, result.txHash!, result.data!.ledger);
+      }
+
+      if (!result.txHash) {
+        throw new TransactionError(result.error?.message ?? 'Swap failed');
+      }
+
+      const status = await getTransactionStatus(this.client.server, result.txHash);
+      const decision = shouldRetrySubmission(status);
+
+      if (status.status === 'SUCCESS') {
+        return this.toSwapResult(quote, result.txHash, status.ledger);
+      }
+
+      if (!decision.shouldRetry || attempt >= maxRetries) {
+        throw new TransactionError(
+          status.status === 'FAILED'
+            ? `Swap failed on-chain: ${result.error?.message ?? 'Unknown error'}`
+            : result.error?.message ?? 'Swap failed',
+          result.txHash,
+        );
+      }
+
+      await sleep(retryDelayMs);
+    }
+
+    throw new TransactionError('Swap submission exceeded max retries');
+  }
+
+  private toSwapResult(
+    quote: SwapQuote,
+    txHash: string,
+    ledger: number,
+  ): SwapResult {
+    return {
+      txHash,
+      amountIn: quote.amountIn,
+      amountOut: quote.amountOut,
+      feePaid: quote.feeAmount,
+      ledger,
+      timestamp: Math.floor(Date.now() / 1000),
+    };
+  }
 
   /**
    * Resolve the effective routing path from the request.
@@ -518,17 +575,8 @@ export class SwapModule {
       quote.deadline,
     );
 
-    return executeWithIdempotentResubmission(
-      () => this.client.submitTransaction([op]),
-      this.client.server,
-      (txHash, ledger) => ({
-        txHash,
-        amountIn: quote.amountIn,
-        amountOut: quote.amountOut,
-        feePaid: quote.feeAmount,
-        ledger,
-        timestamp: Math.floor(Date.now() / 1000),
-      }),
+    return this.submitSwapWithIdempotentResubmission(quote, () =>
+      this.client.submitTransaction([op]),
     );
   }
 
@@ -733,7 +781,7 @@ export class SwapModule {
         {
           type: "contract",
           contractIds: filter.pairAddress ? [filter.pairAddress] : [],
-          topics: [["swap"]],
+          topics: [[xdr.ScVal.scvSymbol("swap").toXDR("base64")]],
         },
       ],
       limit: filter.limit ?? 200,
