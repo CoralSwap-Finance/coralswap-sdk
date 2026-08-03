@@ -14,6 +14,7 @@
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
     "test:integration": "jest --config jest.integration.config.js",
+    "test:integration:rwa": "jest --config jest.integration.config.js tests/integration/rwa.integration.test.ts"
     "test:integration:portfolio": "jest --config jest.integration.config.js --testPathPattern=portfolio.integration",
     "test:integration:monitoring": "jest --config jest.integration.config.js --testPathPattern=monitoring.integration",
     "lint": "eslint src/**/*.ts",
@@ -27,7 +28,6 @@
     "examples:alert-setup": "ts-node --transpile-only --require tsconfig-paths/register examples/alert-setup.ts",
     "examples:rwa-pool": "ts-node examples/rwa-pool.ts",
     "examples:governance-vote": "ts-node examples/governance-vote.ts",
-    "examples:alert-setup": "ts-node --transpile-only --require tsconfig-paths/register examples/alert-setup.ts",
     "docs": "typedoc",
     "fuzz": "jest --testPathPattern=fuzz --no-coverage",
     "benchmark": "ts-node benchmarks/run.ts",
