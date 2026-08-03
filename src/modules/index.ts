@@ -28,6 +28,8 @@ export type {
   AlertEvent,
   CreateAlertParams,
   UpdateAlertParams,
+  PriceAlertParams,
+  ThresholdPriceAlert,
 } from './alerts';
 export { LeaderboardModule } from './leaderboard';
 export type { LeaderboardEntry, LeaderboardOptions } from './leaderboard';
