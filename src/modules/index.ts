@@ -17,7 +17,7 @@ export {
 } from './health-check';
 export { RouterModule } from './router';
 export { TreasuryModule } from './treasury';
-export { StopLossModule } from './stop-loss';
+export { StopLossModule, DEFAULT_STALE_AFTER_MS } from './stop-loss';
 export type { TreasuryModuleOptions } from './treasury';
 export { AlertsModule, AlertModule } from './alerts';
 export { WebhookModule } from './webhooks';
