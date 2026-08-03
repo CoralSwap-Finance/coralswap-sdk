@@ -11,17 +11,11 @@ import {
   StakedPosition,
   StakingRewards,
   CooldownStatus,
+  VoteEligibility,
 } from "@/types/staking";
 import { Signer } from "@/types/common";
-import {
-  TransactionError,
-  CooldownError,
-  StakingError,
-} from "@/errors";
-import {
-  validateAddress,
-  validatePositiveAmount,
-} from "@/utils/validation";
+import { TransactionError, CooldownError, StakingError } from "@/errors";
+import { validateAddress, validatePositiveAmount } from "@/utils/validation";
 
 /**
  * Staking module — manages LP token staking for governance weight
@@ -247,10 +241,7 @@ export class StakingModule {
    * const txHash = await staking.claimRewards('CAAAA...', mySigner);
    * ```
    */
-  async claimRewards(
-    lpTokenAddress: string,
-    signer: Signer,
-  ): Promise<string> {
+  async claimRewards(lpTokenAddress: string, signer: Signer): Promise<string> {
     validateAddress(lpTokenAddress, "lpTokenAddress");
 
     const publicKey = await signer.publicKey();
@@ -313,7 +304,10 @@ export class StakingModule {
     const publicKey = await signer.publicKey();
 
     // Enforce cooldown period
-    const cooldownStatus = await this.getCooldownStatus(publicKey, lpTokenAddress);
+    const cooldownStatus = await this.getCooldownStatus(
+      publicKey,
+      lpTokenAddress,
+    );
     if (cooldownStatus.isInCooldown) {
       throw new CooldownError(BigInt(cooldownStatus.cooldownEnd));
     }
@@ -404,6 +398,63 @@ export class StakingModule {
     };
   }
 
+  /**
+   * Get vote eligibility status for a staked position.
+   *
+   * Determines whether a stake has settled long enough to count toward
+   * governance voting power. Fresh stakes are typically subject to a
+   * settlement period to prevent flash-loan governance attacks.
+   *
+   * **Note:** Actual vote-weight enforcement is a contract-level concern.
+   * This method provides accurate client-side display for building honest
+   * governance UIs that warn users when their stake is too recent to count.
+   *
+   * @param address - The Stellar address of the staker.
+   * @param lpTokenAddress - The contract address of the LP token.
+   * @returns Vote eligibility status including settlement timestamps.
+   *
+   * @example
+   * ```ts
+   * const eligibility = await staking.getVoteEligibility('GABC...', 'CAAAA...');
+   * if (!eligibility.isEligible) {
+   *   console.log('Stake becomes eligible at:', eligibility.eligibleAtDate);
+   * }
+   * ```
+   */
+  async getVoteEligibility(
+    address: string,
+    lpTokenAddress: string,
+  ): Promise<VoteEligibility> {
+    validateAddress(address, "address");
+    validateAddress(lpTokenAddress, "lpTokenAddress");
+
+    const position = await this.getStakedBalance(address, lpTokenAddress);
+
+    if (position.amount === 0n || position.stakedAt === 0) {
+      return {
+        isEligible: false,
+        stakedAt: 0,
+        eligibleAt: 0,
+        eligibleAtDate: new Date(0),
+      };
+    }
+
+    // Typical settlement period: 1 ledger (≈5 seconds on Stellar)
+    // This is a conservative client-side estimate; actual on-chain
+    // enforcement depends on the governance contract implementation.
+    const settlementPeriodSec = 5;
+    const eligibleAt = position.stakedAt + settlementPeriodSec;
+    const nowSec = Math.floor(Date.now() / 1000);
+    const isEligible = nowSec >= eligibleAt;
+
+    return {
+      isEligible,
+      stakedAt: position.stakedAt,
+      eligibleAt,
+      eligibleAtDate: new Date(eligibleAt * 1000),
+    };
+  }
+
   // ---------------------------------------------------------------------------
   // Private helpers
   // ---------------------------------------------------------------------------
@@ -414,9 +465,7 @@ export class StakingModule {
    * Uses a well-known zero-balance account as the source so no funds
    * are required — consistent with LPTokenClient.simulateRead.
    */
-  private async simulateRead(
-    op: xdr.Operation,
-  ): Promise<xdr.ScVal | null> {
+  private async simulateRead(op: xdr.Operation): Promise<xdr.ScVal | null> {
     const account = await this.client.server.getAccount(
       "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
     );
@@ -443,9 +492,7 @@ export class StakingModule {
     key: string,
   ): bigint {
     if (!fields) return 0n;
-    const entry = fields.find(
-      (f) => f.key().sym().toString() === key,
-    );
+    const entry = fields.find((f) => f.key().sym().toString() === key);
     if (!entry) return 0n;
     const val = entry.val();
     return (
@@ -462,9 +509,7 @@ export class StakingModule {
     key: string,
   ): number {
     if (!fields) return 0;
-    const entry = fields.find(
-      (f) => f.key().sym().toString() === key,
-    );
+    const entry = fields.find((f) => f.key().sym().toString() === key);
     if (!entry) return 0;
     return Number(entry.val().u64());
   }
@@ -477,9 +522,7 @@ export class StakingModule {
     key: string,
   ): number {
     if (!fields) return 0;
-    const entry = fields.find(
-      (f) => f.key().sym().toString() === key,
-    );
+    const entry = fields.find((f) => f.key().sym().toString() === key);
     if (!entry) return 0;
     return entry.val().u32();
   }
@@ -492,15 +535,15 @@ export class StakingModule {
     key: string,
   ): string {
     if (!fields) return "";
-    const entry = fields.find(
-      (f) => f.key().sym().toString() === key,
-    );
+    const entry = fields.find((f) => f.key().sym().toString() === key);
     if (!entry) return "";
     try {
       return Address.fromScVal(entry.val()).toString();
     } catch {
       // Fallback for environments where the ScVal isn't a real XDR object
-      const val = entry.val() as unknown as { address?: () => { toString(): string } };
+      const val = entry.val() as unknown as {
+        address?: () => { toString(): string };
+      };
       return val.address?.().toString() ?? "";
     }
   }
