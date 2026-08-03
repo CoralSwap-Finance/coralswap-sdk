@@ -545,7 +545,7 @@ export class FlashLoanModule {
       // If simulation returns an error specifically about missing function,
       // that means the interface isn't implemented
       if (!sim.success && sim.error) {
-        const errorMsg = sim.error.message || "";
+        const errorMsg = sim.error || "";
         if (
           errorMsg.includes("unknown function") ||
           errorMsg.includes("function not found") ||
