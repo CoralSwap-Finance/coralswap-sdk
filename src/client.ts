@@ -64,8 +64,8 @@ export class CoralSwapClient {
    * @private
    */
   private async executeWithFallback<T>(
-      fn: (server: SorobanRpc.Server) => Promise<T>,
-      label: string,
+    fn: (server: SorobanRpc.Server) => Promise<T>,
+    label: string,
   ): Promise<T> {
     const options: RetryOptions = {
       maxRetries: this.config.maxRetries ?? DEFAULTS.maxRetries,
@@ -76,24 +76,7 @@ export class CoralSwapClient {
     let lastError: unknown;
 
     for (let attempt = 0; attempt < this._connectionPool.size; attempt++) {
-      let rpcUrl: string;
-      try {
-        return await withRetry(
-            async () => {
-              // Acquire a rate-limiter token per dispatch attempt so retries
-              // and fallback-endpoint rotations are each individually throttled.
-              if (this._rateLimiter) {
-                await this._rateLimiter.acquire();
-              }
-              return fn(this.server);
-            },
-            options,
-            this.logger,
-            `${label}[RPC:${this._currentRpcIndex}]`,
-        rpcUrl = this._connectionPool.getEndpoint();
-      } catch (err) {
-        throw err;
-      }
+      const rpcUrl = this._connectionPool.getEndpoint();
 
       if (rpcUrl !== this._activeRpcUrl) {
         this._server = this.createRpcServer(rpcUrl);
@@ -104,7 +87,12 @@ export class CoralSwapClient {
 
       try {
         const result = await withRetry(
-          () => fn(this.server),
+          async () => {
+            if (this._rateLimiter) {
+              await this._rateLimiter.acquire();
+            }
+            return fn(this.server);
+          },
           options,
           this.logger,
           `${label}[RPC:${rpcUrl}]`,
@@ -113,9 +101,6 @@ export class CoralSwapClient {
         this._connectionPool.reportSuccess(rpcUrl);
         return result;
       } catch (err) {
-        // Non-retryable errors (e.g. ValidationError, bad simulation) must surface
-        // immediately — cycling through every fallback endpoint cannot fix them and
-        // only multiplies latency for a failure that retrying can never resolve.
         if (!isRetryable(err)) {
           throw err;
         }

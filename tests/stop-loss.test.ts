@@ -621,9 +621,8 @@ describe('StopLossModule', () => {
       );
     });
   });
-});
 
-describe('Oracle Staleness Checks on Enrichment Paths', () => {
+  describe('Oracle Staleness Checks on Enrichment Paths', () => {
   describe('getStopLoss() with stale oracle', () => {
     it('throws StaleOracleError by default when oracle is stale', async () => {
       jest
@@ -846,3 +845,4 @@ describe('Oracle Staleness Checks on Enrichment Paths', () => {
     });
   });
 });
+

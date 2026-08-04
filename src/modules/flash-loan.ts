@@ -13,7 +13,7 @@ import {
   calculateRepayment,
   validateFeeFloor,
 } from "@/contracts/flash-receiver";
-import { FlashLoanError, TransactionError } from "@/errors";
+import { FlashLoanError } from "@/errors";
 import { FeeModule } from "./fees";
 import { validateAddress, validatePositiveAmount } from "@/utils/validation";
 import { estimateGas } from "@/utils/gas";
@@ -429,7 +429,7 @@ export class FlashLoanModule {
   private async parseFlashLoanEvents(
     txResult: SorobanRpc.Api.GetSuccessfulTransactionResponse,
     request: FlashLoanRequest,
-    feeAmount: bigint,
+    _feeAmount: bigint,
   ): Promise<FlashLoanExecutedEvent | undefined> {
     try {
       const rawEvents = this.getRawEvents(txResult);
