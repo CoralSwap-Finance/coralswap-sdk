@@ -8,6 +8,7 @@ import {
 } from '@/types/dca';
 import { Signer } from '@/types/common';
 import { ValidationError, TransactionError } from '@/errors';
+import { validateAddress } from '@/utils/validation';
 import { isValidAddress } from '@/utils/addresses';
 import { z } from 'zod';
 import {

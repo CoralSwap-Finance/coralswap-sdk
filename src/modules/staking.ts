@@ -20,7 +20,7 @@ import {
   CooldownError,
   StakingError,
 } from "@/errors";
-import { validateAddress } from "@/utils/validation";
+import { validateAddress, validatePositiveAmount } from "@/utils/validation";
 import { isValidAddress } from "@/utils/addresses";
 import { z } from "zod";
 

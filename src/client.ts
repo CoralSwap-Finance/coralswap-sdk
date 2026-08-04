@@ -64,8 +64,8 @@ export class CoralSwapClient {
    * @private
    */
   private async executeWithFallback<T>(
-      fn: (server: SorobanRpc.Server) => Promise<T>,
-      label: string,
+    fn: (server: SorobanRpc.Server) => Promise<T>,
+    label: string,
   ): Promise<T> {
     const options: RetryOptions = this.getRetryOptions();
 
@@ -99,9 +99,6 @@ export class CoralSwapClient {
         this._connectionPool.reportSuccess(rpcUrl);
         return result;
       } catch (err) {
-        // Non-retryable errors (e.g. ValidationError, bad simulation) must surface
-        // immediately — cycling through every fallback endpoint cannot fix them and
-        // only multiplies latency for a failure that retrying can never resolve.
         if (!isRetryable(err)) {
           throw err;
         }
