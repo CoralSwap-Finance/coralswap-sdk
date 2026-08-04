@@ -23,8 +23,6 @@ import {
 import { validateAddress } from "@/utils/validation";
 import { isValidAddress } from "@/utils/addresses";
 import { z } from "zod";
-import { TransactionError, CooldownError, StakingError } from "@/errors";
-import { validateAddress, validatePositiveAmount } from "@/utils/validation";
 
 /**
  * Staking module — manages LP token staking for governance weight

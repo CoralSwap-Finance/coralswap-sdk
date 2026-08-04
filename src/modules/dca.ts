@@ -32,15 +32,17 @@ const DCAParamsSchema = z
     tokenIn: z
       .string()
       .nonempty({ message: 'tokenIn must not be empty' })
-      .refine(isValidAddress, {
-        message: (value) => `tokenIn is not a valid Stellar address: ${value}`,
-      }),
+      .refine(
+        (value) => isValidAddress(value),
+        (value) => ({ message: `tokenIn is not a valid Stellar address: ${value}` }),
+      ),
     tokenOut: z
       .string()
       .nonempty({ message: 'tokenOut must not be empty' })
-      .refine(isValidAddress, {
-        message: (value) => `tokenOut is not a valid Stellar address: ${value}`,
-      }),
+      .refine(
+        (value) => isValidAddress(value),
+        (value) => ({ message: `tokenOut is not a valid Stellar address: ${value}` }),
+      ),
     amountPerInterval: z.bigint(),
     intervalSeconds: z
       .number({ invalid_type_error: 'intervalSeconds must be an integer' })
@@ -57,9 +59,10 @@ const DCAParamsSchema = z
     pairAddress: z
       .string()
       .nonempty({ message: 'pairAddress must not be empty' })
-      .refine(isValidAddress, {
-        message: (value) => `pairAddress is not a valid Stellar address: ${value}`,
-      }),
+      .refine(
+        (value) => isValidAddress(value),
+        (value) => ({ message: `pairAddress is not a valid Stellar address: ${value}` }),
+      ),
   })
   .superRefine((params, ctx) => {
     if (params.tokenIn === params.tokenOut) {
@@ -269,7 +272,9 @@ export class DCAModule {
    * @throws {ValidationError} If `owner` is not a valid Stellar address
    */
   async getDCASchedules(owner: string): Promise<DCASchedule[]> {
-    validateAddress(owner, 'owner');
+    if (!isValidAddress(owner)) {
+      throw new ValidationError(`owner is not a valid Stellar address: ${owner}`);
+    }
 
     const contract = new Contract(this.contractAddress);
     const op = contract.call('get_schedules', new Address(owner).toScVal());
