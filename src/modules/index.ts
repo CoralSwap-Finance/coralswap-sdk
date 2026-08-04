@@ -17,7 +17,7 @@ export {
 } from './health-check';
 export { RouterModule } from './router';
 export { TreasuryModule } from './treasury';
-export { StopLossModule } from './stop-loss';
+export { StopLossModule, DEFAULT_STALE_AFTER_MS } from './stop-loss';
 export type { TreasuryModuleOptions } from './treasury';
 export { AlertsModule, AlertModule } from './alerts';
 export { WebhookModule } from './webhooks';
@@ -28,6 +28,8 @@ export type {
   AlertEvent,
   CreateAlertParams,
   UpdateAlertParams,
+  PriceAlertParams,
+  ThresholdPriceAlert,
 } from './alerts';
 export { LeaderboardModule } from './leaderboard';
 export type { LeaderboardEntry, LeaderboardOptions } from './leaderboard';
@@ -36,3 +38,4 @@ export { TaxReportingModule } from './tax-reporting';
 export { GovernanceModule } from './governance';
 export { DCAModule } from './dca';
 export { LimitOrderModule } from './limit-orders';
+export { SquidModule } from './squid';
