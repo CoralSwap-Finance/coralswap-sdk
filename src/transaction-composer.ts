@@ -14,7 +14,6 @@ export class TransactionComposer {
     return this;
   }
 
-
   /**
    * Compose an add-liquidity operation and LP stake operation into
    * a single atomic transaction.
@@ -55,7 +54,6 @@ export class TransactionComposer {
 
     return this;
   }
-
   clear(): this {
     this.operations = [];
     return this;

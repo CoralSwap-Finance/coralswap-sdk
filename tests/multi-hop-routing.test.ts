@@ -402,6 +402,7 @@ describe('Multi-hop routing (dedicated methods)', () => {
     });
 
     it('uses custom recipient when to is provided', async () => {
+      const RECIPIENT = 'GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFSHONUCEOASW7QC7OX2H';
       const client = buildMockClient({
         [`${TOKEN_A}|${TOKEN_B}`]: { reserve0: RESERVE, reserve1: RESERVE, feeBps: FEE, token0: TOKEN_A, token1: TOKEN_B },
         [`${TOKEN_B}|${TOKEN_C}`]: { reserve0: RESERVE, reserve1: RESERVE, feeBps: FEE, token0: TOKEN_B, token1: TOKEN_C },
@@ -412,11 +413,11 @@ describe('Multi-hop routing (dedicated methods)', () => {
         path: [TOKEN_A, TOKEN_B, TOKEN_C],
         amount: 1_000_000n,
         tradeType: TradeType.EXACT_IN,
-        to: 'GRECIPIENT',
+        to: RECIPIENT,
       });
 
       const [calledSender] = (client.router.buildSwapExactTokensForTokens as jest.Mock).mock.calls[0];
-      expect(calledSender).toBe('GRECIPIENT');
+      expect(calledSender).toBe(RECIPIENT);
     });
   });
 });

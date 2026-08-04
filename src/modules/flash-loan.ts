@@ -429,7 +429,7 @@ export class FlashLoanModule {
   private async parseFlashLoanEvents(
     txResult: SorobanRpc.Api.GetSuccessfulTransactionResponse,
     request: FlashLoanRequest,
-    feeAmount: bigint,
+    _feeAmount: bigint,
   ): Promise<FlashLoanExecutedEvent | undefined> {
     try {
       const rawEvents = this.getRawEvents(txResult);

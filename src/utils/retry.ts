@@ -116,7 +116,9 @@ export function isRetryable(err: unknown): boolean {
     message.includes("503") ||
     message.includes("service unavailable") ||
     message.includes("econnreset") ||
-    message.includes("enotfound")
+    message.includes("enotfound") ||
+    message.includes("primary rpc down") ||
+    message.includes("rpc down")
   );
 }
 
