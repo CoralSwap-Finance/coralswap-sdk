@@ -79,7 +79,7 @@ export class CoralSwapClient {
       const rpcUrl = this._connectionPool.getEndpoint();
 
       if (rpcUrl !== this._activeRpcUrl) {
-        this._server = this.createRpcServer(rpcUrl);
+        this.server = this.createRpcServer(rpcUrl);
         this._poller = null;
         this._activeRpcUrl = rpcUrl;
         this.networkConfig.rpcUrl = rpcUrl;
