@@ -8,11 +8,8 @@ import {
 } from '@/types/dca';
 import { Signer } from '@/types/common';
 import { ValidationError, TransactionError } from '@/errors';
-import {
-  validateAddress,
-  validatePositiveAmount,
-  validateDistinctTokens,
-} from '@/utils/validation';
+import { isValidAddress } from '@/utils/addresses';
+import { z } from 'zod';
 import {
   Contract,
   nativeToScVal,
@@ -29,6 +26,77 @@ const MIN_TOTAL_INTERVALS = 2;
 
 /** Basis-points denominator used for savings calculations. */
 const BPS_DENOMINATOR = 10000n;
+
+const DCAParamsSchema = z
+  .object({
+    tokenIn: z
+      .string()
+      .nonempty({ message: 'tokenIn must not be empty' })
+      .refine(isValidAddress, {
+        message: (value) => `tokenIn is not a valid Stellar address: ${value}`,
+      }),
+    tokenOut: z
+      .string()
+      .nonempty({ message: 'tokenOut must not be empty' })
+      .refine(isValidAddress, {
+        message: (value) => `tokenOut is not a valid Stellar address: ${value}`,
+      }),
+    amountPerInterval: z.bigint(),
+    intervalSeconds: z
+      .number({ invalid_type_error: 'intervalSeconds must be an integer' })
+      .int({ message: 'intervalSeconds must be an integer' })
+      .min(MIN_INTERVAL_SECONDS, {
+        message: `intervalSeconds must be at least ${MIN_INTERVAL_SECONDS}`,
+      }),
+    totalIntervals: z
+      .number({ invalid_type_error: 'totalIntervals must be an integer' })
+      .int({ message: 'totalIntervals must be an integer' })
+      .min(MIN_TOTAL_INTERVALS, {
+        message: `totalIntervals must be at least ${MIN_TOTAL_INTERVALS}`,
+      }),
+    pairAddress: z
+      .string()
+      .nonempty({ message: 'pairAddress must not be empty' })
+      .refine(isValidAddress, {
+        message: (value) => `pairAddress is not a valid Stellar address: ${value}`,
+      }),
+  })
+  .superRefine((params, ctx) => {
+    if (params.tokenIn === params.tokenOut) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'tokenIn and tokenOut must be different addresses',
+        path: ['tokenOut'],
+      });
+    }
+
+    if (typeof params.amountPerInterval === 'bigint' && params.amountPerInterval <= 0n) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `amountPerInterval must be greater than 0, got ${params.amountPerInterval}`,
+        path: ['amountPerInterval'],
+      });
+    }
+  });
+
+function validateCreateDCAParams(params: DCAParams): void {
+  const result = DCAParamsSchema.safeParse(params);
+  if (result.success) return;
+
+  const issues = result.error.issues.map((issue) => ({
+    path: issue.path.join('.') || 'params',
+    message: issue.message,
+  }));
+
+  const message =
+    issues.length === 1
+      ? issues[0].message
+      : `Invalid DCA parameters: ${issues
+          .map((issue) => `${issue.path}: ${issue.message}`)
+          .join('; ')}`;
+
+  throw new ValidationError(message, { zodErrors: result.error.issues });
+}
 
 /**
  * DCA module — dollar-cost-averaging schedule creation and management.
@@ -68,31 +136,7 @@ export class DCAModule {
    * }, signer);
    */
   async createDCA(params: DCAParams, signer: Signer): Promise<string> {
-    validateAddress(params.tokenIn, 'tokenIn');
-    validateAddress(params.tokenOut, 'tokenOut');
-    validateAddress(params.pairAddress, 'pairAddress');
-    validateDistinctTokens(params.tokenIn, params.tokenOut);
-    validatePositiveAmount(params.amountPerInterval, 'amountPerInterval');
-
-    if (
-      !Number.isInteger(params.intervalSeconds) ||
-      params.intervalSeconds < MIN_INTERVAL_SECONDS
-    ) {
-      throw new ValidationError(
-        `intervalSeconds must be at least ${MIN_INTERVAL_SECONDS} (1 hour), got ${params.intervalSeconds}`,
-        { intervalSeconds: params.intervalSeconds },
-      );
-    }
-
-    if (
-      !Number.isInteger(params.totalIntervals) ||
-      params.totalIntervals < MIN_TOTAL_INTERVALS
-    ) {
-      throw new ValidationError(
-        `totalIntervals must be at least ${MIN_TOTAL_INTERVALS}, got ${params.totalIntervals}`,
-        { totalIntervals: params.totalIntervals },
-      );
-    }
+    validateCreateDCAParams(params);
 
     const signerPublicKey = await signer.publicKey();
     const contract = new Contract(this.contractAddress);
