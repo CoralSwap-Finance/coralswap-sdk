@@ -1,12 +1,12 @@
 import { CoralSwapClient, Network } from "../../src";
-import { RwaModule } from "../../src/rwa"; // CHECK: real export name/path
+import { RWAModule } from "../../src/rwa";
 
 const RUN_INTEGRATION = process.env.STELLAR_TESTNET === "true" && Boolean(process.env.TEST_KEYPAIR && process.env.TEST_RWA_POOL && process.env.TEST_NAV_FEED_ID);
 const describeIf = RUN_INTEGRATION ? describe : describe.skip;
 
-describeIf("RwaModule (Stellar Testnet integration)", () => {
+describeIf("RWAModule (Stellar Testnet integration)", () => {
   let client: CoralSwapClient;
-  let rwa: RwaModule; // CHECK: real class name
+  let rwa: RWAModule;
 
   const RWA_POOL = process.env.TEST_RWA_POOL as string;      // new env var — RWA pool contract address
   const NAV_FEED_ID = process.env.TEST_NAV_FEED_ID as string; // new env var — RedStone feed id for this pool
@@ -25,7 +25,7 @@ describeIf("RwaModule (Stellar Testnet integration)", () => {
       rpcUrl: RPC_URL,
       secretKey: KEYPAIR,
     });
-    rwa = new RwaModule(client); // CHECK: constructor signature
+    rwa = new RWAModule(client);
   });
 
   it("connects to the real RPC and reports healthy", async () => {
