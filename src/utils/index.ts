@@ -86,6 +86,7 @@ export {
 } from './events';
 export type { DecodeEventsOptions } from './events';
 
+export { EventCursor } from './event-cursor';
 export { ConnectionPool } from './connection-pool';
 
 export {

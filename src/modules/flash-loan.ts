@@ -20,6 +20,7 @@ import { estimateGas } from "@/utils/gas";
 import { DEFAULTS } from "@/config";
 import { decodeEvents } from "@/utils/events";
 import { SorobanRpc, scValToNative, xdr } from "@stellar/stellar-sdk";
+import { getTransactionStatus, shouldRetrySubmission } from "@/utils/idempotent-resubmission";
 
 /**
  * Flash Loan module -- first-class flash loan support for CoralSwap.
@@ -231,6 +232,35 @@ export class FlashLoanModule {
     const result = await this.client.submitTransaction([op]);
 
     if (!result.success) {
+      if (result.txHash) {
+        const txStatus = await getTransactionStatus(this.client.server, result.txHash);
+        const decision = shouldRetrySubmission(txStatus);
+
+        if (!decision.shouldRetry) {
+          if (txStatus.status === 'SUCCESS') {
+            const event = await this.parseFlashLoanEvents(
+              txStatus.result!,
+              request,
+              feeEstimate.feeAmount,
+            );
+            return {
+              txHash: result.txHash,
+              token: request.token,
+              amount: request.amount,
+              fee: feeEstimate.feeAmount,
+              ledger: txStatus.ledger,
+              event,
+            };
+          }
+
+          throw new FlashLoanError(
+            `Flash loan failed: ${result.error?.message ?? "Transaction failed on-chain"}`,
+            undefined,
+            result.txHash,
+          );
+        }
+      }
+
       throw new FlashLoanError(
         `Flash loan failed: ${result.error?.message ?? "Unknown error"}`,
         undefined,
@@ -396,6 +426,51 @@ export class FlashLoanModule {
     return reserve - safetyMargin;
   }
 
+  private async parseFlashLoanEvents(
+    txResult: SorobanRpc.Api.GetSuccessfulTransactionResponse,
+    request: FlashLoanRequest,
+    feeAmount: bigint,
+  ): Promise<FlashLoanExecutedEvent | undefined> {
+    try {
+      const rawEvents = this.getRawEvents(txResult);
+
+      const failedEvent = this.decodeFailedEvent(rawEvents);
+      if (failedEvent) {
+        throw new FlashLoanError(
+          `Flash loan callback failed: ${failedEvent.reason}`,
+          {
+            reason: failedEvent.reason,
+            token: failedEvent.token,
+            borrowedAmount: failedEvent.borrowedAmount,
+          },
+        );
+      }
+
+      const executedEvent = this.decodeExecutedEvent(rawEvents);
+      if (executedEvent) return executedEvent;
+
+      try {
+        const events = decodeEvents(txResult, {
+          contractId: request.pairAddress,
+        });
+        const flashLoanEvent = events.find((e) => e.type === "flash_loan");
+        if (flashLoanEvent && flashLoanEvent.type === "flash_loan") {
+          return {
+            type: "FlashLoanExecuted",
+            borrowedAmount: flashLoanEvent.amount,
+            feePaid: flashLoanEvent.fee,
+            callbackAddress: flashLoanEvent.borrower,
+            token: request.token,
+          };
+        }
+      } catch {
+      }
+    } catch (err) {
+      if (err instanceof FlashLoanError) throw err;
+    }
+    return undefined;
+  }
+
   private getRawEvents(txResult: any): xdr.ContractEvent[] {
     try {
       const sorobanMeta = txResult.resultMetaXdr.v3().sorobanMeta();
@@ -545,7 +620,10 @@ export class FlashLoanModule {
       // If simulation returns an error specifically about missing function,
       // that means the interface isn't implemented
       if (!sim.success && sim.error) {
-        const errorMsg = sim.error || "";
+        const errorMsg =
+          typeof sim.error === "string"
+            ? sim.error
+            : String(sim.error ?? "");
         if (
           errorMsg.includes("unknown function") ||
           errorMsg.includes("function not found") ||

@@ -399,6 +399,10 @@ Add the following secrets to your repository (Settings → Secrets → Actions):
 - [ADR-002 Error Handling Strategy](docs/adr/ADR-002-error-handling.md)
 - [ADR-003 Caching Approach](docs/adr/ADR-003-caching-approach.md)
 
+
+| `TEST_RWA_POOL`    | Deployed RWA pool contract address on testnet |
+| `TEST_NAV_FEED_ID` | RedStone NAV feed id for the pool's underlying asset |
+
 ## License
 
 MIT
