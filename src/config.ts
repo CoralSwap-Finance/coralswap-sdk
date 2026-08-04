@@ -1,5 +1,6 @@
 import { Network, Logger, Signer } from '@/types/common';
 import { PollingStrategy } from '@/utils/polling';
+import { RateLimiter } from '@/utils/rate-limiter';
 
 /**
  * Contract addresses per network deployment.
@@ -48,6 +49,29 @@ export interface CoralSwapConfig {
   maxPollingAttempts?: number;
   pollingBackoffFactor?: number;
   maxPollingIntervalMs?: number;
+  /**
+   * Optional rate limiter to throttle outbound RPC requests.
+   *
+   * When provided, every RPC call made by `CoralSwapClient` will call
+   * `rateLimiter.acquire()` before dispatching the request. This is useful
+   * when targeting public Soroban RPC endpoints that enforce request-rate
+   * limits.
+   *
+   * If omitted (the default), no throttling is applied and behaviour is
+   * identical to previous SDK versions.
+   *
+   * @example
+   * ```ts
+   * import { CoralSwapClient, Network, RateLimiter } from '@coralswap/sdk';
+   *
+   * const client = new CoralSwapClient({
+   *   network: Network.TESTNET,
+   *   secretKey: 'S...',
+   *   rateLimiter: new RateLimiter({ maxRequestsPerSecond: 5, maxBurst: 10 }),
+   * });
+   * ```
+   */
+  rateLimiter?: RateLimiter;
 }
 
 /** Network configuration for the Stellar testnet. */

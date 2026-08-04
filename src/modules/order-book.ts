@@ -1,6 +1,7 @@
 import { Trade, TradeFilter } from '../types/trade';
 import { UnifiedOrder, OrderSummary } from '../types/order-book';
 import { CoralSwapClient } from '@/client';
+import { validateWithSchema, OrderBookAddressSchema, TradeFilterSchema } from '@/schemas';
 
 // Mock data for open orders
 const MOCK_OPEN_LIMIT_ORDERS: UnifiedOrder[] = [
@@ -50,22 +51,23 @@ const MOCK_OPEN_STOP_LOSS_ORDERS: UnifiedOrder[] = [
   },
 ];
 
-export async function getLimitOrders(_address: string): Promise<UnifiedOrder[]> {
-  // This is a mock implementation.
+export async function getLimitOrders(address: string): Promise<UnifiedOrder[]> {
+  validateWithSchema(OrderBookAddressSchema, address, 'getLimitOrders.address');
   return MOCK_OPEN_LIMIT_ORDERS;
 }
 
-export async function getDcaOrders(_address: string): Promise<UnifiedOrder[]> {
-  // This is a mock implementation.
+export async function getDcaOrders(address: string): Promise<UnifiedOrder[]> {
+  validateWithSchema(OrderBookAddressSchema, address, 'getDcaOrders.address');
   return MOCK_OPEN_DCA_ORDERS;
 }
 
-export async function getStopLossOrders(_address: string): Promise<UnifiedOrder[]> {
-  // This is a mock implementation.
+export async function getStopLossOrders(address: string): Promise<UnifiedOrder[]> {
+  validateWithSchema(OrderBookAddressSchema, address, 'getStopLossOrders.address');
   return MOCK_OPEN_STOP_LOSS_ORDERS;
 }
 
 export async function getOpenOrders(address: string): Promise<UnifiedOrder[]> {
+  validateWithSchema(OrderBookAddressSchema, address, 'getOpenOrders.address');
   const limitOrders = await getLimitOrders(address);
   const dcaOrders = await getDcaOrders(address);
   const stopLossOrders = await getStopLossOrders(address);
@@ -82,6 +84,7 @@ export async function getOrderSummary(
   address: string,
   _client: CoralSwapClient,
 ): Promise<OrderSummary> {
+  validateWithSchema(OrderBookAddressSchema, address, 'getOrderSummary.address');
   const openOrders = await getOpenOrders(address);
 
   const byType = {
@@ -115,6 +118,10 @@ export async function getOrderSummary(
 }
 
 export async function getTradeHistory(address: string, filter?: TradeFilter): Promise<Trade[]> {
+    validateWithSchema(OrderBookAddressSchema, address, 'getTradeHistory.address');
+    if (filter !== undefined) {
+      validateWithSchema(TradeFilterSchema, filter, 'getTradeHistory.filter');
+    }
     // Mock implementations for all trade types
     const limitOrders: Trade[] = [
         {
