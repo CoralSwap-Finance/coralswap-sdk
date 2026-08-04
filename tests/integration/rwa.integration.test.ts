@@ -1,7 +1,7 @@
 import { CoralSwapClient, Network } from "../../src";
 import { RwaModule } from "../../src/rwa"; // CHECK: real export name/path
 
-const RUN_INTEGRATION = process.env.STELLAR_TESTNET === "true";
+const RUN_INTEGRATION = process.env.STELLAR_TESTNET === "true" && Boolean(process.env.TEST_KEYPAIR && process.env.TEST_RWA_POOL && process.env.TEST_NAV_FEED_ID);
 const describeIf = RUN_INTEGRATION ? describe : describe.skip;
 
 describeIf("RwaModule (Stellar Testnet integration)", () => {
