@@ -19,6 +19,7 @@ import {
   TransactionError,
   CooldownError,
   StakingError,
+} from "@/errors";
 import { validateAddress, validatePositiveAmount } from "@/utils/validation";
 import { isValidAddress } from "@/utils/addresses";
 import { z } from "zod";

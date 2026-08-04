@@ -8,6 +8,7 @@ import {
 } from '@/types/dca';
 import { Signer } from '@/types/common';
 import { ValidationError, TransactionError } from '@/errors';
+import { validateAddress } from '@/utils/validation';
 import { isValidAddress } from '@/utils/addresses';
 import { z } from 'zod';
 import {
@@ -32,15 +33,17 @@ const DCAParamsSchema = z
     tokenIn: z
       .string()
       .nonempty({ message: 'tokenIn must not be empty' })
-      .refine(isValidAddress, {
-        message: (value) => `tokenIn is not a valid Stellar address: ${value}`,
-      }),
+      .refine(
+        (val) => isValidAddress(val),
+        (val) => ({ message: `tokenIn is not a valid Stellar address: ${val}` }),
+      ),
     tokenOut: z
       .string()
       .nonempty({ message: 'tokenOut must not be empty' })
-      .refine(isValidAddress, {
-        message: (value) => `tokenOut is not a valid Stellar address: ${value}`,
-      }),
+      .refine(
+        (val) => isValidAddress(val),
+        (val) => ({ message: `tokenOut is not a valid Stellar address: ${val}` }),
+      ),
     amountPerInterval: z.bigint(),
     intervalSeconds: z
       .number({ invalid_type_error: 'intervalSeconds must be an integer' })
@@ -57,9 +60,10 @@ const DCAParamsSchema = z
     pairAddress: z
       .string()
       .nonempty({ message: 'pairAddress must not be empty' })
-      .refine(isValidAddress, {
-        message: (value) => `pairAddress is not a valid Stellar address: ${value}`,
-      }),
+      .refine(
+        (val) => isValidAddress(val),
+        (val) => ({ message: `pairAddress is not a valid Stellar address: ${val}` }),
+      ),
   })
   .superRefine((params, ctx) => {
     if (params.tokenIn === params.tokenOut) {
