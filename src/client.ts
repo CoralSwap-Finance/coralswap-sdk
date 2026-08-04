@@ -69,8 +69,8 @@ export class CoralSwapClient {
   ): Promise<T> {
     const options: RetryOptions = {
       maxRetries: this.config.maxRetries ?? DEFAULTS.maxRetries,
-      baseDelayMs: this.config.retryDelayMs ?? DEFAULTS.retryDelayMs,
-      maxDelayMs: this.config.maxRetryDelayMs ?? DEFAULTS.maxRetryDelayMs,
+      baseDelayMs: this.config.retryDelayMs !== undefined ? this.config.retryDelayMs : DEFAULTS.retryDelayMs,
+      maxDelayMs: this.config.maxRetryDelayMs !== undefined ? this.config.maxRetryDelayMs : DEFAULTS.maxRetryDelayMs,
     };
 
     let lastError: unknown;
