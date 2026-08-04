@@ -18,11 +18,7 @@ import {
   ValidationError,
   TransactionError,
   CooldownError,
-  StakingError,
-<<<<<<< HEAD
-=======
 } from "@/errors";
->>>>>>> feat/494-transaction-composer
 import { validateAddress, validatePositiveAmount } from "@/utils/validation";
 import { isValidAddress } from "@/utils/addresses";
 import { z } from "zod";
