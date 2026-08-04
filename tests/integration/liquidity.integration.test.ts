@@ -21,7 +21,7 @@ import { toSorobanAmount } from '../../src/utils/amounts';
  *   TEST_TOKEN_B     – contract address of token B
  *   TEST_RPC_URL     – optional RPC override
  */
-const SKIP = process.env.STELLAR_TESTNET !== 'true';
+const SKIP = process.env.STELLAR_TESTNET !== 'true' || !process.env.TEST_KEYPAIR;
 
 function requireEnv(name: string): string {
   const value = process.env[name];
