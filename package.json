@@ -14,7 +14,7 @@
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
     "test:integration": "jest --config jest.integration.config.js",
-    "test:integration:rwa": "jest --config jest.integration.config.js tests/integration/rwa.integration.test.ts"
+    "test:integration:rwa": "jest --config jest.integration.config.js tests/integration/rwa.integration.test.ts",
     "test:integration:portfolio": "jest --config jest.integration.config.js --testPathPattern=portfolio.integration",
     "test:integration:price-feed": "jest --config jest.integration.config.js --testPathPattern=price-feed.integration",
     "test:integration:flash-loan": "jest --config jest.integration.config.js --testPathPattern=flash-loan.integration",

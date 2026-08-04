@@ -66,33 +66,12 @@ export class CoralSwapClient {
       fn: (server: SorobanRpc.Server) => Promise<T>,
       label: string,
   ): Promise<T> {
-    const options: RetryOptions = {
-      maxRetries: this.config.maxRetries ?? DEFAULTS.maxRetries,
-      baseDelayMs: this.config.retryDelayMs ?? DEFAULTS.retryDelayMs,
-      maxDelayMs: this.config.maxRetryDelayMs ?? DEFAULTS.maxRetryDelayMs,
-    };
+    const options: RetryOptions = this.getRetryOptions();
 
     let lastError: unknown;
 
     for (let attempt = 0; attempt < this._connectionPool.size; attempt++) {
-      let rpcUrl: string;
-      try {
-        return await withRetry(
-            async () => {
-              // Acquire a rate-limiter token per dispatch attempt so retries
-              // and fallback-endpoint rotations are each individually throttled.
-              if (this._rateLimiter) {
-                await this._rateLimiter.acquire();
-              }
-              return fn(this.server);
-            },
-            options,
-            this.logger,
-            `${label}[RPC:${this._currentRpcIndex}]`,
-        rpcUrl = this._connectionPool.getEndpoint();
-      } catch (err) {
-        throw err;
-      }
+      const rpcUrl = this._connectionPool.getEndpoint();
 
       if (rpcUrl !== this._activeRpcUrl) {
         this._server = this.createRpcServer(rpcUrl);
@@ -103,10 +82,17 @@ export class CoralSwapClient {
 
       try {
         const result = await withRetry(
-          () => fn(this.server),
-          options,
-          this.logger,
-          `${label}[RPC:${rpcUrl}]`,
+            async () => {
+              // Acquire a rate-limiter token per dispatch attempt so retries
+              // and fallback-endpoint rotations are each individually throttled.
+              if (this._rateLimiter) {
+                await this._rateLimiter.acquire();
+              }
+              return fn(this.server);
+            },
+            options,
+            this.logger,
+            `${label}[RPC:${rpcUrl}]`,
         );
 
         this._connectionPool.reportSuccess(rpcUrl);
@@ -720,12 +706,19 @@ export class CoralSwapClient {
 
   /**
    * Internal helper to get structured retry options.
+   *
+   * A configured `deadlineMs` is a relative total-time budget per RPC call,
+   * so it is converted into an absolute deadline timestamp at call time.
    */
   private getRetryOptions(): RetryOptions {
-    return {
+    const options: RetryOptions = {
       maxRetries: this.config.maxRetries ?? DEFAULTS.maxRetries,
       baseDelayMs: this.config.retryDelayMs ?? DEFAULTS.retryDelayMs,
       maxDelayMs: this.config.maxRetryDelayMs ?? DEFAULTS.maxRetryDelayMs,
     };
+    if (typeof this.config.deadlineMs === "number") {
+      options.deadlineMs = Date.now() + this.config.deadlineMs;
+    }
+    return options;
   }
 }
