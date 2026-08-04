@@ -3,7 +3,7 @@ import { SwapModule } from "../src/modules/swap";
 import { Network } from "../src/types/common";
 import { SwapHistoryFilter, SwapHistoryEvent } from "../src/types/swap";
 import { ValidationError } from "../src/errors";
-import { SorobanRpc } from "@stellar/stellar-sdk";
+import { SorobanRpc, xdr } from "@stellar/stellar-sdk";
 
 // ---------------------------------------------------------------------------
 // Shared test fixtures
@@ -88,6 +88,23 @@ function makeEventsResponse(
   };
 }
 
+const EXPECTED_SWAP_TOPIC = xdr.ScVal.scvSymbol("swap").toXDR("base64");
+
+function mockGetEvents(
+  client: CoralSwapClient,
+  events: Record<string, unknown>[],
+): jest.SpyInstance {
+  const response = makeEventsResponse(events);
+  const spy = jest.spyOn(client.server, "getEvents").mockImplementation((req) => {
+    const topic0 = req.filters?.[0]?.topics?.[0]?.[0];
+    if (topic0 !== EXPECTED_SWAP_TOPIC) {
+      return Promise.resolve({ events: [], latestLedger: req.startLedger ?? 0 } as unknown as SorobanRpc.Api.GetEventsResponse);
+    }
+    return Promise.resolve(response);
+  });
+  return spy;
+}
+
 // ---------------------------------------------------------------------------
 // Test suite
 // ---------------------------------------------------------------------------
@@ -118,9 +135,7 @@ describe("SwapModule.getSwapHistory()", () => {
 
   describe("empty results", () => {
     it("returns [] when RPC returns no events", async () => {
-      jest
-        .spyOn(client.server, "getEvents")
-        .mockResolvedValue(makeEventsResponse([]));
+      mockGetEvents(client, []);
 
       const result = await swapModule.getSwapHistory({ pairAddress: PAIR_A });
       expect(result).toEqual([]);
@@ -139,9 +154,7 @@ describe("SwapModule.getSwapHistory()", () => {
         txHash: "tx1",
       });
 
-      jest
-        .spyOn(client.server, "getEvents")
-        .mockResolvedValue(makeEventsResponse([event]));
+      mockGetEvents(client, [event]);
 
       const result = await swapModule.getSwapHistory({ userAddress: USER_2 });
       expect(result).toEqual([]);
@@ -150,7 +163,13 @@ describe("SwapModule.getSwapHistory()", () => {
     it("returns [] when RPC response has no events array", async () => {
       jest
         .spyOn(client.server, "getEvents")
-        .mockResolvedValue({ latestLedger: 2000 } as unknown as SorobanRpc.Api.GetEventsResponse);
+        .mockImplementation((req) => {
+          const topic0 = req.filters?.[0]?.topics?.[0]?.[0];
+          if (topic0 !== EXPECTED_SWAP_TOPIC) {
+            return Promise.resolve({ events: [], latestLedger: 0 } as unknown as SorobanRpc.Api.GetEventsResponse);
+          }
+          return Promise.resolve({ latestLedger: 2000 } as unknown as SorobanRpc.Api.GetEventsResponse);
+        });
 
       const result = await swapModule.getSwapHistory({ pairAddress: PAIR_A });
       expect(result).toEqual([]);
@@ -169,9 +188,7 @@ describe("SwapModule.getSwapHistory()", () => {
         txHash: "tx1",
       });
 
-      jest
-        .spyOn(client.server, "getEvents")
-        .mockResolvedValue(makeEventsResponse([event]));
+      mockGetEvents(client, [event]);
 
       const result = await swapModule.getSwapHistory({
         pairAddress: PAIR_A,
@@ -200,9 +217,7 @@ describe("SwapModule.getSwapHistory()", () => {
         txHash: "txA",
       });
 
-      jest
-        .spyOn(client.server, "getEvents")
-        .mockResolvedValue(makeEventsResponse([eventA]));
+      mockGetEvents(client, [eventA]);
 
       const result = await swapModule.getSwapHistory({ pairAddress: PAIR_A });
 
@@ -212,9 +227,7 @@ describe("SwapModule.getSwapHistory()", () => {
     });
 
     it("passes pairAddress as contractId filter to getEvents", async () => {
-      const getEventsSpy = jest
-        .spyOn(client.server, "getEvents")
-        .mockResolvedValue(makeEventsResponse([]));
+      const getEventsSpy = mockGetEvents(client, []);
 
       await swapModule.getSwapHistory({ pairAddress: PAIR_A });
 
@@ -241,9 +254,7 @@ describe("SwapModule.getSwapHistory()", () => {
         ledgerClosedAt: "2024-01-15T12:00:00Z",
       });
 
-      jest
-        .spyOn(client.server, "getEvents")
-        .mockResolvedValue(makeEventsResponse([event]));
+      mockGetEvents(client, [event]);
 
       const result = await swapModule.getSwapHistory({ pairAddress: PAIR_A });
 
@@ -287,9 +298,7 @@ describe("SwapModule.getSwapHistory()", () => {
         }),
       ];
 
-      jest
-        .spyOn(client.server, "getEvents")
-        .mockResolvedValue(makeEventsResponse(events));
+      mockGetEvents(client, events);
 
       const result = await swapModule.getSwapHistory({ pairAddress: PAIR_A });
 
@@ -330,9 +339,7 @@ describe("SwapModule.getSwapHistory()", () => {
         }),
       ];
 
-      jest
-        .spyOn(client.server, "getEvents")
-        .mockResolvedValue(makeEventsResponse(events));
+      mockGetEvents(client, events);
 
       const result = await swapModule.getSwapHistory({ userAddress: USER_1 });
 
@@ -367,9 +374,7 @@ describe("SwapModule.getSwapHistory()", () => {
         }),
       ];
 
-      jest
-        .spyOn(client.server, "getEvents")
-        .mockResolvedValue(makeEventsResponse(events));
+      mockGetEvents(client, events);
 
       const result = await swapModule.getSwapHistory({ userAddress: USER_1 });
 
@@ -412,9 +417,7 @@ describe("SwapModule.getSwapHistory()", () => {
         }),
       ];
 
-      jest
-        .spyOn(client.server, "getEvents")
-        .mockResolvedValue(makeEventsResponse(events));
+      mockGetEvents(client, events);
 
       const result = await swapModule.getSwapHistory({
         pairAddress: PAIR_A,
@@ -440,9 +443,7 @@ describe("SwapModule.getSwapHistory()", () => {
         txHash: "tx1",
       });
 
-      jest
-        .spyOn(client.server, "getEvents")
-        .mockResolvedValue(makeEventsResponse([event]));
+      mockGetEvents(client, [event]);
 
       const result = await swapModule.getSwapHistory({
         pairAddress: PAIR_A,
@@ -459,9 +460,7 @@ describe("SwapModule.getSwapHistory()", () => {
 
   describe("ledger range filtering", () => {
     it("defaults to last 1000 ledgers when no range is specified", async () => {
-      const getEventsSpy = jest
-        .spyOn(client.server, "getEvents")
-        .mockResolvedValue(makeEventsResponse([]));
+      const getEventsSpy = mockGetEvents(client, []);
 
       await swapModule.getSwapHistory({ pairAddress: PAIR_A });
 
@@ -471,9 +470,7 @@ describe("SwapModule.getSwapHistory()", () => {
     });
 
     it("uses provided fromLedger and toLedger", async () => {
-      const getEventsSpy = jest
-        .spyOn(client.server, "getEvents")
-        .mockResolvedValue(makeEventsResponse([]));
+      const getEventsSpy = mockGetEvents(client, []);
 
       await swapModule.getSwapHistory({
         pairAddress: PAIR_A,
@@ -512,9 +509,7 @@ describe("SwapModule.getSwapHistory()", () => {
         }),
       ];
 
-      jest
-        .spyOn(client.server, "getEvents")
-        .mockResolvedValue(makeEventsResponse(events));
+      mockGetEvents(client, events);
 
       const result = await swapModule.getSwapHistory({
         pairAddress: PAIR_A,
@@ -527,9 +522,7 @@ describe("SwapModule.getSwapHistory()", () => {
     });
 
     it("throws ValidationError when fromLedger > toLedger", async () => {
-      jest
-        .spyOn(client.server, "getEvents")
-        .mockResolvedValue(makeEventsResponse([]));
+      mockGetEvents(client, []);
 
       await expect(
         swapModule.getSwapHistory({
@@ -551,9 +544,7 @@ describe("SwapModule.getSwapHistory()", () => {
     it("clamps fromLedger to 0 when currentLedger < 1000", async () => {
       jest.spyOn(client, "getCurrentLedger").mockResolvedValue(500);
 
-      const getEventsSpy = jest
-        .spyOn(client.server, "getEvents")
-        .mockResolvedValue(makeEventsResponse([]));
+      const getEventsSpy = mockGetEvents(client, []);
 
       await swapModule.getSwapHistory({ pairAddress: PAIR_A });
 
@@ -583,9 +574,7 @@ describe("SwapModule.getSwapHistory()", () => {
         }),
       );
 
-      jest
-        .spyOn(client.server, "getEvents")
-        .mockResolvedValue(makeEventsResponse(events));
+      mockGetEvents(client, events);
 
       const result = await swapModule.getSwapHistory({
         pairAddress: PAIR_A,
@@ -596,9 +585,7 @@ describe("SwapModule.getSwapHistory()", () => {
     });
 
     it("passes limit to getEvents request", async () => {
-      const getEventsSpy = jest
-        .spyOn(client.server, "getEvents")
-        .mockResolvedValue(makeEventsResponse([]));
+      const getEventsSpy = mockGetEvents(client, []);
 
       await swapModule.getSwapHistory({ pairAddress: PAIR_A, limit: 50 });
 
@@ -608,9 +595,7 @@ describe("SwapModule.getSwapHistory()", () => {
     });
 
     it("uses default limit of 200 when not specified", async () => {
-      const getEventsSpy = jest
-        .spyOn(client.server, "getEvents")
-        .mockResolvedValue(makeEventsResponse([]));
+      const getEventsSpy = mockGetEvents(client, []);
 
       await swapModule.getSwapHistory({ pairAddress: PAIR_A });
 
@@ -638,9 +623,7 @@ describe("SwapModule.getSwapHistory()", () => {
     });
 
     it("accepts valid G... userAddress", async () => {
-      jest
-        .spyOn(client.server, "getEvents")
-        .mockResolvedValue(makeEventsResponse([]));
+      mockGetEvents(client, []);
 
       await expect(
         swapModule.getSwapHistory({ userAddress: USER_1 }),
@@ -648,9 +631,7 @@ describe("SwapModule.getSwapHistory()", () => {
     });
 
     it("accepts valid C... pairAddress", async () => {
-      jest
-        .spyOn(client.server, "getEvents")
-        .mockResolvedValue(makeEventsResponse([]));
+      mockGetEvents(client, []);
 
       await expect(
         swapModule.getSwapHistory({ pairAddress: PAIR_A }),
@@ -658,17 +639,13 @@ describe("SwapModule.getSwapHistory()", () => {
     });
 
     it("accepts empty filter object (no filters)", async () => {
-      jest
-        .spyOn(client.server, "getEvents")
-        .mockResolvedValue(makeEventsResponse([]));
+      mockGetEvents(client, []);
 
       await expect(swapModule.getSwapHistory({})).resolves.toEqual([]);
     });
 
     it("accepts no argument (default filter)", async () => {
-      jest
-        .spyOn(client.server, "getEvents")
-        .mockResolvedValue(makeEventsResponse([]));
+      mockGetEvents(client, []);
 
       await expect(swapModule.getSwapHistory()).resolves.toEqual([]);
     });
@@ -701,11 +678,7 @@ describe("SwapModule.getSwapHistory()", () => {
         txHash: "tx_bad",
       };
 
-      jest
-        .spyOn(client.server, "getEvents")
-        .mockResolvedValue(
-          makeEventsResponse([malformedEvent as unknown as Record<string, unknown>, validEvent]),
-        );
+      mockGetEvents(client, [malformedEvent as unknown as Record<string, unknown>, validEvent]);
 
       const result = await swapModule.getSwapHistory({ pairAddress: PAIR_A });
 
@@ -734,11 +707,7 @@ describe("SwapModule.getSwapHistory()", () => {
         txHash: "tx_swap",
       });
 
-      jest
-        .spyOn(client.server, "getEvents")
-        .mockResolvedValue(
-          makeEventsResponse([nonSwapEvent as unknown as Record<string, unknown>, swapEvent]),
-        );
+      mockGetEvents(client, [nonSwapEvent as unknown as Record<string, unknown>, swapEvent]);
 
       const result = await swapModule.getSwapHistory({ pairAddress: PAIR_A });
 
@@ -759,9 +728,7 @@ describe("SwapModule.getSwapHistory()", () => {
         txHash: "",
       });
 
-      jest
-        .spyOn(client.server, "getEvents")
-        .mockResolvedValue(makeEventsResponse([event]));
+      mockGetEvents(client, [event]);
 
       const result = await swapModule.getSwapHistory({ pairAddress: PAIR_A });
 
@@ -789,9 +756,7 @@ describe("SwapModule.getSwapHistory()", () => {
         ledgerClosedAt: "2024-06-01T00:00:00Z",
       });
 
-      jest
-        .spyOn(client.server, "getEvents")
-        .mockResolvedValue(makeEventsResponse([event]));
+      mockGetEvents(client, [event]);
 
       const result = await swapModule.getSwapHistory({ pairAddress: PAIR_A });
 
@@ -838,9 +803,7 @@ describe("SwapModule.getSwapHistory()", () => {
         ledgerClosedAt: closedAt,
       });
 
-      jest
-        .spyOn(client.server, "getEvents")
-        .mockResolvedValue(makeEventsResponse([event]));
+      mockGetEvents(client, [event]);
 
       const result = await swapModule.getSwapHistory({ pairAddress: PAIR_A });
 
