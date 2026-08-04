@@ -568,9 +568,12 @@ describe('executeWithFallback', () => {
       { response: { status: 503 } },
     );
 
-    // Every endpoint fails with the retryable error.
     const mockGetHealth = jest.fn().mockRejectedValue(retryableError);
-    client.server.getHealth = mockGetHealth;
+    const mockServer = { getHealth: mockGetHealth } as any;
+    client.server = mockServer;
+    jest.spyOn(client, 'server', 'set').mockImplementation(() => {
+      (client as any)._server = mockServer;
+    });
 
     // isHealthy() catches all errors and returns false — confirm it tried all endpoints.
     await expect(client.isHealthy()).resolves.toBe(false);
