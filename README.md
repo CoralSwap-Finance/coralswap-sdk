@@ -289,6 +289,7 @@ import {
   sortTokens,
   isValidAddress,
   withRetry,
+  DeadlineError,
 } from "@coralswap/sdk";
 
 // Amount conversions
@@ -305,6 +306,29 @@ const result = await withRetry(() => client.factory.getAllPairs(), {
   maxRetries: 5,
   baseDelayMs: 500,
 });
+
+// Bound the total time spent on a single RPC call (including retries).
+// Once the deadline elapses, retries stop and a DeadlineError is thrown —
+// useful for hard latency caps on user-facing requests.
+const bounded = await withRetry(() => client.factory.getAllPairs(), {
+  maxRetries: 5,
+  baseDelayMs: 500,
+});
+
+// Or set it once on the client so every RPC call shares the bound.
+const client = new CoralSwapClient({
+  network: Network.TESTNET,
+  secretKey: "S...",
+  deadlineMs: 5000, // give up after 5 seconds total, DeadlineError is thrown
+});
+
+try {
+  const healthy = await client.isHealthy();
+} catch (err) {
+  if (err instanceof DeadlineError) {
+    console.log("RPC retries exceeded the 5s deadline");
+  }
+}
 ```
 
 ## Error Handling

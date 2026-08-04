@@ -44,6 +44,34 @@ export interface CoralSwapConfig {
   retryDelayMs?: number;
   /** Maximum delay in milliseconds between retry attempts */
   maxRetryDelayMs?: number;
+  /**
+   * Maximum total time in milliseconds allowed for a single RPC call,
+   * including every retry attempt. Once the deadline is exceeded, retries
+   * stop and a `DeadlineError` is thrown instead.
+   *
+   * The deadline is measured per call — each RPC call gets a fresh window
+   * starting when the call begins.
+   *
+   * If omitted (the default), RPC calls retry up to `maxRetries` with no
+   * overall time bound, identical to previous SDK versions.
+   *
+   * @example
+   * ```ts
+   * import { CoralSwapClient, Network } from '@coralswap/sdk';
+   *
+   * const client = new CoralSwapClient({
+   *   network: Network.TESTNET,
+   *   secretKey: 'S...',
+   *   // Bound the total time spent on any single RPC call (including
+   *   // retries) to 5 seconds.
+   *   deadlineMs: 5000,
+   * });
+   *
+   * // Retries stop and a DeadlineError is thrown once 5s elapse.
+   * const healthy = await client.isHealthy();
+   * ```
+   */
+  deadlineMs?: number;
   pollingStrategy?: PollingStrategy;
   pollingIntervalMs?: number;
   maxPollingAttempts?: number;

@@ -4,7 +4,7 @@ import { ConnectionPool } from '../src';
 import { Network, Signer } from '../src/types/common';
 import { SignerError } from '../src/errors';
 import { DEFAULTS } from '../src/config';
-import { resetCircuitBreakers } from '../src/utils/retry';
+import { resetCircuitBreakers, DeadlineError } from '../src/utils/retry';
 
 // Mock transaction for testing
 const mockTx = {
@@ -110,12 +110,14 @@ describe('CoralSwapClient', () => {
         defaultDeadlineSec: 600,
         maxRetries: 5,
         retryDelayMs: 2000,
+        deadlineMs: 5000,
       });
 
       expect(client.config.defaultSlippageBps).toBe(100);
       expect(client.config.defaultDeadlineSec).toBe(600);
       expect(client.config.maxRetries).toBe(5);
       expect(client.config.retryDelayMs).toBe(2000);
+      expect(client.config.deadlineMs).toBe(5000);
     });
   });
 
@@ -522,6 +524,10 @@ describe('executeWithFallback', () => {
     resetCircuitBreakers();
   });
 
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
   it('surfaces a non-retryable error immediately without cycling through fallback endpoints', async () => {
     // Three RPC URLs configured — only the first should ever be attempted.
     const client = new CoralSwapClient({
@@ -577,5 +583,41 @@ describe('executeWithFallback', () => {
 
     // Should have been called once per RPC endpoint (3 total).
     expect(mockGetHealth).toHaveBeenCalledTimes(rpcUrls.length);
+  });
+
+  it('stops retrying once the configured deadlineMs is exceeded and throws DeadlineError', async () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date('2020-01-01T00:00:00.000Z'));
+
+    const client = new CoralSwapClient({
+      network: Network.TESTNET,
+      secretKey: TEST_SECRET,
+      // 50ms total-time budget per RPC call.
+      deadlineMs: 50,
+      maxRetries: 10,
+      retryDelayMs: 10,
+    });
+
+    // Retryable error that keeps failing — the deadline must stop the retries.
+    const retryableError = Object.assign(
+      new Error('503 Service Unavailable'),
+      { response: { status: 503 } },
+    );
+    const mockGetLatestLedger = jest.fn().mockRejectedValue(retryableError);
+    client.server.getLatestLedger = mockGetLatestLedger;
+
+    const promise = client.getCurrentLedger().catch((e) => e);
+
+    // Advances past the 50ms deadline; without a deadline the 10 retries
+    // with backoff would keep going well beyond this window.
+    await jest.advanceTimersByTimeAsync(5000);
+
+    const err = await promise;
+    expect(err).toBeInstanceOf(DeadlineError);
+    expect(err.message).not.toContain('503');
+
+    // attempt 1 at t=0, attempt 2 at t=10, attempt 3 at t=30 — the
+    // deadline check fires at t=70 before a 4th attempt can start.
+    expect(mockGetLatestLedger).toHaveBeenCalledTimes(3);
   });
 });
