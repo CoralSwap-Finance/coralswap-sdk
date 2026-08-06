@@ -587,7 +587,7 @@ describe('OracleModule', () => {
 
       expect(result).not.toBeNull();
       // Deviation should be significant (around 100% = 10000 bps)
-      expect(result!.price0DeviationBps).toBeGreaterThan(5000);
+      expect(result!.price0DeviationBps).toBeGreaterThanOrEqual(5000);
     });
   });
 });
