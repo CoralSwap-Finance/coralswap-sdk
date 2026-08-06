@@ -523,4 +523,55 @@ describe('FactoryModule — cache TTL', () => {
         await module.getPairAddress(TOKEN_A, TOKEN_B);
         expect(getPairFn).toHaveBeenCalledTimes(2); // invalidated → re-fetch
     });
+
+    // -----------------------------------------------------------------------
+    // verifyPairAddress
+    // -----------------------------------------------------------------------
+
+    describe('verifyPairAddress', () => {
+        it('returns true for a registered pair', async () => {
+            const client = buildClient();
+            const module = new FactoryModule(client);
+            // Mock getAllPairs to include the test pair
+            (client as any).factory.getAllPairs = jest.fn().mockResolvedValue([
+                PAIR_AB,
+                'COTHERPAIR0000000000000000000000000000000000000000000',
+            ]);
+
+            const result = await module.verifyPairAddress(PAIR_AB);
+            expect(result).toBe(true);
+        });
+
+        it('returns false for an unregistered/spoofed address', async () => {
+            const client = buildClient();
+            const module = new FactoryModule(client);
+            const spoofedAddress = 'CSPOOFED000000000000000000000000000000000000000000000';
+
+            (client as any).factory.getAllPairs = jest.fn().mockResolvedValue([
+                PAIR_AB,
+                PAIR_CD,
+            ]);
+
+            const result = await module.verifyPairAddress(spoofedAddress);
+            expect(result).toBe(false);
+        });
+
+        it('returns false for empty pair list', async () => {
+            const client = buildClient();
+            const module = new FactoryModule(client);
+            (client as any).factory.getAllPairs = jest.fn().mockResolvedValue([]);
+
+            const result = await module.verifyPairAddress(PAIR_AB);
+            expect(result).toBe(false);
+        });
+
+        it('throws ValidationError for empty address', async () => {
+            const client = buildClient();
+            const module = new FactoryModule(client);
+            (client as any).factory.getAllPairs = jest.fn().mockResolvedValue([]);
+
+            await expect(module.verifyPairAddress('')).rejects.toThrow();
+            await expect(module.verifyPairAddress('   ')).rejects.toThrow();
+        });
+    });
 });

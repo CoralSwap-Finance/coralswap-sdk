@@ -621,4 +621,228 @@ describe('StopLossModule', () => {
       );
     });
   });
+
+  describe('Oracle Staleness Checks on Enrichment Paths', () => {
+  describe('getStopLoss() with stale oracle', () => {
+    it('throws StaleOracleError by default when oracle is stale', async () => {
+      jest
+        .spyOn(client, 'simulateTransaction')
+        .mockResolvedValueOnce(makeSimResult(makeOrderNative()))
+        .mockResolvedValueOnce(
+          makeSimResult({
+            price: '8500000',
+            timestamp: NOW_MS - 6 * 60 * 1000, // 6 minutes old (> DEFAULT_STALE_AFTER_MS)
+          }),
+        );
+
+      await expect(stopLoss.getStopLoss('order-1')).rejects.toThrow(
+        StaleOracleError,
+      );
+    });
+
+    it('throws StaleOracleError with custom staleness threshold', async () => {
+      jest
+        .spyOn(client, 'simulateTransaction')
+        .mockResolvedValueOnce(makeSimResult(makeOrderNative()))
+        .mockResolvedValueOnce(
+          makeSimResult({
+            price: '8500000',
+            timestamp: NOW_MS - 2 * 60 * 1000, // 2 minutes old
+          }),
+        );
+
+      await expect(
+        stopLoss.getStopLoss('order-1', { staleAfterMs: 60_000 }), // 1 minute threshold
+      ).rejects.toThrow(StaleOracleError);
+    });
+
+    it('accepts fresh oracle price within default threshold', async () => {
+      jest
+        .spyOn(client, 'simulateTransaction')
+        .mockResolvedValueOnce(makeSimResult(makeOrderNative()))
+        .mockResolvedValueOnce(
+          makeSimResult({
+            price: '8500000',
+            timestamp: NOW_MS - 4 * 60 * 1000, // 4 minutes old (< DEFAULT_STALE_AFTER_MS)
+          }),
+        );
+
+      const order = await stopLoss.getStopLoss('order-1');
+
+      expect(order.currentPrice).toBe(8_500_000n);
+      expect(order.triggered).toBe(true);
+    });
+
+    it('accepts oracle price at exact staleness boundary', async () => {
+      jest
+        .spyOn(client, 'simulateTransaction')
+        .mockResolvedValueOnce(makeSimResult(makeOrderNative()))
+        .mockResolvedValueOnce(
+          makeSimResult({
+            price: '8500000',
+            timestamp: NOW_MS - 5 * 60 * 1000, // Exactly 5 minutes old
+          }),
+        );
+
+      const order = await stopLoss.getStopLoss('order-1');
+
+      expect(order.currentPrice).toBe(8_500_000n);
+    });
+  });
+
+  describe('getStopLossOrders() with stale oracle', () => {
+    it('throws StaleOracleError by default when any oracle is stale', async () => {
+      jest
+        .spyOn(client, 'simulateTransaction')
+        .mockResolvedValueOnce(
+          makeSimResult([
+            makeOrderNative({ id: 'order-1' }),
+            makeOrderNative({ id: 'order-2' }),
+          ]),
+        )
+        .mockResolvedValueOnce(
+          makeSimResult({
+            price: '10000000',
+            timestamp: NOW_MS - 4 * 60 * 1000, // Fresh
+          }),
+        )
+        .mockResolvedValueOnce(
+          makeSimResult({
+            price: '10000000',
+            timestamp: NOW_MS - 6 * 60 * 1000, // Stale
+          }),
+        );
+
+      await expect(stopLoss.getStopLossOrders(OWNER)).rejects.toThrow(
+        StaleOracleError,
+      );
+    });
+
+    it('accepts all orders when all oracles are fresh', async () => {
+      jest
+        .spyOn(client, 'simulateTransaction')
+        .mockResolvedValueOnce(
+          makeSimResult([
+            makeOrderNative({ id: 'order-1' }),
+            makeOrderNative({ id: 'order-2' }),
+          ]),
+        )
+        .mockResolvedValueOnce(
+          makeSimResult({
+            price: '10000000',
+            timestamp: NOW_MS - 2 * 60 * 1000, // 2 minutes
+          }),
+        )
+        .mockResolvedValueOnce(
+          makeSimResult({
+            price: '9500000',
+            timestamp: NOW_MS - 3 * 60 * 1000, // 3 minutes
+          }),
+        );
+
+      const orders = await stopLoss.getStopLossOrders(OWNER);
+
+      expect(orders).toHaveLength(2);
+      expect(orders[0].currentPrice).toBe(10_000_000n);
+      expect(orders[1].currentPrice).toBe(9_500_000n);
+    });
+
+    it('respects custom staleness threshold for all orders', async () => {
+      jest
+        .spyOn(client, 'simulateTransaction')
+        .mockResolvedValueOnce(
+          makeSimResult([makeOrderNative({ id: 'order-1' })]),
+        )
+        .mockResolvedValueOnce(
+          makeSimResult({
+            price: '10000000',
+            timestamp: NOW_MS - 90_000, // 90 seconds old
+          }),
+        );
+
+      await expect(
+        stopLoss.getStopLossOrders(OWNER, {}, { staleAfterMs: 60_000 }),
+      ).rejects.toThrow(StaleOracleError);
+    });
+  });
+
+  describe('isStopLossTriggered() with default staleness', () => {
+    it('throws StaleOracleError by default when oracle is stale', async () => {
+      jest.spyOn(client, 'simulateTransaction').mockResolvedValue(
+        makeSimResult({
+          price: '8500000',
+          timestamp: NOW_MS - 6 * 60 * 1000, // 6 minutes old
+        }),
+      );
+
+      await expect(
+        stopLoss.isStopLossTriggered(makeOrder()),
+      ).rejects.toThrow(StaleOracleError);
+    });
+
+    it('accepts fresh oracle by default', async () => {
+      jest.spyOn(client, 'simulateTransaction').mockResolvedValue(
+        makeSimResult({
+          price: '8500000',
+          timestamp: NOW_MS - 4 * 60 * 1000, // 4 minutes old
+        }),
+      );
+
+      await expect(
+        stopLoss.isStopLossTriggered(makeOrder()),
+      ).resolves.toBe(true);
+    });
+
+    it('still respects explicit staleness override', async () => {
+      jest.spyOn(client, 'simulateTransaction').mockResolvedValue(
+        makeSimResult({
+          price: '8500000',
+          timestamp: NOW_MS - 2 * 60 * 1000, // 2 minutes old
+        }),
+      );
+
+      // Should pass with default (5min)
+      await expect(
+        stopLoss.isStopLossTriggered(makeOrder()),
+      ).resolves.toBe(true);
+
+      // Should fail with 1min threshold
+      await expect(
+        stopLoss.isStopLossTriggered(makeOrder(), { staleAfterMs: 60_000 }),
+      ).rejects.toThrow(StaleOracleError);
+    });
+  });
+
+  describe('Oracle without timestamp', () => {
+    it('allows enrichment when oracle has no timestamp', async () => {
+      jest
+        .spyOn(client, 'simulateTransaction')
+        .mockResolvedValueOnce(makeSimResult(makeOrderNative()))
+        .mockResolvedValueOnce(
+          makeSimResult({
+            price: '8500000',
+            // No timestamp field
+          }),
+        );
+
+      const order = await stopLoss.getStopLoss('order-1');
+
+      expect(order.currentPrice).toBe(8_500_000n);
+      expect(order.triggered).toBe(true);
+    });
+
+    it('allows trigger check when oracle has no timestamp', async () => {
+      jest.spyOn(client, 'simulateTransaction').mockResolvedValue(
+        makeSimResult({
+          price: '8500000',
+          // No timestamp field
+        }),
+      );
+
+      await expect(
+        stopLoss.isStopLossTriggered(makeOrder()),
+      ).resolves.toBe(true);
+    });
+  });
+  });
 });

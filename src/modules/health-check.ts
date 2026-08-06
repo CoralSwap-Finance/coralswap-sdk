@@ -16,8 +16,6 @@
 
 import { SorobanRpc, Contract, xdr, StrKey } from '@stellar/stellar-sdk';
 
-import { sleep } from '@/utils/retry';
-
 /** Default RPC health-probe timeout in milliseconds. */
 const DEFAULT_RPC_TIMEOUT_MS = 5_000;
 
@@ -88,27 +86,6 @@ export interface EndpointScore {
 }
 
 /**
- * Determine whether an error represents a network-level or timeout failure
- * (as opposed to a contract-logic error, which may be retryable).
- */
-function isProbeFailure(err: unknown): boolean {
-  if (err instanceof Error) {
-    const msg = err.message.toLowerCase();
-    return (
-      msg.includes('timeout') ||
-      msg.includes('abort') ||
-      msg.includes('network') ||
-      msg.includes('econnrefused') ||
-      msg.includes('enotfound') ||
-      msg.includes('dns') ||
-      msg.includes('failed to fetch') ||
-      msg.includes('socket')
-    );
-  }
-  return err instanceof TypeError;
-}
-
-/**
  * Create a SorobanRpc.Server bound to the given URL with a fixed timeout.
  *
  * We cannot set `AbortSignal` directly on the server in older SDK versions,
@@ -116,6 +93,28 @@ function isProbeFailure(err: unknown): boolean {
  */
 function makeServer(url: string): SorobanRpc.Server {
   return new SorobanRpc.Server(url, { allowHttp: url.startsWith('http://') });
+}
+
+/**
+ * Race a probe promise against a timeout, rejecting with `timeoutMessage`
+ * if `timeoutMs` elapses first.
+ *
+ * Always clears the timeout timer once the race settles, regardless of
+ * which side wins — an uncleared `setTimeout` in the losing branch keeps
+ * the event loop (and any test worker) alive until it naturally fires.
+ */
+function raceWithTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  timeoutMessage: string,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(timeoutMessage)), timeoutMs);
+    }),
+  ]).finally(() => clearTimeout(timer));
 }
 
 /**
@@ -154,12 +153,7 @@ export async function checkRPCHealth(
 
   const start = Date.now();
   try {
-    const health = await Promise.race([
-      server.getHealth(),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('health probe timeout')), timeoutMs),
-      ),
-    ]);
+    const health = await raceWithTimeout(server.getHealth(), timeoutMs, 'health probe timeout');
     const latencyMs = Date.now() - start;
     const status = (health as { status?: string }).status ?? 'unknown';
     return {
@@ -242,12 +236,7 @@ export async function getRPCLatency(
   for (let i = 0; i < samples; i++) {
     const start = Date.now();
     try {
-      await Promise.race([
-        server.getLatestLedger(),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('latency probe timeout')), timeoutMs),
-        ),
-      ]);
+      await raceWithTimeout(server.getLatestLedger(), timeoutMs, 'latency probe timeout');
       latencies.push(Date.now() - start);
     } catch {
       failures++;
@@ -330,12 +319,11 @@ export async function getContractStatus(
     // Wrap the raw 32-byte contract hash in an ScVal Bytes for the instance key.
     const key = xdr.ScVal.scvBytes(Buffer.from(rawContractId));
 
-    const response = await Promise.race([
+    const response = await raceWithTimeout(
       server.getContractData(contract, key),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('contract status probe timeout')), 8_000),
-      ),
-    ]);
+      8_000,
+      'contract status probe timeout',
+    );
 
     const entry = response as any;
     const result = response as any;
@@ -435,12 +423,7 @@ export async function getBestEndpoint(urls: string[]): Promise<string | null> {
       for (let i = 0; i < 3; i++) {
         const start = Date.now();
         try {
-          await Promise.race([
-            server.getLatestLedger(),
-            new Promise<never>((_, reject) =>
-              setTimeout(() => reject(new Error('score probe timeout')), 3_000),
-            ),
-          ]);
+          await raceWithTimeout(server.getLatestLedger(), 3_000, 'score probe timeout');
           latencySamples.push(Date.now() - start);
         } catch {
           failures++;

@@ -144,7 +144,7 @@ export class RiskMetricsModule {
 
   private async analyzeVolatilityExposure(
     portfolio: Portfolio,
-    windowDays: number
+    _windowDays: number
   ): Promise<RiskFactor> {
     // Volatility assessment is based on position diversification and count
     // In a real implementation, this would query price history from oracle or price feeds

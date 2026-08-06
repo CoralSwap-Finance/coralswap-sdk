@@ -1,5 +1,5 @@
 import { CoralSwapClient } from '../client';
-import { TradeType } from '../types/common';
+import { TradeType, Result } from '../types/common';
 import {
   SwapRequest,
   SwapQuote,
@@ -16,18 +16,20 @@ import {
 import { PRECISION, DEFAULTS } from '../config';
 import { PairNotFoundError, ValidationError, InsufficientLiquidityError, TransactionError } from '../errors';
 import { PairClient } from '@/contracts/pair';
-import { validateAddress, validatePositiveAmount, validateDistinctTokens, isValidPath } from '@/utils/validation';
-import { SorobanRpc } from '@stellar/stellar-sdk';
+import { SorobanRpc, xdr } from '@stellar/stellar-sdk';
 import { GasEstimate } from '../types/gas';
 import { estimateGas } from '../utils/gas';
 import { resolveTokenIdentifier } from '../utils/addresses';
+import { simulateSwapParamsSchema, multiHopSwapRequestSchema, swapHistoryFilterSchema, priceGuardConfigSchema, parseWithValidationError } from '../schemas/swap';
 import { verifyRedStonePayload, estimateUsdValue, DEFAULT_PRICE_GUARD_CONFIG } from '../utils/redstone';
+import { getTransactionStatus, shouldRetrySubmission } from '../utils/idempotent-resubmission';
+import { sleep } from '../utils/retry';
 
 /** Default ledger window when no fromLedger/toLedger is specified. */
 const DEFAULT_HISTORY_WINDOW = 1000;
 
-/** Default maximum results per query. */
-const DEFAULT_HISTORY_LIMIT = 200;
+/** Idempotent resubmission backoff for swap execution. */
+const IDEMPOTENT_RETRY_CONFIG = { maxRetries: 2, retryDelayMs: 2000 } as const;
 
 /**
  * Swap module -- builds, quotes, and executes token swaps.
@@ -54,11 +56,7 @@ export class SwapModule {
    * @param maxDeviationBps - Maximum allowed deviation from oracle price in basis points.
    */
   setPriceGuardConfig(minGuardedAmountUsd: bigint, maxDeviationBps: number): void {
-    if (maxDeviationBps < 0 || maxDeviationBps > 10000) {
-      throw new ValidationError("maxDeviationBps must be between 0 and 10000", {
-        maxDeviationBps,
-      });
-    }
+    parseWithValidationError(priceGuardConfigSchema, { minGuardedAmountUsd, maxDeviationBps });
     this.priceGuardConfig = {
       ...this.priceGuardConfig,
       minGuardedAmountUsd,
@@ -117,10 +115,11 @@ export class SwapModule {
     const resolvedTokenIn = resolveTokenIdentifier(tokenIn, passphrase);
     const resolvedTokenOut = resolveTokenIdentifier(tokenOut, passphrase);
 
-    validateAddress(resolvedTokenIn, 'tokenIn');
-    validateAddress(resolvedTokenOut, 'tokenOut');
-    validateDistinctTokens(resolvedTokenIn, resolvedTokenOut);
-    validatePositiveAmount(amountIn, 'amountIn');
+    parseWithValidationError(
+      simulateSwapParamsSchema,
+      { tokenIn: resolvedTokenIn, tokenOut: resolvedTokenOut, amountIn },
+      { tokenIn: 'tokenIn', tokenOut: 'tokenOut', amountIn: 'amountIn' },
+    );
 
     // Resolve pair address via factory if not provided
     const resolvedPair =
@@ -246,23 +245,9 @@ export class SwapModule {
       return estimateGas((ops) => this.client.simulateTransaction(ops, {}), [op]);
     }
 
-    const result = await this.client.submitTransaction([op]);
-
-    if (!result.success) {
-      throw new TransactionError(
-        `Multi-hop swap failed: ${result.error?.message ?? "Unknown error"}`,
-        result.txHash,
-      );
-    }
-
-    return {
-      txHash: result.txHash!,
-      amountIn: quote.amountIn,
-      amountOut: quote.amountOut,
-      feePaid: quote.feeAmount,
-      ledger: result.data!.ledger,
-      timestamp: Math.floor(Date.now() / 1000),
-    };
+    return this.submitSwapWithIdempotentResubmission(quote, () =>
+      this.client.submitTransaction([op]),
+    );
   }
 
   /**
@@ -350,6 +335,69 @@ export class SwapModule {
   // ---------------------------------------------------------------------------
   // Private helpers
   // ---------------------------------------------------------------------------
+
+  /**
+   * Submit a swap transaction with idempotent resubmission.
+   *
+   * A client-side timeout while submitting a swap says nothing about whether
+   * the transaction actually landed. Before rebuilding and resubmitting, the
+   * real on-chain status is checked via `getTransactionStatus()`; if the
+   * transaction already succeeded, the result is returned without
+   * resubmitting, preventing the same trade from executing twice.
+   */
+  private async submitSwapWithIdempotentResubmission(
+    quote: SwapQuote,
+    submit: () => Promise<Result<{ txHash: string; ledger: number }>>,
+  ): Promise<SwapResult> {
+    const { maxRetries, retryDelayMs } = IDEMPOTENT_RETRY_CONFIG;
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      const result = await submit();
+
+      if (result.success) {
+        return this.toSwapResult(quote, result.txHash!, result.data!.ledger);
+      }
+
+      if (!result.txHash) {
+        throw new TransactionError(result.error?.message ?? 'Swap failed');
+      }
+
+      const status = await getTransactionStatus(this.client.server, result.txHash);
+      const decision = shouldRetrySubmission(status);
+
+      if (status.status === 'SUCCESS') {
+        return this.toSwapResult(quote, result.txHash, status.ledger);
+      }
+
+      if (!decision.shouldRetry || attempt >= maxRetries) {
+        throw new TransactionError(
+          status.status === 'FAILED'
+            ? `Swap failed on-chain: ${result.error?.message ?? 'Unknown error'}`
+            : result.error?.message ?? 'Swap failed',
+          result.txHash,
+        );
+      }
+
+      await sleep(retryDelayMs);
+    }
+
+    throw new TransactionError('Swap submission exceeded max retries');
+  }
+
+  private toSwapResult(
+    quote: SwapQuote,
+    txHash: string,
+    ledger: number,
+  ): SwapResult {
+    return {
+      txHash,
+      amountIn: quote.amountIn,
+      amountOut: quote.amountOut,
+      feePaid: quote.feeAmount,
+      ledger,
+      timestamp: Math.floor(Date.now() / 1000),
+    };
+  }
 
   /**
    * Resolve the effective routing path from the request.
@@ -468,14 +516,10 @@ export class SwapModule {
     const passphrase = this.client.networkConfig.networkPassphrase;
     const path = request.path.map((t) => resolveTokenIdentifier(t, passphrase));
 
-    if (!isValidPath(path) || path.length < 3) {
-      throw new ValidationError(
-        'Multi-hop path must contain at least 3 tokens with no identical adjacent tokens',
-        { path },
-      );
-    }
-
-    path.forEach((addr, i) => validateAddress(addr, `path[${i}]`));
+    parseWithValidationError(
+      multiHopSwapRequestSchema,
+      { path, amount: request.amount, tradeType: request.tradeType, slippageBps: request.slippageBps, deadline: request.deadline, to: request.to },
+    );
 
     const hops =
       request.tradeType === TradeType.EXACT_OUT
@@ -524,23 +568,9 @@ export class SwapModule {
       quote.deadline,
     );
 
-    const result = await this.client.submitTransaction([op]);
-
-    if (!result.success) {
-      throw new TransactionError(
-        `Multi-hop swap failed: ${result.error?.message ?? "Unknown error"}`,
-        result.txHash,
-      );
-    }
-
-    return {
-      txHash: result.txHash!,
-      amountIn: quote.amountIn,
-      amountOut: quote.amountOut,
-      feePaid: quote.feeAmount,
-      ledger: result.data!.ledger,
-      timestamp: Math.floor(Date.now() / 1000),
-    };
+    return this.submitSwapWithIdempotentResubmission(quote, () =>
+      this.client.submitTransaction([op]),
+    );
   }
 
   computeCompoundedFeeBps(feesBps: number[]): number {
@@ -717,11 +747,10 @@ export class SwapModule {
    */
 
   async getSwapHistory(filter: SwapHistoryFilter = {}): Promise<SwapHistoryEvent[]> {
-    const { pairAddress, userAddress, limit = DEFAULT_HISTORY_LIMIT } = filter;
-
-    // Validate optional addresses up-front
-    if (pairAddress) validateAddress(pairAddress, 'pairAddress');
-    if (userAddress) validateAddress(userAddress, 'userAddress');
+    parseWithValidationError(
+      swapHistoryFilterSchema,
+      filter,
+    );
 
     // Resolve ledger range — default to last DEFAULT_HISTORY_WINDOW ledgers
     const currentLedger = await this.client.getCurrentLedger();
@@ -744,7 +773,7 @@ export class SwapModule {
         {
           type: "contract",
           contractIds: filter.pairAddress ? [filter.pairAddress] : [],
-          topics: [["swap"]],
+          topics: [[xdr.ScVal.scvSymbol("swap").toXDR("base64")]],
         },
       ],
       limit: filter.limit ?? 200,
