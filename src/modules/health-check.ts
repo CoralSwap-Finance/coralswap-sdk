@@ -96,6 +96,28 @@ function makeServer(url: string): SorobanRpc.Server {
 }
 
 /**
+ * Race a probe promise against a timeout, rejecting with `timeoutMessage`
+ * if `timeoutMs` elapses first.
+ *
+ * Always clears the timeout timer once the race settles, regardless of
+ * which side wins — an uncleared `setTimeout` in the losing branch keeps
+ * the event loop (and any test worker) alive until it naturally fires.
+ */
+function raceWithTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  timeoutMessage: string,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(timeoutMessage)), timeoutMs);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+/**
  * Probe a single RPC endpoint for basic health.
  *
  * Returns an {@link RPCHealthResult} indicating whether the endpoint is
@@ -131,12 +153,7 @@ export async function checkRPCHealth(
 
   const start = Date.now();
   try {
-    const health = await Promise.race([
-      server.getHealth(),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('health probe timeout')), timeoutMs),
-      ),
-    ]);
+    const health = await raceWithTimeout(server.getHealth(), timeoutMs, 'health probe timeout');
     const latencyMs = Date.now() - start;
     const status = (health as { status?: string }).status ?? 'unknown';
     return {
@@ -219,12 +236,7 @@ export async function getRPCLatency(
   for (let i = 0; i < samples; i++) {
     const start = Date.now();
     try {
-      await Promise.race([
-        server.getLatestLedger(),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('latency probe timeout')), timeoutMs),
-        ),
-      ]);
+      await raceWithTimeout(server.getLatestLedger(), timeoutMs, 'latency probe timeout');
       latencies.push(Date.now() - start);
     } catch {
       failures++;
@@ -307,12 +319,11 @@ export async function getContractStatus(
     // Wrap the raw 32-byte contract hash in an ScVal Bytes for the instance key.
     const key = xdr.ScVal.scvBytes(Buffer.from(rawContractId));
 
-    const response = await Promise.race([
+    const response = await raceWithTimeout(
       server.getContractData(contract, key),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('contract status probe timeout')), 8_000),
-      ),
-    ]);
+      8_000,
+      'contract status probe timeout',
+    );
 
     const entry = response as any;
     const result = response as any;
@@ -412,12 +423,7 @@ export async function getBestEndpoint(urls: string[]): Promise<string | null> {
       for (let i = 0; i < 3; i++) {
         const start = Date.now();
         try {
-          await Promise.race([
-            server.getLatestLedger(),
-            new Promise<never>((_, reject) =>
-              setTimeout(() => reject(new Error('score probe timeout')), 3_000),
-            ),
-          ]);
+          await raceWithTimeout(server.getLatestLedger(), 3_000, 'score probe timeout');
           latencySamples.push(Date.now() - start);
         } catch {
           failures++;
