@@ -16,6 +16,11 @@ function makeClient(
     pair: jest.fn().mockReturnValue({
       getReserves: jest.fn().mockResolvedValue(reserves),
       getTokens: jest.fn().mockResolvedValue(tokens),
+      getCumulativePrices: jest.fn().mockResolvedValue({
+        price0CumulativeLast: 0n,
+        price1CumulativeLast: 0n,
+        blockTimestampLast: 0,
+      }),
     }),
   } as unknown as CoralSwapClient;
 }
@@ -522,10 +527,9 @@ describe('Flash Loan Attack Resistance', () => {
 
       const alerts = new AlertModule(client);
 
-      // Build TWAP history (simulate multiple observations over time)
-      const pairInstance = client.pair(PAIR);
-      await pairInstance.getCumulativePrices(); // First observation
-      await pairInstance.getCumulativePrices(); // Second observation (5 min later)
+      // Build TWAP history by calling observe() on the oracle (not getCumulativePrices directly)
+      await alerts['oracle'].observe(PAIR); // First observation (time 0)
+      await alerts['oracle'].observe(PAIR); // Second observation (time 300)
 
       const alert = await alerts.checkPriceAlert(
         makePriceConfig({
@@ -585,10 +589,9 @@ describe('Flash Loan Attack Resistance', () => {
 
       const alerts = new AlertModule(client);
 
-      // Build TWAP history
-      const pairInstance = client.pair(PAIR);
-      await pairInstance.getCumulativePrices();
-      await pairInstance.getCumulativePrices();
+      // Build TWAP history by calling observe() on the oracle
+      await alerts['oracle'].observe(PAIR); // First observation (time 0)
+      await alerts['oracle'].observe(PAIR); // Second observation (time 300)
 
       const alert = await alerts.checkILAlert(
         makeILConfig({
