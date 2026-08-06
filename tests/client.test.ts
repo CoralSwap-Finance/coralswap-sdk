@@ -576,13 +576,26 @@ describe('executeWithFallback', () => {
 
     // Every endpoint fails with the retryable error.
     const mockGetHealth = jest.fn().mockRejectedValue(retryableError);
-    client.server.getHealth = mockGetHealth;
+    const mockServer = { getHealth: mockGetHealth } as any;
+    client.server = mockServer;
+
+    // executeWithFallback calls the private createRpcServer(url) to build a
+    // fresh, real SorobanRpc.Server on every endpoint rotation — patching
+    // client.server.getHealth once only covers the first (primary) endpoint,
+    // and the real servers it creates for rpc2/rpc3 would hit real (flaky,
+    // sometimes slow-to-fail) network calls against fake hostnames. Stub the
+    // creation itself so every rotation reuses the same mocked server.
+    const createRpcServerSpy = jest
+      .spyOn(client as any, 'createRpcServer')
+      .mockReturnValue(mockServer);
 
     // isHealthy() catches all errors and returns false — confirm it tried all endpoints.
     await expect(client.isHealthy()).resolves.toBe(false);
 
     // Should have been called once per RPC endpoint (3 total).
     expect(mockGetHealth).toHaveBeenCalledTimes(rpcUrls.length);
+
+    createRpcServerSpy.mockRestore();
   });
 
   it('stops retrying once the configured deadlineMs is exceeded and throws DeadlineError', async () => {

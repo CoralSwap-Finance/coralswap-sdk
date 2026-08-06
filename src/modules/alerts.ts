@@ -1000,7 +1000,7 @@ export class AlertModule {
         }
 
         this.thresholdPriceAlerts.set(id, updatedAlert);
-      } catch (error) {
+      } catch {
         // Skip alerts that fail to fetch price (e.g., oracle unavailable)
         continue;
       }
@@ -1047,7 +1047,7 @@ export class AlertModule {
     if (this.oracleAddress) {
       try {
         return await this.fetchRedStonePrice(tokenAddress);
-      } catch (error) {
+      } catch {
         // Fall through to spot price if oracle fails
       }
     }
@@ -1136,8 +1136,7 @@ export class AlertModule {
     // (not just staying on the same side)
     if (lastKnownPrice !== undefined) {
       const wasAbove = lastKnownPrice >= targetPrice;
-      const isAbove = currentPrice >= targetPrice;
-      
+
       // Trigger only if we crossed the threshold
       if (direction === 'above' && wasAbove) {
         return false; // Already above, no crossing

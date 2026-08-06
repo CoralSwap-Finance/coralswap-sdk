@@ -304,7 +304,7 @@ export class FeeModule {
     const lpTokenAddr = await pair.getLPTokenAddress();
     const lpToken = this.client.lpToken(lpTokenAddr);
 
-    const [lpBalance, totalSupply, { reserve0, reserve1 }, { token0, token1 }] =
+    const [lpBalance, totalSupply, { reserve0, reserve1 }] =
       await Promise.all([
         lpToken.balance(lpAddress),
         lpToken.totalSupply(),

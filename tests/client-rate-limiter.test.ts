@@ -148,7 +148,9 @@ describe('CoralSwapClient — RateLimiter integration', () => {
         const mockServer = {
             getHealth: jest.fn().mockImplementation(async () => {
                 dispatchCount += 1;
-                if (dispatchCount === 1) throw new Error('primary RPC down');
+                if (dispatchCount === 1) {
+                    throw Object.assign(new Error('primary RPC down'), { response: { status: 503 } });
+                }
                 return { status: 'healthy' };
             }),
         } as any;
