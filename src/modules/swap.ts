@@ -16,7 +16,6 @@ import {
 import { PRECISION, DEFAULTS } from '../config';
 import { PairNotFoundError, ValidationError, InsufficientLiquidityError, TransactionError } from '../errors';
 import { PairClient } from '@/contracts/pair';
-import { validateAddress, validatePositiveAmount, validateDistinctTokens, isValidPath } from '@/utils/validation';
 import { SorobanRpc, xdr } from '@stellar/stellar-sdk';
 import { GasEstimate } from '../types/gas';
 import { estimateGas } from '../utils/gas';
@@ -748,8 +747,6 @@ export class SwapModule {
    */
 
   async getSwapHistory(filter: SwapHistoryFilter = {}): Promise<SwapHistoryEvent[]> {
-    const { pairAddress, userAddress } = filter;
-
     parseWithValidationError(
       swapHistoryFilterSchema,
       filter,

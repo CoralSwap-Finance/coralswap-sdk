@@ -412,11 +412,11 @@ describe('Multi-hop routing (dedicated methods)', () => {
         path: [TOKEN_A, TOKEN_B, TOKEN_C],
         amount: 1_000_000n,
         tradeType: TradeType.EXACT_IN,
-        to: 'GRECIPIENT',
+        to: 'GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFSHONUCEOASW7QC7OX2H',
       });
 
       const [calledSender] = (client.router.buildSwapExactTokensForTokens as jest.Mock).mock.calls[0];
-      expect(calledSender).toBe('GRECIPIENT');
+      expect(calledSender).toBe('GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFSHONUCEOASW7QC7OX2H');
     });
   });
 });
