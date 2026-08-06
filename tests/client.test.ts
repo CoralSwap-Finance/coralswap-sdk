@@ -1,8 +1,10 @@
 import { Keypair, SorobanRpc, xdr, Transaction, TransactionBuilder } from '@stellar/stellar-sdk';
 import { CoralSwapClient } from '../src/client';
+import { ConnectionPool } from '../src';
 import { Network, Signer } from '../src/types/common';
 import { SignerError } from '../src/errors';
 import { DEFAULTS } from '../src/config';
+import { resetCircuitBreakers, DeadlineError } from '../src/utils/retry';
 
 // Mock transaction for testing
 const mockTx = {
@@ -96,6 +98,10 @@ describe('CoralSwapClient', () => {
       expect(client.networkConfig.rpcUrl).toBe(customRpcUrl);
     });
 
+    it('exports ConnectionPool from the package root', () => {
+      expect(ConnectionPool).toBeDefined();
+    });
+
     it('allows custom config overrides', () => {
       const client = new CoralSwapClient({
         network: Network.TESTNET,
@@ -104,12 +110,14 @@ describe('CoralSwapClient', () => {
         defaultDeadlineSec: 600,
         maxRetries: 5,
         retryDelayMs: 2000,
+        deadlineMs: 5000,
       });
 
       expect(client.config.defaultSlippageBps).toBe(100);
       expect(client.config.defaultDeadlineSec).toBe(600);
       expect(client.config.maxRetries).toBe(5);
       expect(client.config.retryDelayMs).toBe(2000);
+      expect(client.config.deadlineMs).toBe(5000);
     });
   });
 
@@ -499,5 +507,130 @@ describe('CoralSwapClient', () => {
       expect(result.error?.message).toContain('timed out');
       expect(result.txHash).toBe('test-tx-hash');
     });
+  });
+});
+
+/**
+ * Isolated tests for executeWithFallback retry / fallback behaviour.
+ *
+ * These tests drive the private method indirectly through isHealthy() which
+ * is a thin single-call wrapper — the simplest public surface that exercises
+ * the fallback loop without needing a full transaction stack.
+ */
+describe('executeWithFallback', () => {
+  const TEST_SECRET = 'SB6K2AINTGNYBFX4M7TRPGSKQ5RKNOXXWB7UZUHRYOVTM7REDUGECKZU';
+
+  beforeEach(() => {
+    resetCircuitBreakers();
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it('surfaces a non-retryable error immediately without cycling through fallback endpoints', async () => {
+    // Three RPC URLs configured — only the first should ever be attempted.
+    const client = new CoralSwapClient({
+      network: Network.TESTNET,
+      secretKey: TEST_SECRET,
+      rpcUrl: [
+        'https://rpc1.example.com',
+        'https://rpc2.example.com',
+        'https://rpc3.example.com',
+      ],
+      maxRetries: 0,
+      retryDelayMs: 0,
+    });
+
+    // A non-retryable error: plain validation failure with no timeout/429/503 signal.
+    const nonRetryableError = new Error('ValidationError: bad simulation parameters');
+    const mockGetHealth = jest.fn().mockRejectedValue(nonRetryableError);
+    client.server.getHealth = mockGetHealth;
+
+    await expect(client.isHealthy()).resolves.toBe(false);
+
+    // Must only hit the RPC once — no rotation to rpc2 or rpc3.
+    expect(mockGetHealth).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls back across all endpoints for retryable errors (network/timeout/429/503)', async () => {
+    const rpcUrls = [
+      'https://rpc1.example.com',
+      'https://rpc2.example.com',
+      'https://rpc3.example.com',
+    ];
+
+    const client = new CoralSwapClient({
+      network: Network.TESTNET,
+      secretKey: TEST_SECRET,
+      rpcUrl: rpcUrls,
+      maxRetries: 0,   // one attempt per endpoint, no per-endpoint retries
+      retryDelayMs: 0,
+    });
+
+    // Retryable error: 503 Service Unavailable
+    const retryableError = Object.assign(
+      new Error('503 Service Unavailable'),
+      { response: { status: 503 } },
+    );
+
+    // Every endpoint fails with the retryable error.
+    const mockGetHealth = jest.fn().mockRejectedValue(retryableError);
+    const mockServer = { getHealth: mockGetHealth } as any;
+    client.server = mockServer;
+
+    // executeWithFallback calls the private createRpcServer(url) to build a
+    // fresh, real SorobanRpc.Server on every endpoint rotation — patching
+    // client.server.getHealth once only covers the first (primary) endpoint,
+    // and the real servers it creates for rpc2/rpc3 would hit real (flaky,
+    // sometimes slow-to-fail) network calls against fake hostnames. Stub the
+    // creation itself so every rotation reuses the same mocked server.
+    const createRpcServerSpy = jest
+      .spyOn(client as any, 'createRpcServer')
+      .mockReturnValue(mockServer);
+
+    // isHealthy() catches all errors and returns false — confirm it tried all endpoints.
+    await expect(client.isHealthy()).resolves.toBe(false);
+
+    // Should have been called once per RPC endpoint (3 total).
+    expect(mockGetHealth).toHaveBeenCalledTimes(rpcUrls.length);
+
+    createRpcServerSpy.mockRestore();
+  });
+
+  it('stops retrying once the configured deadlineMs is exceeded and throws DeadlineError', async () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date('2020-01-01T00:00:00.000Z'));
+
+    const client = new CoralSwapClient({
+      network: Network.TESTNET,
+      secretKey: TEST_SECRET,
+      // 50ms total-time budget per RPC call.
+      deadlineMs: 50,
+      maxRetries: 10,
+      retryDelayMs: 10,
+    });
+
+    // Retryable error that keeps failing — the deadline must stop the retries.
+    const retryableError = Object.assign(
+      new Error('503 Service Unavailable'),
+      { response: { status: 503 } },
+    );
+    const mockGetLatestLedger = jest.fn().mockRejectedValue(retryableError);
+    client.server.getLatestLedger = mockGetLatestLedger;
+
+    const promise = client.getCurrentLedger().catch((e) => e);
+
+    // Advances past the 50ms deadline; without a deadline the 10 retries
+    // with backoff would keep going well beyond this window.
+    await jest.advanceTimersByTimeAsync(5000);
+
+    const err = await promise;
+    expect(err).toBeInstanceOf(DeadlineError);
+    expect(err.message).not.toContain('503');
+
+    // attempt 1 at t=0, attempt 2 at t=10, attempt 3 at t=30 — the
+    // deadline check fires at t=70 before a 4th attempt can start.
+    expect(mockGetLatestLedger).toHaveBeenCalledTimes(3);
   });
 });

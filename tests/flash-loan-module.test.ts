@@ -45,6 +45,14 @@ describe("FlashLoanModule", () => {
 
     // Mock the client.pair() method to return our mock
     jest.spyOn(client, "pair").mockReturnValue(mockPairClient);
+
+    // execute()'s success path fetches the full transaction to decode events;
+    // default to a non-SUCCESS status so tests that don't care about event
+    // parsing skip it cleanly instead of hitting the real (unmocked) testnet
+    // RPC with a fake tx hash.
+    jest
+      .spyOn(client.server, "getTransaction")
+      .mockResolvedValue({ status: "NOT_FOUND" } as any);
   });
 
   afterEach(() => {
