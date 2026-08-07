@@ -23,6 +23,7 @@
     "test:integration:positions": "jest --config jest.integration.config.js --testPathPattern=positions.integration",
     "test:integration:fees": "jest --config jest.integration.config.js --testPathPattern=fees.integration",
     "test:integration:leaderboard": "jest --config jest.integration.config.js --testPathPattern=leaderboard.integration",
+    "test:integration:router": "jest --config jest.integration.config.js --testPathPattern=router.integration",
     "lint": "eslint src/**/*.ts",
     "lint:fix": "eslint src/**/*.ts --fix",
     "clean": "rimraf dist",
