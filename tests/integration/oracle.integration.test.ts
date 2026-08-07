@@ -21,7 +21,7 @@ import { toSorobanAmount } from '../../src/utils/amounts';
  * after the initial setup.
  */
 
-const SKIP = process.env.STELLAR_TESTNET !== 'true';
+const SKIP = process.env.STELLAR_TESTNET !== 'true' || !process.env.TEST_KEYPAIR;
 
 function requireEnv(name: string): string {
   const val = process.env[name];

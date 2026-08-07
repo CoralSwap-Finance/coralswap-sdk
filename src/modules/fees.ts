@@ -309,7 +309,6 @@ export class FeeModule {
         lpToken.balance(lpAddress),
         lpToken.totalSupply(),
         pair.getReserves(),
-        pair.getTokens(),
       ]);
 
     const feeRevenue = await this.getFeeRevenue(pairAddress, options);

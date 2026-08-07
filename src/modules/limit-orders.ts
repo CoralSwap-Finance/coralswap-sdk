@@ -335,6 +335,32 @@ export function parseOrderDetails(result: xdr.ScVal): LimitOrderDetails {
   };
 }
 
+
+
+function validateLimitOrderParams(
+  params: LimitOrderParams,
+): LimitOrderParams {
+  if (
+    !Number.isFinite(params.targetPrice) ||
+    params.targetPrice <= 0
+  ) {
+    throw new ValidationError("targetPrice must be positive");
+  }
+
+  if (params.targetPrice > 1_000_000) {
+    throw new ValidationError(
+      "targetPrice exceeds maximum allowed range (1,000,000)"
+    );
+  }
+
+  if (params.expiry <= Math.floor(Date.now() / 1000)) {
+    throw new ValidationError(
+      "expiry must be a Unix timestamp in the future"
+    );
+  }
+
+  return params;
+}
 /**
  * Error codes that mean "the contract has no such order".
  *
@@ -678,22 +704,7 @@ export class LimitOrderModule {
    * console.log('Placed order:', orderId);
    */
   async placeLimitOrder(params: LimitOrderParams, signer?: string): Promise<PlaceLimitOrderResult> {
-    if (!params || typeof params !== 'object') {
-      throw new ValidationError('params must be a valid object');
-    }
-    if (typeof params.targetPrice !== 'number' || isNaN(params.targetPrice) || !isFinite(params.targetPrice) || params.targetPrice <= 0) {
-      throw new ValidationError('targetPrice must be positive', { targetPrice: params.targetPrice });
-    }
-    if (params.targetPrice > 1_000_000) {
-      throw new ValidationError('targetPrice exceeds maximum allowed range (1,000,000)', {
-        targetPrice: params.targetPrice,
-      });
-    }
-    if (typeof params.expiry !== 'number' || isNaN(params.expiry) || !isFinite(params.expiry) || params.expiry <= Math.floor(Date.now() / 1000)) {
-      throw new ValidationError('expiry must be a Unix timestamp in the future', {
-        expiry: params.expiry,
-      });
-    }
+    params = validateLimitOrderParams(params);
 
     validateAddress(params.tokenIn, 'tokenIn');
     validateAddress(params.tokenOut, 'tokenOut');

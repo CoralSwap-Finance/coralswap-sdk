@@ -17,7 +17,7 @@ import { encodeFlashLoanData } from '../../src/contracts/flash-receiver';
  *   FLASH_LOAN_AMOUNT        – optional amount to borrow (default: 1000000)
  *   TEST_RPC_URL             – optional RPC override
  */
-const SKIP = process.env.STELLAR_TESTNET !== 'true';
+const SKIP = process.env.STELLAR_TESTNET !== 'true' || !process.env.TEST_KEYPAIR;
 
 function requireEnv(name: string): string {
   const value = process.env[name];

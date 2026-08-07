@@ -574,11 +574,9 @@ describe('executeWithFallback', () => {
       { response: { status: 503 } },
     );
 
-    // Every endpoint fails with the retryable error.
     const mockGetHealth = jest.fn().mockRejectedValue(retryableError);
     const mockServer = { getHealth: mockGetHealth } as any;
     client.server = mockServer;
-
     // executeWithFallback calls the private createRpcServer(url) to build a
     // fresh, real SorobanRpc.Server on every endpoint rotation — patching
     // client.server.getHealth once only covers the first (primary) endpoint,
