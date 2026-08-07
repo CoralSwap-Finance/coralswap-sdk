@@ -1,5 +1,12 @@
 
-import { getOpenOrders, getOrderSummary } from '../src/modules/order-book';
+import {
+  getOpenOrders,
+  getOrderSummary,
+  getLimitOrders,
+  getDcaOrders,
+  getStopLossOrders,
+  getTradeHistory,
+} from '../src/modules/order-book';
 import { CoralSwapClient } from '../src/client';
 import { OracleModule } from '../src/modules/oracle';
 import { Network } from '../src/types/common';
@@ -63,5 +70,34 @@ describe('OrderBook Module', () => {
         // Total: 5006000000000
         expect(summary.totalValueLocked).toBe(5006000000000);
       });
+  });
+
+  // -------------------------------------------------------------------------
+  // getEvents audit (#437)
+  //
+  // Records the audit finding for this module: it issues no RPC calls, so it
+  // has neither raw-string topic filters nor zero-anchored ledger cursors.
+  // This test fails the moment a query is added without going through the
+  // shared EventCursor, which is when the encoding rules start to matter.
+  // -------------------------------------------------------------------------
+  describe('RPC surface', () => {
+    it('issues no getEvents calls from any read path', async () => {
+      const getEvents = jest.fn();
+      Object.defineProperty(client, 'server', {
+        value: { getEvents },
+        configurable: true,
+      });
+
+      const address = 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+
+      await getLimitOrders(address);
+      await getDcaOrders(address);
+      await getStopLossOrders(address);
+      await getOpenOrders(address);
+      await getOrderSummary(address, client);
+      await getTradeHistory(address);
+
+      expect(getEvents).not.toHaveBeenCalled();
+    });
   });
 });

@@ -136,6 +136,9 @@ export {
   EVENT_TOPICS,
   decodeEvents,
   decodeEventsFromXdr,
+  EventCursor,
+  decodeEventTopic,
+  MIN_START_LEDGER,
   batchCall,
   batchCallSequential,
   batchRequest,
@@ -156,6 +159,7 @@ export type {
   BatchResult,
   TransactionStatus,
   RetryDecision,
+  EventCursorOptions,
 } from "./utils";
 
 // Schema validation

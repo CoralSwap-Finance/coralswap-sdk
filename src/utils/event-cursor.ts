@@ -1,5 +1,54 @@
 import { xdr, SorobanRpc } from "@stellar/stellar-sdk";
 
+/**
+ * Lowest ledger sequence that can legally be passed as `startLedger`.
+ * Ledger 0 does not exist, so anchoring must never clamp below this.
+ */
+export const MIN_START_LEDGER = 1;
+
+/**
+ * Decode a topic segment from a `getEvents` **response** back to its symbol.
+ *
+ * The counterpart to the encoding done by `encodeTopics`. Response topics
+ * arrive either already parsed into `xdr.ScVal`s or, over raw JSON-RPC, as
+ * base64 XDR strings — both are handled.
+ *
+ * A bare, unencoded string (e.g. the literal `"swap"`) is deliberately **not**
+ * accepted and decodes to `""`. Real RPC never returns one, so tolerating it
+ * would only let hand-rolled test fixtures paper over the raw-string topic bug
+ * this helper is meant to surface.
+ *
+ * @param topic - A topic segment from an event response.
+ * @returns The decoded symbol/string, or `""` if it is not valid topic XDR.
+ */
+export function decodeEventTopic(topic: unknown): string {
+  if (topic === null || topic === undefined) return "";
+
+  let val: xdr.ScVal;
+  if (typeof topic === "string") {
+    try {
+      val = xdr.ScVal.fromXDR(topic, "base64");
+    } catch {
+      return "";
+    }
+  } else {
+    val = topic as xdr.ScVal;
+  }
+
+  try {
+    switch (val.switch().name) {
+      case "scvSymbol":
+        return val.sym().toString();
+      case "scvString":
+        return val.str().toString();
+      default:
+        return "";
+    }
+  } catch {
+    return "";
+  }
+}
+
 export interface EventCursorOptions {
   /** How many ledgers to look back when anchoring the initial cursor. */
   defaultWindow?: number;
@@ -56,7 +105,11 @@ export class EventCursor {
     if (this.cursor !== undefined) return;
     const latest = await this.server.getLatestLedger();
     const seq = typeof latest.sequence === 'number' ? latest.sequence : Number(latest.sequence);
-    this.cursor = Math.max(0, seq - this.defaultWindow);
+    // Clamp to MIN_START_LEDGER, not 0: ledger 0 does not exist, and RPC
+    // rejects `startLedger: 0`. On a young network (or a large defaultWindow)
+    // `seq - defaultWindow` goes non-positive, which is the zero-anchored
+    // cursor bug this utility exists to prevent.
+    this.cursor = Math.max(MIN_START_LEDGER, seq - this.defaultWindow);
   }
 
   private encodeTopics(topics?: string[]): string[][] | undefined {
