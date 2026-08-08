@@ -27,4 +27,13 @@ jobs:
           TEST_KEYPAIR: ${{ secrets.TEST_KEYPAIR }}
           TEST_TOKEN_A: ${{ secrets.TEST_TOKEN_A }}
           TEST_TOKEN_B: ${{ secrets.TEST_TOKEN_B }}
+          # Additional fixtures used by the portfolio / risk-metrics suites.
+          TEST_TOKEN_C: ${{ secrets.TEST_TOKEN_C }}
+          # RedStone oracle contract used by the price-feed suite.
+          REDSTONE_ORACLE_ADDRESS: ${{ secrets.REDSTONE_ORACLE_ADDRESS }}
+          # Deployed fixtures used by the flash-loan suite.
+          FLASH_LOAN_PAIR_ADDRESS: ${{ secrets.FLASH_LOAN_PAIR_ADDRESS }}
+          FLASH_LOAN_TOKEN: ${{ secrets.FLASH_LOAN_TOKEN }}
+          FLASH_LOAN_RECEIVER: ${{ secrets.FLASH_LOAN_RECEIVER }}
+          FLASH_LOAN_FAILING_RECEIVER: ${{ secrets.FLASH_LOAN_FAILING_RECEIVER }}
         run: npm run test:integration
