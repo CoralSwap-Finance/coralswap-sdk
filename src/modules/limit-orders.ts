@@ -596,6 +596,39 @@ export class LimitOrderModule {
    * }
    */
   async cancelLimitOrder(orderId: string, signer?: string): Promise<CancelResult> {
+    const { operation: op, refundedAmount, filledAmount } = await this.buildCancelOperation(
+      orderId,
+      signer,
+    );
+
+    // Cancellation releases escrowed funds, so a timed-out submission must never
+    // be blindly resubmitted — the first attempt may already have landed and
+    // refunded. Check the real on-chain status before each retry (#467).
+    const txHash = await this.submitWithIdempotentResubmission(
+      [op],
+      `Failed to cancel order ${orderId}`,
+      async () => (await this.getLimitOrderStatus(orderId)).state === 'cancelled',
+    );
+
+    return {
+      refundedAmount,
+      filledAmount,
+      // Empty when the cancellation was recovered rather than confirmed: the
+      // refund landed under a hash whose confirmation we never received.
+      refundTxHash: txHash ?? '',
+    };
+  }
+
+  /**
+   * Validate and simulate a cancellation, returning the built operation and
+   * the refund/fill amounts the simulation reports, without submitting.
+   *
+   * Shared by {@link cancelLimitOrder} and {@link cancelAndReplaceLimitOrder}.
+   */
+  private async buildCancelOperation(
+    orderId: string,
+    signer?: string,
+  ): Promise<{ operation: xdr.Operation; refundedAmount: bigint; filledAmount: bigint }> {
     if (!orderId || typeof orderId !== 'string' || orderId.trim().length === 0) {
       throw new ValidationError('orderId must be a non-empty string', { orderId });
     }
@@ -657,22 +690,7 @@ export class LimitOrderModule {
 
     const { refundedAmount, filledAmount } = parseCancelResult(sim.result.retval);
 
-    // Cancellation releases escrowed funds, so a timed-out submission must never
-    // be blindly resubmitted — the first attempt may already have landed and
-    // refunded. Check the real on-chain status before each retry (#467).
-    const txHash = await this.submitWithIdempotentResubmission(
-      [op],
-      `Failed to cancel order ${orderId}`,
-      async () => (await this.getLimitOrderStatus(orderId)).state === 'cancelled',
-    );
-
-    return {
-      refundedAmount,
-      filledAmount,
-      // Empty when the cancellation was recovered rather than confirmed: the
-      // refund landed under a hash whose confirmation we never received.
-      refundTxHash: txHash ?? '',
-    };
+    return { operation: op, refundedAmount, filledAmount };
   }
 
   /**
@@ -704,6 +722,30 @@ export class LimitOrderModule {
    * console.log('Placed order:', orderId);
    */
   async placeLimitOrder(params: LimitOrderParams, signer?: string): Promise<PlaceLimitOrderResult> {
+    const { operation: op, orderId } = await this.buildPlaceOperation(params, signer);
+
+    // Placement escrows funds, so a timed-out submission must never be blindly
+    // resubmitted — that would escrow twice. If the order already exists
+    // on-chain the placement landed and the confirmation was simply lost (#467).
+    await this.submitWithIdempotentResubmission(
+      [op],
+      'Failed to place limit order',
+      () => this.orderExists(orderId),
+    );
+
+    return { orderId };
+  }
+
+  /**
+   * Validate and simulate a new order placement, returning the built
+   * operation and the order ID the simulation reports, without submitting.
+   *
+   * Shared by {@link placeLimitOrder} and {@link cancelAndReplaceLimitOrder}.
+   */
+  private async buildPlaceOperation(
+    params: LimitOrderParams,
+    signer?: string,
+  ): Promise<{ operation: xdr.Operation; orderId: string }> {
     params = validateLimitOrderParams(params);
 
     validateAddress(params.tokenIn, 'tokenIn');
@@ -768,16 +810,71 @@ export class LimitOrderModule {
 
     const orderId = scValToString(sim.result.retval);
 
-    // Placement escrows funds, so a timed-out submission must never be blindly
-    // resubmitted — that would escrow twice. If the order already exists
-    // on-chain the placement landed and the confirmation was simply lost (#467).
-    await this.submitWithIdempotentResubmission(
-      [op],
-      'Failed to place limit order',
-      () => this.orderExists(orderId),
+    return { operation: op, orderId };
+  }
+
+  /**
+   * Cancel an existing limit order and place its replacement as a single
+   * atomic transaction.
+   *
+   * Adjusting an order's price today means cancelling the existing order and
+   * placing a new one as two sequential transactions, leaving a window where
+   * the position is completely unprotected if the new order fails to place
+   * after the old one is cancelled. Composing both operations into a single
+   * transaction closes that window: either both take effect, or the original
+   * order remains exactly as it was. As with {@link cancelLimitOrder} and
+   * {@link placeLimitOrder}, a submission whose confirmation is lost is
+   * resolved against on-chain state rather than blindly resubmitted (#467),
+   * since both legs escrow or release real funds.
+   *
+   * @param orderId - The on-chain order ID to cancel.
+   * @param newParams - Parameters for the replacement order.
+   * @param signer - Optional Stellar address that will sign both operations.
+   *   Defaults to `client.publicKey`.
+   * @returns The refund/fill amounts from the cancelled order and the new
+   *   order's ID.
+   * @throws {@link ValidationError} if `orderId` or `newParams` are invalid.
+   * @throws {@link OrderNotFoundError} if the order to cancel is already cancelled.
+   * @throws {@link InvalidOperationError} if the order to cancel is filled or expired.
+   * @throws {@link CoralSwapSDKError} with code `TRANSACTION_ERROR` if the
+   *   composed transaction is rejected — in that case the original order
+   *   remains in place, untouched.
+   *
+   * @example
+   * ```ts
+   * const result = await limit.cancelAndReplaceLimitOrder(orderId, {
+   *   tokenIn: 'CAXFG3HY6H...',
+   *   tokenOut: 'CBOB7D2F5...',
+   *   amountIn: 500_000_000n,
+   *   targetPrice: 1.30,
+   *   expiry: Math.floor(Date.now() / 1000) + 3600 * 24,
+   *   pairAddress: 'CP5KJ7A2E...',
+   * });
+   * console.log(`Replaced ${orderId} with ${result.orderId}`);
+   * ```
+   */
+  async cancelAndReplaceLimitOrder(
+    orderId: string,
+    newParams: LimitOrderParams,
+    signer?: string,
+  ): Promise<CancelResult & PlaceLimitOrderResult> {
+    const cancel = await this.buildCancelOperation(orderId, signer);
+    const place = await this.buildPlaceOperation(newParams, signer);
+
+    const txHash = await this.submitWithIdempotentResubmission(
+      [cancel.operation, place.operation],
+      `Failed to cancel and replace order ${orderId}`,
+      () => this.orderExists(place.orderId),
     );
 
-    return { orderId };
+    return {
+      refundedAmount: cancel.refundedAmount,
+      filledAmount: cancel.filledAmount,
+      // Empty when the replacement was recovered rather than confirmed: the
+      // composed transaction landed under a hash whose confirmation we never received.
+      refundTxHash: txHash ?? '',
+      orderId: place.orderId,
+    };
   }
 
   /**

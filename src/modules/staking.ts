@@ -14,13 +14,19 @@ import {
   VoteEligibility,
 } from "@/types/staking";
 import { Signer } from "@/types/common";
+import { RemoveLiquidityRequest, LiquidityResult } from "@/types/liquidity";
 import {
   ValidationError,
   TransactionError,
   CooldownError,
   StakingError,
 } from "@/errors";
-import { validateAddress, validatePositiveAmount } from "@/utils/validation";
+import {
+  validateAddress,
+  validatePositiveAmount,
+  validateNonNegativeAmount,
+  validateDistinctTokens,
+} from "@/utils/validation";
 import { isValidAddress } from "@/utils/addresses";
 import { z } from "zod";
 
@@ -341,9 +347,31 @@ export class StakingModule {
     amount: bigint,
     signer: Signer,
   ): Promise<string> {
-    validateStakeParams(lpTokenAddress, amount);
-
     const publicKey = await signer.publicKey();
+    const op = await this.buildUnstakeOperation(lpTokenAddress, amount, publicKey);
+
+    const result = await this.client.submitTransaction([op]);
+
+    if (!result.success) {
+      throw new TransactionError(
+        `Unstake failed: ${result.error?.message ?? "Unknown error"}`,
+        result.txHash,
+      );
+    }
+
+    return result.txHash!;
+  }
+
+  /**
+   * Validate cooldown/balance and build the `unstake` operation, without
+   * submitting it. Shared by {@link unstake} and {@link unstakeAndWithdraw}.
+   */
+  private async buildUnstakeOperation(
+    lpTokenAddress: string,
+    amount: bigint,
+    publicKey: string,
+  ): Promise<xdr.Operation> {
+    validateStakeParams(lpTokenAddress, amount);
 
     // Enforce cooldown period
     const cooldownStatus = await this.getCooldownStatus(
@@ -368,22 +396,100 @@ export class StakingModule {
 
     const contract = new Contract(lpTokenAddress);
 
-    const op = contract.call(
+    return contract.call(
       "unstake",
       nativeToScVal(Address.fromString(publicKey), { type: "address" }),
       nativeToScVal(amount, { type: "i128" }),
     );
+  }
 
-    const result = await this.client.submitTransaction([op]);
+  /**
+   * Unstake LP tokens and withdraw them from the pool as a single atomic
+   * transaction, once cooldown has elapsed.
+   *
+   * Unstaking (subject to cooldown) followed by withdrawing from the pool is
+   * a common exit flow, normally done as two sequential transactions. This
+   * composes both operations with a {@link TransactionComposer} so a failure
+   * in either leg rolls back both — there's no window where LP tokens have
+   * been unstaked but liquidity hasn't been withdrawn, or vice versa.
+   *
+   * @param lpTokenAddress - The contract address of the staked LP token.
+   * @param amount - The amount of LP tokens to unstake (must be > 0).
+   * @param removeLiquidityRequest - Parameters for the liquidity withdrawal.
+   *   `removeLiquidityRequest.liquidity` should match `amount`.
+   * @param signer - The signer authorizing both operations.
+   * @returns The withdrawal amounts plus the transaction hash/ledger of the
+   *   single atomic transaction.
+   * @throws {ValidationError} If amount or liquidity-request fields are invalid.
+   * @throws {CooldownError} If the cooldown period has not elapsed.
+   * @throws {StakingError} If unstake amount exceeds staked balance.
+   * @throws {TransactionError} If the composed transaction is rejected — in
+   *   that case neither the unstake nor the withdrawal took effect.
+   *
+   * @example
+   * ```ts
+   * const result = await staking.unstakeAndWithdraw(
+   *   lpTokenAddr,
+   *   500n,
+   *   {
+   *     tokenA: 'CAAA...',
+   *     tokenB: 'CBBB...',
+   *     liquidity: 500n,
+   *     amountAMin: 0n,
+   *     amountBMin: 0n,
+   *     to: myAddress,
+   *   },
+   *   mySigner,
+   * );
+   * ```
+   */
+  async unstakeAndWithdraw(
+    lpTokenAddress: string,
+    amount: bigint,
+    removeLiquidityRequest: RemoveLiquidityRequest,
+    signer: Signer,
+  ): Promise<LiquidityResult> {
+    validateAddress(removeLiquidityRequest.tokenA, "tokenA");
+    validateAddress(removeLiquidityRequest.tokenB, "tokenB");
+    validateDistinctTokens(removeLiquidityRequest.tokenA, removeLiquidityRequest.tokenB);
+    validateAddress(removeLiquidityRequest.to, "to");
+    validatePositiveAmount(removeLiquidityRequest.liquidity, "liquidity");
+    validateNonNegativeAmount(removeLiquidityRequest.amountAMin, "amountAMin");
+    validateNonNegativeAmount(removeLiquidityRequest.amountBMin, "amountBMin");
 
-    if (!result.success) {
+    const publicKey = await signer.publicKey();
+    const unstakeOp = await this.buildUnstakeOperation(lpTokenAddress, amount, publicKey);
+
+    const deadline = removeLiquidityRequest.deadline ?? this.client.getDeadline();
+    const withdrawOp = this.client.router.buildRemoveLiquidity(
+      removeLiquidityRequest.to,
+      removeLiquidityRequest.tokenA,
+      removeLiquidityRequest.tokenB,
+      removeLiquidityRequest.liquidity,
+      removeLiquidityRequest.amountAMin,
+      removeLiquidityRequest.amountBMin,
+      deadline,
+    );
+
+    const composer = this.client.transactionComposer();
+    composer.addOperation(unstakeOp).addOperation(withdrawOp);
+
+    const result = await composer.submit();
+
+    if (!result.success || !result.data) {
       throw new TransactionError(
-        `Unstake failed: ${result.error?.message ?? "Unknown error"}`,
+        `unstakeAndWithdraw failed: ${result.error?.message ?? "Unknown error"}`,
         result.txHash,
       );
     }
 
-    return result.txHash!;
+    return {
+      txHash: result.data.txHash,
+      ledger: result.data.ledger,
+      amountA: removeLiquidityRequest.amountAMin,
+      amountB: removeLiquidityRequest.amountBMin,
+      liquidity: removeLiquidityRequest.liquidity,
+    };
   }
 
   /**
