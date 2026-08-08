@@ -1,3 +1,5 @@
+import { z } from "zod";
+import { xdr } from "@stellar/stellar-sdk";
 import { CoralSwapClient } from "@/client";
 import {
   AddLiquidityRequest,
@@ -16,6 +18,98 @@ import {
   validateDistinctTokens,
 } from "@/utils/validation";
 import { estimateGas } from "@/utils/gas";
+
+const AddLiquidityRequestSchema = z
+  .object({
+    tokenA: z.string(),
+    tokenB: z.string(),
+    to: z.string(),
+    amountADesired: z.bigint(),
+    amountBDesired: z.bigint(),
+    amountAMin: z.bigint(),
+    amountBMin: z.bigint(),
+    deadline: z.number().optional(),
+  })
+  .superRefine((value, ctx) => {
+    try {
+      validateAddress(value.tokenA, "tokenA");
+      validateAddress(value.tokenB, "tokenB");
+      validateDistinctTokens(value.tokenA, value.tokenB);
+      validateAddress(value.to, "to");
+      validatePositiveAmount(value.amountADesired, "amountADesired");
+      validatePositiveAmount(value.amountBDesired, "amountBDesired");
+      validateNonNegativeAmount(value.amountAMin, "amountAMin");
+      validateNonNegativeAmount(value.amountBMin, "amountBMin");
+
+      if (value.amountAMin > value.amountADesired) {
+        throw new ValidationError(
+          "amountAMin must not exceed amountADesired",
+          {
+            amountAMin: value.amountAMin.toString(),
+            amountADesired: value.amountADesired.toString(),
+          },
+        );
+      }
+
+      if (value.amountBMin > value.amountBDesired) {
+        throw new ValidationError(
+          "amountBMin must not exceed amountBDesired",
+          {
+            amountBMin: value.amountBMin.toString(),
+            amountBDesired: value.amountBDesired.toString(),
+          },
+        );
+      }
+    } catch (err) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          err instanceof Error ? err.message : "Invalid add liquidity request",
+      });
+    }
+  });
+
+const RemoveLiquidityRequestSchema = z
+  .object({
+    tokenA: z.string(),
+    tokenB: z.string(),
+    to: z.string(),
+    liquidity: z.bigint(),
+    amountAMin: z.bigint(),
+    amountBMin: z.bigint(),
+    deadline: z.number().optional(),
+  })
+  .superRefine((value, ctx) => {
+    try {
+      validateAddress(value.tokenA, "tokenA");
+      validateAddress(value.tokenB, "tokenB");
+      validateDistinctTokens(value.tokenA, value.tokenB);
+      validateAddress(value.to, "to");
+      validatePositiveAmount(value.liquidity, "liquidity");
+      validateNonNegativeAmount(value.amountAMin, "amountAMin");
+      validateNonNegativeAmount(value.amountBMin, "amountBMin");
+    } catch (err) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          err instanceof Error ? err.message : "Invalid remove liquidity request",
+      });
+    }
+  });
+
+function validateWithSchema<T>(
+  schema: z.ZodSchema<T>,
+  value: unknown,
+): T {
+  const result = schema.safeParse(value);
+
+  if (!result.success) {
+    throw new ValidationError(result.error.issues[0]?.message ?? "Validation failed");
+  }
+
+  return result.data;
+}
+
 
 /**
  * Liquidity module -- manages LP positions in CoralSwap pools.
@@ -114,33 +208,12 @@ export class LiquidityModule {
    * const result = await client.liquidity.addLiquidity({ tokenA: 'C...', ... });
    * const gas = await client.liquidity.addLiquidity({ tokenA: 'C...', ... }, { estimateOnly: true });
    */
-  async addLiquidity(request: AddLiquidityRequest, options: { estimateOnly: true }): Promise<GasEstimate>;
-  async addLiquidity(request: AddLiquidityRequest, options?: { estimateOnly?: false }): Promise<LiquidityResult>;
-  async addLiquidity(request: AddLiquidityRequest, options?: { estimateOnly?: boolean }): Promise<LiquidityResult | GasEstimate> {
-    validateAddress(request.tokenA, "tokenA");
-    validateAddress(request.tokenB, "tokenB");
-    validateDistinctTokens(request.tokenA, request.tokenB);
-    validateAddress(request.to, "to");
-    validatePositiveAmount(request.amountADesired, "amountADesired");
-    validatePositiveAmount(request.amountBDesired, "amountBDesired");
-    validateNonNegativeAmount(request.amountAMin, "amountAMin");
-    validateNonNegativeAmount(request.amountBMin, "amountBMin");
-    if (request.amountAMin > request.amountADesired) {
-      throw new ValidationError("amountAMin must not exceed amountADesired", {
-        amountAMin: request.amountAMin.toString(),
-        amountADesired: request.amountADesired.toString(),
-      });
-    }
-    if (request.amountBMin > request.amountBDesired) {
-      throw new ValidationError("amountBMin must not exceed amountBDesired", {
-        amountBMin: request.amountBMin.toString(),
-        amountBDesired: request.amountBDesired.toString(),
-      });
-    }
+  buildAddLiquidityOperation(request: AddLiquidityRequest): xdr.Operation {
+    validateWithSchema(AddLiquidityRequestSchema, request);
 
     const deadline = request.deadline ?? this.client.getDeadline();
 
-    const op = this.client.router.buildAddLiquidity(
+    return this.client.router.buildAddLiquidity(
       request.to,
       request.tokenA,
       request.tokenB,
@@ -150,6 +223,12 @@ export class LiquidityModule {
       request.amountBMin,
       deadline,
     );
+  }
+
+  async addLiquidity(request: AddLiquidityRequest, options: { estimateOnly: true }): Promise<GasEstimate>;
+  async addLiquidity(request: AddLiquidityRequest, options?: { estimateOnly?: false }): Promise<LiquidityResult>;
+  async addLiquidity(request: AddLiquidityRequest, options?: { estimateOnly?: boolean }): Promise<LiquidityResult | GasEstimate> {
+    const op = this.buildAddLiquidityOperation(request);
 
     if (options?.estimateOnly) {
       return estimateGas((ops) => this.client.simulateTransaction(ops, {}), [op]);
@@ -187,23 +266,12 @@ export class LiquidityModule {
    * const result = await client.liquidity.removeLiquidity({ tokenA: 'C...', ... });
    * const gas = await client.liquidity.removeLiquidity({ tokenA: 'C...', ... }, { estimateOnly: true });
    */
-  async removeLiquidity(request: RemoveLiquidityRequest, options: { estimateOnly: true }): Promise<GasEstimate>;
-  async removeLiquidity(request: RemoveLiquidityRequest, options?: { estimateOnly?: false }): Promise<LiquidityResult>;
-  async removeLiquidity(
-    request: RemoveLiquidityRequest,
-    options?: { estimateOnly?: boolean },
-  ): Promise<LiquidityResult | GasEstimate> {
-    validateAddress(request.tokenA, "tokenA");
-    validateAddress(request.tokenB, "tokenB");
-    validateDistinctTokens(request.tokenA, request.tokenB);
-    validateAddress(request.to, "to");
-    validatePositiveAmount(request.liquidity, "liquidity");
-    validateNonNegativeAmount(request.amountAMin, "amountAMin");
-    validateNonNegativeAmount(request.amountBMin, "amountBMin");
+  buildRemoveLiquidityOperation(request: RemoveLiquidityRequest): xdr.Operation {
+    validateWithSchema(RemoveLiquidityRequestSchema, request);
 
     const deadline = request.deadline ?? this.client.getDeadline();
 
-    const op = this.client.router.buildRemoveLiquidity(
+    return this.client.router.buildRemoveLiquidity(
       request.to,
       request.tokenA,
       request.tokenB,
@@ -212,6 +280,15 @@ export class LiquidityModule {
       request.amountBMin,
       deadline,
     );
+  }
+
+  async removeLiquidity(request: RemoveLiquidityRequest, options: { estimateOnly: true }): Promise<GasEstimate>;
+  async removeLiquidity(request: RemoveLiquidityRequest, options?: { estimateOnly?: false }): Promise<LiquidityResult>;
+  async removeLiquidity(
+    request: RemoveLiquidityRequest,
+    options?: { estimateOnly?: boolean },
+  ): Promise<LiquidityResult | GasEstimate> {
+    const op = this.buildRemoveLiquidityOperation(request);
 
     if (options?.estimateOnly) {
       return estimateGas((ops) => this.client.simulateTransaction(ops, {}), [op]);

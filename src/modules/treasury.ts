@@ -1,5 +1,5 @@
-import { SorobanRpc } from "@stellar/stellar-sdk";
 import { CoralSwapClient } from "@/client";
+import { EventCursor, decodeEventTopic, MIN_START_LEDGER } from "@/utils/event-cursor";
 import {
   TreasuryBalance,
   TokenBalance,
@@ -11,6 +11,9 @@ import {
 } from "@/types/treasury";
 
 const LEDGERS_PER_30_DAYS = 518_400; // 30 days × 86 400 s/day ÷ 5 s/ledger
+
+/** Upper bound on swap events aggregated per pool in getFeeRevenue(). */
+const MAX_REVENUE_EVENTS = 10_000;
 
 /**
  * Options for constructing a TreasuryModule.
@@ -137,9 +140,17 @@ export class TreasuryModule {
    * console.log(revenue.trend); // 'rising' | 'falling' | 'stable'
    */
   async getFeeRevenue(period?: RevenuePeriod): Promise<RevenueData> {
+    // Anchor the window once against the chain head and reuse it for every
+    // pool cursor, so all pools scan an identical, valid ledger range.
     const currentLedger = await this.client.getCurrentLedger();
-    const fromLedger = period?.fromLedger ?? Math.max(0, currentLedger - this.ledgersPer30Days);
     const toLedger = period?.toLedger ?? currentLedger;
+    // Clamp to MIN_START_LEDGER rather than 0: on a chain younger than the
+    // window, `currentLedger - ledgersPer30Days` goes negative and RPC rejects
+    // a startLedger below 1.
+    const fromLedger = Math.max(
+      MIN_START_LEDGER,
+      period?.fromLedger ?? currentLedger - this.ledgersPer30Days,
+    );
     const midLedger = Math.floor((fromLedger + toLedger) / 2);
 
     const allPairs = await this.client.factory.getAllPairs();
@@ -151,7 +162,13 @@ export class TreasuryModule {
 
     for (const pairAddress of allPairs) {
       const { revenueUSD, volumeUSD, firstHalf, secondHalf } =
-        await this.fetchPoolRevenue(pairAddress, fromLedger, toLedger, midLedger, priceMap);
+        await this.fetchPoolRevenue(
+          pairAddress,
+          fromLedger,
+          toLedger,
+          midLedger,
+          priceMap,
+        );
       firstHalfRevenue += firstHalf;
       secondHalfRevenue += secondHalf;
       byPool.push({ pairAddress, revenueUSD, volumeUSD });
@@ -178,14 +195,20 @@ export class TreasuryModule {
     priceMap: Map<string, number>,
   ): Promise<{ revenueUSD: number; volumeUSD: number; firstHalf: number; secondHalf: number }> {
     try {
-      const request: SorobanRpc.Server.GetEventsRequest = {
-        startLedger: fromLedger,
-        filters: [{ type: 'contract', contractIds: [pairAddress], topics: [['swap']] }],
-        limit: 10000,
-      };
-      const response = await this.client.server.getEvents(request);
+      // Delegated to the shared EventCursor: it encodes the "swap" topic as a
+      // base64 XDR ScVal and paginates — no hand-rolled request building here.
+      // The window is passed explicitly, so the cursor never has to fall back
+      // to its own anchoring.
+      const cursor = new EventCursor(this.client.server);
+      const events = await cursor.scan({
+        contractIds: [pairAddress],
+        topics: ["swap"],
+        fromLedger,
+        toLedger,
+        limit: MAX_REVENUE_EVENTS,
+      });
 
-      if (!Array.isArray(response?.events) || response.events.length === 0) {
+      if (events.length === 0) {
         return { revenueUSD: 0, volumeUSD: 0, firstHalf: 0, secondHalf: 0 };
       }
 
@@ -194,7 +217,7 @@ export class TreasuryModule {
       let firstHalf = 0;
       let secondHalf = 0;
 
-      for (const event of response.events) {
+      for (const event of events) {
         if (event.ledger > toLedger) continue;
         const parsed = this.parseSwapEventForRevenue(event);
         if (!parsed) continue;
@@ -227,8 +250,10 @@ export class TreasuryModule {
     try {
       if (!rawEvent || typeof rawEvent !== 'object') return null;
       const eventObj = rawEvent as Record<string, unknown>;
-      const topics = (eventObj.topic as string[]) ?? [];
-      if (!topics.length || topics[0] !== 'swap') return null;
+      // Topics come back as XDR ScVals (or base64 XDR on raw responses) —
+      // decode before comparing rather than matching a bare string.
+      const topics = (eventObj.topic as unknown[]) ?? [];
+      if (!topics.length || decodeEventTopic(topics[0]) !== 'swap') return null;
 
       const value = eventObj.value;
       if (!value || typeof value !== 'object') return null;
@@ -359,6 +384,15 @@ export class TreasuryModule {
     }
 
     return holdings;
+  }
+
+  /**
+   * Public wrapper around {@link buildPriceMap} for callers outside this
+   * module hierarchy (e.g. MonitoringModule) that need the same
+   * stablecoin-anchored spot pricing used for treasury/portfolio valuations.
+   */
+  async getSpotPriceMap(allPairs: string[]): Promise<Map<string, number>> {
+    return this.buildPriceMap(allPairs);
   }
 
   /**

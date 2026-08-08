@@ -149,3 +149,38 @@ export interface VolumeAlert {
 }
 
 export type Alert = PriceAlert | ILAlert | HealthAlert | VolumeAlert;
+
+/**
+ * Parameters for creating a threshold-based price alert.
+ */
+export interface PriceAlertParams {
+  /** Token address to monitor */
+  tokenAddress: string;
+  /** Target price in USD (scaled by 10^8 for RedStone compatibility) */
+  targetPriceUSD: bigint;
+  /** Direction: trigger when price goes above or below target */
+  direction: 'above' | 'below';
+  /** Optional pair address for spot price fallback */
+  pairAddress?: string;
+  /** Optional user-friendly label for the alert */
+  label?: string;
+}
+
+/**
+ * Stored price alert with hysteresis state.
+ */
+export interface ThresholdPriceAlert {
+  id: string;
+  tokenAddress: string;
+  targetPriceUSD: bigint;
+  direction: 'above' | 'below';
+  pairAddress?: string;
+  label?: string;
+  createdAt: number;
+  lastTriggeredAt?: number;
+  /** Tracks whether price has crossed back after triggering */
+  hasCrossedBack: boolean;
+  /** Last known price for hysteresis tracking */
+  lastKnownPrice?: bigint;
+  status: 'active' | 'triggered';
+}
