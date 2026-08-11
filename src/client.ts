@@ -20,6 +20,7 @@ import { ConnectionPool } from '@/utils/connection-pool';
 import { buildSimulationResult } from '@/utils/simulation';
 import { RateLimiter } from '@/utils/rate-limiter';
 import { withRetry, RetryOptions, isRetryable } from '@/utils/retry';
+import { TransactionComposer } from '@/transaction-composer';
 export { KeypairSigner, PollingStrategy, PollingOptions };
 
 /**
@@ -63,8 +64,8 @@ export class CoralSwapClient {
    * @private
    */
   private async executeWithFallback<T>(
-      fn: (server: SorobanRpc.Server) => Promise<T>,
-      label: string,
+    fn: (server: SorobanRpc.Server) => Promise<T>,
+    label: string,
   ): Promise<T> {
     const options: RetryOptions = this.getRetryOptions();
 
@@ -74,7 +75,7 @@ export class CoralSwapClient {
       const rpcUrl = this._connectionPool.getEndpoint();
 
       if (rpcUrl !== this._activeRpcUrl) {
-        this._server = this.createRpcServer(rpcUrl);
+        this.server = this.createRpcServer(rpcUrl);
         this._poller = null;
         this._activeRpcUrl = rpcUrl;
         this.networkConfig.rpcUrl = rpcUrl;
@@ -98,9 +99,6 @@ export class CoralSwapClient {
         this._connectionPool.reportSuccess(rpcUrl);
         return result;
       } catch (err) {
-        // Non-retryable errors (e.g. ValidationError, bad simulation) must surface
-        // immediately — cycling through every fallback endpoint cannot fix them and
-        // only multiplies latency for a failure that retrying can never resolve.
         if (!isRetryable(err)) {
           throw err;
         }
@@ -300,6 +298,14 @@ export class CoralSwapClient {
         sourceAccount,
     );
   }
+
+  /**
+   * Create a transaction composer for atomic multi-operation transactions.
+   */
+  transactionComposer(): TransactionComposer {
+    return new TransactionComposer(this);
+  }
+
 
   /**
    * Switch the client to a different network.

@@ -1,3 +1,23 @@
+/**
+ * @module order-book
+ *
+ * Aggregated view of a user's open orders and trade history across the limit,
+ * DCA and stop-loss modules.
+ *
+ * ## RPC audit (#437)
+ *
+ * Audited for the raw-string `getEvents` topic-filter and zero-anchored
+ * ledger-cursor bug classes: this module currently issues **no** RPC calls —
+ * every function below returns fixture data and the injected client is unused.
+ * There is therefore nothing to encode or anchor here yet.
+ *
+ * When these functions are wired to the chain, build their history queries on
+ * the shared `EventCursor` (`@/utils/event-cursor`) rather than hand-rolling
+ * `GetEventsRequest`: it encodes topic filters as base64 XDR `ScVal`s and
+ * anchors ledger windows against `getLatestLedger()`, which is exactly what
+ * the audited modules got wrong.
+ */
+
 import { Trade, TradeFilter } from '../types/trade';
 import { UnifiedOrder, OrderSummary } from '../types/order-book';
 import { CoralSwapClient } from '@/client';

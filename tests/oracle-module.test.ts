@@ -68,7 +68,7 @@ describe('OracleModule', () => {
             const start = makeObs(1000n, 2000n, 100);
             const end = makeObs(11000n, 22000n, 200);
 
-            const result = oracle.computeTWAP(start, end);
+            const result = oracle.computeTWAP(start, end, { enforceMinWindow: false });
 
             // price0TWAP = (11000 - 1000) / 100 = 100
             expect(result.price0TWAP).toBe(100n);
@@ -81,7 +81,7 @@ describe('OracleModule', () => {
             const start = makeObs(0n, 0n, 500);
             const end = makeObs(500n, 1000n, 501);
 
-            const result = oracle.computeTWAP(start, end);
+            const result = oracle.computeTWAP(start, end, { enforceMinWindow: false });
 
             expect(result.price0TWAP).toBe(500n);
             expect(result.price1TWAP).toBe(1000n);
@@ -92,7 +92,7 @@ describe('OracleModule', () => {
             const start = makeObs(10n ** 30n, 10n ** 30n, 0);
             const end = makeObs(10n ** 30n + 10n ** 24n, 10n ** 30n + 2n * 10n ** 24n, 1000);
 
-            const result = oracle.computeTWAP(start, end);
+            const result = oracle.computeTWAP(start, end, { enforceMinWindow: false });
 
             expect(result.price0TWAP).toBe(10n ** 21n);
             expect(result.price1TWAP).toBe(2n * 10n ** 21n);
@@ -102,7 +102,7 @@ describe('OracleModule', () => {
             const start = makeObs(5000n, 5000n, 100);
             const end = makeObs(5000n, 5000n, 200);
 
-            const result = oracle.computeTWAP(start, end);
+            const result = oracle.computeTWAP(start, end, { enforceMinWindow: false });
 
             expect(result.price0TWAP).toBe(0n);
             expect(result.price1TWAP).toBe(0n);
@@ -130,7 +130,7 @@ describe('OracleModule', () => {
             const start = makeObs(0n, 0n, 0);
             const end = makeObs(10n, 7n, 3);
 
-            const result = oracle.computeTWAP(start, end);
+            const result = oracle.computeTWAP(start, end, { enforceMinWindow: false });
 
             expect(result.price0TWAP).toBe(3n);
             expect(result.price1TWAP).toBe(2n);

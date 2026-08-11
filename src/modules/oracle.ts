@@ -3,6 +3,13 @@ import { PRECISION } from "@/config";
 import { ValidationError, InsufficientLiquidityError } from "@/errors";
 
 /**
+ * Minimum time window (in seconds) for TWAP to resist single-block manipulation.
+ * A TWAP computed over a shorter window is not manipulation-resistant and should
+ * be rejected or flagged.
+ */
+export const MIN_TWAP_WINDOW_SECONDS = 300; // 5 minutes
+
+/**
  * TWAP Oracle data point from cumulative price accumulators.
  */
 export interface TWAPObservation {
@@ -103,21 +110,38 @@ export class OracleModule {
    *
    * @param startObs - The earlier observation
    * @param endObs - The later observation
+   * @param options - Optional configuration
+   * @param options.enforceMinWindow - Whether to enforce minimum window (default: true)
    * @returns An object containing computed TWAP prices
    * @throws {ValidationError} If the end observation time is not after the start observation time
+   * @throws {ValidationError} If the time window is below the minimum required for manipulation resistance
    * @example
    * const twap = client.oracle.computeTWAP(obs1, obs2);
    */
   computeTWAP(
     startObs: TWAPObservation,
     endObs: TWAPObservation,
+    options: { enforceMinWindow?: boolean } = {},
   ): { price0TWAP: bigint; price1TWAP: bigint; timeWindow: number } {
+    const { enforceMinWindow = true } = options;
     const timeElapsed = endObs.blockTimestampLast - startObs.blockTimestampLast;
 
     if (timeElapsed <= 0) {
       throw new ValidationError(
         "End observation must be after start observation",
         {
+          startTimestamp: startObs.blockTimestampLast,
+          endTimestamp: endObs.blockTimestampLast,
+        },
+      );
+    }
+
+    if (enforceMinWindow && timeElapsed < MIN_TWAP_WINDOW_SECONDS) {
+      throw new ValidationError(
+        `TWAP window too short for manipulation resistance (${timeElapsed}s < ${MIN_TWAP_WINDOW_SECONDS}s minimum)`,
+        {
+          timeElapsed,
+          minRequired: MIN_TWAP_WINDOW_SECONDS,
           startTimestamp: startObs.blockTimestampLast,
           endTimestamp: endObs.blockTimestampLast,
         },
@@ -142,11 +166,18 @@ export class OracleModule {
    * (caller must wait and retry).
    *
    * @param pairAddress - The address of the pair contract
-   * @returns The TWAP result or null if minimum 2 observations aren't met
+   * @param options - Optional configuration
+   * @param options.enforceMinWindow - Whether to enforce minimum window (default: true)
+   * @returns The TWAP result or null if minimum 2 observations aren't met or window is too short
    * @example
    * const twap = await client.oracle.getTWAP('C...');
    */
-  async getTWAP(pairAddress: string): Promise<TWAPResult | null> {
+  async getTWAP(
+    pairAddress: string,
+    options: { enforceMinWindow?: boolean } = {},
+  ): Promise<TWAPResult | null> {
+    const { enforceMinWindow = true } = options;
+
     // Take a fresh observation
     await this.observe(pairAddress);
 
@@ -162,11 +193,17 @@ export class OracleModule {
       return null;
     }
 
+    const timeWindow = endObs.blockTimestampLast - startObs.blockTimestampLast;
+    if (enforceMinWindow && timeWindow < MIN_TWAP_WINDOW_SECONDS) {
+      return null; // Window too short - caller should wait longer
+    }
+
     const pair = this.client.pair(pairAddress);
     const tokens = await pair.getTokens();
-    const { price0TWAP, price1TWAP, timeWindow } = this.computeTWAP(
+    const { price0TWAP, price1TWAP } = this.computeTWAP(
       startObs,
       endObs,
+      { enforceMinWindow: false }, // Already checked above
     );
 
     return {
@@ -205,6 +242,79 @@ export class OracleModule {
       price0Per1: (reserve0 * PRECISION.PRICE_SCALE) / reserve1,
       price1Per0: (reserve1 * PRECISION.PRICE_SCALE) / reserve0,
     };
+  }
+
+  /**
+   * Compute price deviation between TWAP and spot price.
+   *
+   * This metric compares two independent price sources (oracle TWAP vs pool spot price)
+   * to detect potential manipulation or anomalies. Returns the deviation in basis points.
+   *
+   * @param pairAddress - The address of the pair contract
+   * @returns Deviation in basis points for both price directions, or null if TWAP unavailable
+   * @throws {InsufficientLiquidityError} If pool has no liquidity
+   * @example
+   * const deviation = await client.oracle.getPriceDeviation('C...');
+   * if (deviation && deviation.price0DeviationBps > 500) {
+   *   console.warn('Price deviation exceeds 5%');
+   * }
+   */
+  async getPriceDeviation(pairAddress: string): Promise<{
+    price0DeviationBps: number;
+    price1DeviationBps: number;
+    twapPrice0: bigint;
+    twapPrice1: bigint;
+    spotPrice0: bigint;
+    spotPrice1: bigint;
+  } | null> {
+    // Get TWAP price (manipulation-resistant)
+    const twapResult = await this.getTWAP(pairAddress);
+    if (!twapResult) {
+      return null; // Not enough data for TWAP yet
+    }
+
+    // Get spot price (current reserves)
+    const spotPrice = await this.getSpotPrice(pairAddress);
+
+    // Compute deviations in basis points (1 bps = 0.01%)
+    const price0DeviationBps = this.computeDeviationBps(
+      twapResult.price0TWAP,
+      spotPrice.price0Per1,
+    );
+
+    const price1DeviationBps = this.computeDeviationBps(
+      twapResult.price1TWAP,
+      spotPrice.price1Per0,
+    );
+
+    return {
+      price0DeviationBps,
+      price1DeviationBps,
+      twapPrice0: twapResult.price0TWAP,
+      twapPrice1: twapResult.price1TWAP,
+      spotPrice0: spotPrice.price0Per1,
+      spotPrice1: spotPrice.price1Per0,
+    };
+  }
+
+  /**
+   * Compute deviation between two prices in basis points.
+   *
+   * @param referencePrice - The reference price (e.g., TWAP)
+   * @param currentPrice - The current price to compare (e.g., spot)
+   * @returns Absolute deviation in basis points
+   * @private
+   */
+  private computeDeviationBps(referencePrice: bigint, currentPrice: bigint): number {
+    if (referencePrice === 0n) return 0;
+
+    // Calculate absolute deviation: |current - reference| / reference * 10000
+    const diff = currentPrice > referencePrice
+      ? currentPrice - referencePrice
+      : referencePrice - currentPrice;
+
+    const deviationBps = Number((diff * 10_000n) / referencePrice);
+    return deviationBps;
   }
 
   /**

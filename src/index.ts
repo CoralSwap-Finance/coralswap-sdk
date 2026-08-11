@@ -87,6 +87,7 @@ export {
 } from "@/modules";
 export type { OptimalPath } from "@/modules/router";
 export type { TWAPObservation, TWAPResult, TraderRanking, GetTopTradersOptions } from "@/modules";
+export { MIN_TWAP_WINDOW_SECONDS } from "@/modules";
 export type { TreasuryModuleOptions, LeaderboardEntry, LeaderboardOptions } from "@/modules";
 
 // Utilities
@@ -135,6 +136,9 @@ export {
   EVENT_TOPICS,
   decodeEvents,
   decodeEventsFromXdr,
+  EventCursor,
+  decodeEventTopic,
+  MIN_START_LEDGER,
   batchCall,
   batchCallSequential,
   batchRequest,
@@ -155,6 +159,7 @@ export type {
   BatchResult,
   TransactionStatus,
   RetryDecision,
+  EventCursorOptions,
 } from "./utils";
 
 // Schema validation
@@ -184,3 +189,5 @@ export {
   WebhookDisabledError,
   mapError,
 } from "@/errors";
+
+export { TransactionComposer } from "./transaction-composer";

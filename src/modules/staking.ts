@@ -20,7 +20,7 @@ import {
   CooldownError,
   StakingError,
 } from "@/errors";
-import { validateAddress } from "@/utils/validation";
+import { validateAddress, validatePositiveAmount } from "@/utils/validation";
 import { isValidAddress } from "@/utils/addresses";
 import { z } from "zod";
 
@@ -101,20 +101,35 @@ export class StakingModule {
    * const txHash = await staking.stake('CAAAA...', 1000n, mySigner);
    * ```
    */
+  buildStakeOperation(
+    lpTokenAddress: string,
+    amount: bigint,
+    publicKey: string,
+  ): xdr.Operation {
+    validateAddress(lpTokenAddress, "lpTokenAddress");
+    validatePositiveAmount(amount, "amount");
+
+    const contract = new Contract(lpTokenAddress);
+
+    return contract.call(
+      "stake",
+      nativeToScVal(Address.fromString(publicKey), { type: "address" }),
+      nativeToScVal(amount, { type: "i128" }),
+    );
+  }
+
   async stake(
     lpTokenAddress: string,
     amount: bigint,
     signer: Signer,
   ): Promise<string> {
     validateStakeParams(lpTokenAddress, amount);
-
     const publicKey = await signer.publicKey();
-    const contract = new Contract(lpTokenAddress);
 
-    const op = contract.call(
-      "stake",
-      nativeToScVal(Address.fromString(publicKey), { type: "address" }),
-      nativeToScVal(amount, { type: "i128" }),
+    const op = this.buildStakeOperation(
+      lpTokenAddress,
+      amount,
+      publicKey,
     );
 
     const result = await this.client.submitTransaction([op]);
