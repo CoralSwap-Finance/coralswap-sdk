@@ -1,7 +1,7 @@
 import { CoralSwapClient } from '@/client';
 import { Contract, Address, nativeToScVal } from '@stellar/stellar-sdk';
-import { Signer, Result } from '@/types/common';
-import { TransactionError, ValidationError } from '@/errors';
+import { Signer } from '@/types/common';
+import { TransactionError } from '@/errors';
 import { validateAddress, validatePositiveAmount } from '@/utils/validation';
 import { idempotentSubmit } from '@/utils/idempotent-resubmission';
 
