@@ -3,7 +3,10 @@ import { Contract, Address, nativeToScVal } from '@stellar/stellar-sdk';
 import { Signer } from '@/types/common';
 import { TransactionError } from '@/errors';
 import { validateAddress, validatePositiveAmount } from '@/utils/validation';
-import { idempotentSubmit } from '@/utils/idempotent-resubmission';
+import {
+  getTransactionStatus,
+  shouldRetrySubmission,
+} from '@/utils/idempotent-resubmission';
 
 /**
  * Blend module — manages LP-token collateral operations for Blend pools.
@@ -49,18 +52,58 @@ export class BlendModule {
       nativeToScVal(amount, { type: 'i128' }),
     );
 
-    const submitFn = async () => this.client.submitTransaction([op]);
+    const result = await this.client.submitTransaction([op]);
 
-    // Initial submission to get a txHash
-    const initialResult = await submitFn();
-    if (!initialResult.txHash) {
-      throw new TransactionError('Deposit failed to produce a transaction hash');
+    if (result.success) {
+      return {
+        txHash: result.txHash!,
+        ledger: result.data!.ledger,
+      };
     }
 
-    return idempotentSubmit(
-      initialResult.txHash,
-      submitFn,
-      this.client.server,
+    if (result.txHash) {
+      const status = await getTransactionStatus(
+        this.client.server,
+        result.txHash,
+      );
+      const decision = shouldRetrySubmission(status);
+
+      if (!decision.shouldRetry) {
+        if (status.status === 'SUCCESS') {
+          return {
+            txHash: status.txHash,
+            ledger: status.ledger,
+          };
+        }
+
+        throw new TransactionError(
+          `Deposit failed: ${
+            result.error?.message ?? 'Transaction failed on-chain'
+          }`,
+          result.txHash,
+        );
+      }
+
+      const retryResult = await this.client.submitTransaction([op]);
+
+      if (retryResult.success) {
+        return {
+          txHash: retryResult.txHash!,
+          ledger: retryResult.data!.ledger,
+        };
+      }
+
+      throw new TransactionError(
+        `Deposit failed after retry: ${
+          retryResult.error?.message ?? 'Unknown error'
+        }`,
+        retryResult.txHash,
+      );
+    }
+
+    throw new TransactionError(
+      `Deposit failed: ${result.error?.message ?? 'Unknown error'}`,
+      result.txHash,
     );
   }
 
@@ -94,18 +137,58 @@ export class BlendModule {
       nativeToScVal(amount, { type: 'i128' }),
     );
 
-    const submitFn = async () => this.client.submitTransaction([op]);
+    const result = await this.client.submitTransaction([op]);
 
-    // Initial submission to get a txHash
-    const initialResult = await submitFn();
-    if (!initialResult.txHash) {
-      throw new TransactionError('Withdrawal failed to produce a transaction hash');
+    if (result.success) {
+      return {
+        txHash: result.txHash!,
+        ledger: result.data!.ledger,
+      };
     }
 
-    return idempotentSubmit(
-      initialResult.txHash,
-      submitFn,
-      this.client.server,
+    if (result.txHash) {
+      const status = await getTransactionStatus(
+        this.client.server,
+        result.txHash,
+      );
+      const decision = shouldRetrySubmission(status);
+
+      if (!decision.shouldRetry) {
+        if (status.status === 'SUCCESS') {
+          return {
+            txHash: status.txHash,
+            ledger: status.ledger,
+          };
+        }
+
+        throw new TransactionError(
+          `Withdrawal failed: ${
+            result.error?.message ?? 'Transaction failed on-chain'
+          }`,
+          result.txHash,
+        );
+      }
+
+      const retryResult = await this.client.submitTransaction([op]);
+
+      if (retryResult.success) {
+        return {
+          txHash: retryResult.txHash!,
+          ledger: retryResult.data!.ledger,
+        };
+      }
+
+      throw new TransactionError(
+        `Withdrawal failed after retry: ${
+          retryResult.error?.message ?? 'Unknown error'
+        }`,
+        retryResult.txHash,
+      );
+    }
+
+    throw new TransactionError(
+      `Withdrawal failed: ${result.error?.message ?? 'Unknown error'}`,
+      result.txHash,
     );
   }
 }

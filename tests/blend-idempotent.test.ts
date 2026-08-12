@@ -1,83 +1,247 @@
-import { SorobanRpc } from '@stellar/stellar-sdk';
-import { idempotentSubmit } from '../src/utils/idempotent-resubmission';
+import { CoralSwapClient } from '../src/client';
+import { BlendModule } from '../src/modules/blend';
 import { TransactionError } from '../src/errors';
+import { Signer } from '../src/types/common';
+import { SorobanRpc } from '@stellar/stellar-sdk';
 
-describe('Blend idempotent resubmission', () => {
-  let mockServer: jest.Mocked<SorobanRpc.Server>;
+const POOL_ADDRESS =
+  'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM';
+const LP_TOKEN_ADDRESS =
+  'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM';
+const USER_ADDRESS =
+  'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF';
+
+describe('BlendModule - idempotent resubmission', () => {
+  let client: CoralSwapClient;
+  let blend: BlendModule;
+  let signer: Signer;
+  let server: jest.Mocked<SorobanRpc.Server>;
+  let submitTransaction: jest.Mock;
 
   beforeEach(() => {
-    mockServer = {
+    submitTransaction = jest.fn();
+
+    server = {
       getTransaction: jest.fn(),
-    } as any;
+    } as unknown as jest.Mocked<SorobanRpc.Server>;
+
+    client = {
+      submitTransaction,
+      server,
+    } as unknown as CoralSwapClient;
+
+    signer = {
+      publicKey: jest.fn().mockResolvedValue(USER_ADDRESS),
+    } as unknown as Signer;
+
+    blend = new BlendModule(client);
   });
 
-  describe('idempotentSubmit', () => {
-    it('detects a timed-out-but-landed transaction and does not resubmit', async () => {
-      const txHash = 'abc123-landed';
+  describe('depositCollateral', () => {
+    it('does not resubmit when the timed-out transaction already landed', async () => {
+      const txHash = 'deposit-landed';
 
-      mockServer.getTransaction.mockResolvedValue({
+      submitTransaction.mockResolvedValueOnce({
+        success: false,
+        txHash,
+        error: {
+          code: 'TX_TIMEOUT',
+          message: 'Transaction confirmation timed out',
+        },
+      });
+
+      server.getTransaction.mockResolvedValue({
         status: 'SUCCESS',
         ledger: 200,
       } as any);
 
-      let submitCount = 0;
-      const submitFn = jest.fn().mockImplementation(async () => {
-        submitCount++;
-        if (submitCount === 1) {
-          return { success: false, txHash, error: { message: 'timeout' } };
-        }
-        return { success: true, txHash: 'should-not-happen' };
-      });
+      const result = await blend.depositCollateral(
+        POOL_ADDRESS,
+        LP_TOKEN_ADDRESS,
+        100n,
+        signer,
+      );
 
-      const result = await idempotentSubmit(txHash, submitFn, mockServer, {
-        maxAttempts: 3,
-        pollInterval: 10,
-        pollMaxAttempts: 5,
+      expect(result).toEqual({
+        txHash,
+        ledger: 200,
       });
-
-      expect(result.success).toBe(true);
-      expect(result.txHash).toBe(txHash);
-      expect(result.ledger).toBe(200);
-      expect(submitCount).toBe(1);
+      expect(submitTransaction).toHaveBeenCalledTimes(1);
+      expect(server.getTransaction).toHaveBeenCalledWith(txHash);
     });
 
-    it('retries a genuinely failed transaction', async () => {
-      const failedTxHash = 'def456-failed';
-      const retryTxHash = 'def789-retry';
+    it('does not resubmit when the timed-out transaction genuinely failed on-chain', async () => {
+      const txHash = 'deposit-failed';
 
-      mockServer.getTransaction.mockImplementation(async (hash: string) => {
-        if (hash === failedTxHash) {
-          return { status: 'FAILED', ledger: 150 } as any;
-        }
-        return { status: 'SUCCESS', ledger: 151 } as any;
+      submitTransaction.mockResolvedValueOnce({
+        success: false,
+        txHash,
+        error: {
+          code: 'TX_TIMEOUT',
+          message: 'Transaction confirmation timed out',
+        },
       });
 
-      let submitCount = 0;
-      const submitFn = jest.fn().mockImplementation(async () => {
-        submitCount++;
-        if (submitCount === 1) {
-          return { success: false, txHash: failedTxHash, error: { message: 'timeout' } };
-        }
-        return { success: true, txHash: retryTxHash, data: { ledger: 151 } };
-      });
+      server.getTransaction.mockResolvedValue({
+        status: 'FAILED',
+        ledger: 201,
+      } as any);
 
-      const result = await idempotentSubmit(failedTxHash, submitFn, mockServer, {
-        maxAttempts: 3,
-        pollInterval: 10,
-        pollMaxAttempts: 5,
-      });
-
-      expect(result.success).toBe(true);
-      expect(result.txHash).toBe(retryTxHash);
-      expect(submitCount).toBe(2);
-    });
-
-    it('throws immediately on non-retryable error', async () => {
-      const submitFn = jest.fn().mockRejectedValue(new Error('Invalid input'));
       await expect(
-        idempotentSubmit('some-hash', submitFn, mockServer, { maxAttempts: 2, pollInterval: 10 }),
-      ).rejects.toThrow('Invalid input');
-      expect(submitFn).toHaveBeenCalledTimes(1);
+        blend.depositCollateral(
+          POOL_ADDRESS,
+          LP_TOKEN_ADDRESS,
+          100n,
+          signer,
+        ),
+      ).rejects.toThrow(TransactionError);
+
+      expect(submitTransaction).toHaveBeenCalledTimes(1);
+      expect(server.getTransaction).toHaveBeenCalledWith(txHash);
+    });
+
+    it('retries when the timed-out transaction was not found on-chain', async () => {
+      const originalTxHash = 'deposit-not-found';
+      const retryTxHash = 'deposit-retry';
+
+      submitTransaction
+        .mockResolvedValueOnce({
+          success: false,
+          txHash: originalTxHash,
+          error: {
+            code: 'TX_TIMEOUT',
+            message: 'Transaction confirmation timed out',
+          },
+        })
+        .mockResolvedValueOnce({
+          success: true,
+          txHash: retryTxHash,
+          data: {
+            ledger: 202,
+          },
+        });
+
+      server.getTransaction.mockResolvedValue({
+        status: 'NOT_FOUND',
+      } as any);
+
+      const result = await blend.depositCollateral(
+        POOL_ADDRESS,
+        LP_TOKEN_ADDRESS,
+        100n,
+        signer,
+      );
+
+      expect(result).toEqual({
+        txHash: retryTxHash,
+        ledger: 202,
+      });
+      expect(submitTransaction).toHaveBeenCalledTimes(2);
+      expect(server.getTransaction).toHaveBeenCalledWith(originalTxHash);
+    });
+  });
+
+  describe('withdrawCollateral', () => {
+    it('does not resubmit when the timed-out withdrawal already landed', async () => {
+      const txHash = 'withdraw-landed';
+
+      submitTransaction.mockResolvedValueOnce({
+        success: false,
+        txHash,
+        error: {
+          code: 'TX_TIMEOUT',
+          message: 'Transaction confirmation timed out',
+        },
+      });
+
+      server.getTransaction.mockResolvedValue({
+        status: 'SUCCESS',
+        ledger: 300,
+      } as any);
+
+      const result = await blend.withdrawCollateral(
+        POOL_ADDRESS,
+        LP_TOKEN_ADDRESS,
+        100n,
+        signer,
+      );
+
+      expect(result).toEqual({
+        txHash,
+        ledger: 300,
+      });
+      expect(submitTransaction).toHaveBeenCalledTimes(1);
+      expect(server.getTransaction).toHaveBeenCalledWith(txHash);
+    });
+
+    it('does not resubmit when the timed-out withdrawal genuinely failed on-chain', async () => {
+      const txHash = 'withdraw-failed';
+
+      submitTransaction.mockResolvedValueOnce({
+        success: false,
+        txHash,
+        error: {
+          code: 'TX_TIMEOUT',
+          message: 'Transaction confirmation timed out',
+        },
+      });
+
+      server.getTransaction.mockResolvedValue({
+        status: 'FAILED',
+        ledger: 301,
+      } as any);
+
+      await expect(
+        blend.withdrawCollateral(
+          POOL_ADDRESS,
+          LP_TOKEN_ADDRESS,
+          100n,
+          signer,
+        ),
+      ).rejects.toThrow(TransactionError);
+
+      expect(submitTransaction).toHaveBeenCalledTimes(1);
+      expect(server.getTransaction).toHaveBeenCalledWith(txHash);
+    });
+
+    it('retries when the timed-out withdrawal was not found on-chain', async () => {
+      const originalTxHash = 'withdraw-not-found';
+      const retryTxHash = 'withdraw-retry';
+
+      submitTransaction
+        .mockResolvedValueOnce({
+          success: false,
+          txHash: originalTxHash,
+          error: {
+            code: 'TX_TIMEOUT',
+            message: 'Transaction confirmation timed out',
+          },
+        })
+        .mockResolvedValueOnce({
+          success: true,
+          txHash: retryTxHash,
+          data: {
+            ledger: 302,
+          },
+        });
+
+      server.getTransaction.mockResolvedValue({
+        status: 'NOT_FOUND',
+      } as any);
+
+      const result = await blend.withdrawCollateral(
+        POOL_ADDRESS,
+        LP_TOKEN_ADDRESS,
+        100n,
+        signer,
+      );
+
+      expect(result).toEqual({
+        txHash: retryTxHash,
+        ledger: 302,
+      });
+      expect(submitTransaction).toHaveBeenCalledTimes(2);
+      expect(server.getTransaction).toHaveBeenCalledWith(originalTxHash);
     });
   });
 });

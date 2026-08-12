@@ -1,98 +1,85 @@
-import { TransactionPoller, PollingStrategy } from './polling';
-import { isRetryable } from './retry';
-import { TransactionError } from '@/errors';
 import { SorobanRpc } from '@stellar/stellar-sdk';
 
-export interface IdempotentSubmitOptions {
-  maxAttempts?: number;
-  pollInterval?: number;
-  pollMaxAttempts?: number;
-}
+/**
+ * Real, on-chain outcome of a previously-submitted Soroban transaction.
+ *
+ * A client-side timeout or connection error while *submitting* a
+ * transaction says nothing about whether it actually landed -- the
+ * transaction may already be included in a ledger. Callers must check
+ * this before rebuilding and resubmitting, or they risk double-executing
+ * the operation.
+ */
+export type TransactionStatus =
+  | { status: 'SUCCESS'; ledger: number; txHash: string; result?: SorobanRpc.Api.GetSuccessfulTransactionResponse }
+  | { status: 'FAILED'; ledger?: number }
+  | { status: 'NOT_FOUND' }
+  | { status: 'ERROR'; message: string };
 
-export async function idempotentSubmit(
-  txHash: string,
-  submitFn: () => Promise<{ success: boolean; txHash?: string; error?: { message: string }; data?: { ledger: number } }>,
+/**
+ * Look up the real on-chain status of a transaction hash.
+ *
+ * @param server - The Soroban RPC server to query.
+ * @param txHash - Hash of the transaction to check.
+ */
+export async function getTransactionStatus(
   server: SorobanRpc.Server,
-  options: IdempotentSubmitOptions = {},
-): Promise<{ success: boolean; txHash: string; ledger: number }> {
-  const maxAttempts = options.maxAttempts ?? 3;
-  const pollInterval = options.pollInterval ?? 1000;
-  const pollMaxAttempts = options.pollMaxAttempts ?? 30;
-
-  let currentTxHash = txHash || '';
-  let lastError: unknown;
-
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    try {
-      if (currentTxHash && attempt > 0) {
-        const status = await checkTxStatus(currentTxHash, server, pollInterval, pollMaxAttempts);
-        if (status === 'LANDED') {
-          const txResult = await server.getTransaction(currentTxHash);
-          return {
-            success: true,
-            txHash: currentTxHash,
-            ledger: (txResult as any).ledger ?? 0,
-          };
-        }
-        if (status === 'FAILED') {
-          currentTxHash = '';
-        }
-      }
-
-      const result = await submitFn();
-      if (result.success && result.txHash) {
-        return { success: true, txHash: result.txHash, ledger: result.data?.ledger ?? 0 };
-      }
-
-      if (result.txHash) {
-        currentTxHash = result.txHash;
-        const status = await checkTxStatus(currentTxHash, server, pollInterval, pollMaxAttempts);
-        if (status === 'LANDED') {
-          const txResult = await server.getTransaction(currentTxHash);
-          return {
-            success: true,
-            txHash: currentTxHash,
-            ledger: (txResult as any).ledger ?? 0,
-          };
-        }
-        if (status === 'FAILED') {
-          currentTxHash = '';
-          throw new TransactionError(
-            result.error?.message ?? 'Transaction failed on-chain',
-            result.txHash,
-          );
-        }
-        // PENDING — signal retryable
-        throw new TransactionError('Transaction timed out', result.txHash);
-      }
-
-      throw new TransactionError(
-        result.error?.message ?? 'Transaction submission failed',
-      );
-    } catch (err) {
-      if (!isRetryable(err)) throw err;
-      lastError = err;
-      if (attempt === maxAttempts - 1) throw err;
-      await new Promise((resolve) => setTimeout(resolve, pollInterval * Math.pow(2, attempt)));
+  txHash: string,
+): Promise<TransactionStatus> {
+  try {
+    const result = await server.getTransaction(txHash);
+    switch (result.status) {
+      case 'SUCCESS':
+        return {
+          status: 'SUCCESS',
+          ledger: result.ledger ?? 0,
+          txHash,
+          result: result as SorobanRpc.Api.GetSuccessfulTransactionResponse,
+        };
+      case 'FAILED':
+        return {
+          status: 'FAILED',
+          ledger: result.ledger,
+        };
+      case 'NOT_FOUND':
+        return { status: 'NOT_FOUND' };
+      default:
+        return { status: 'ERROR', message: `Unknown transaction status: ${result.status}` };
     }
+  } catch (err) {
+    return {
+      status: 'ERROR',
+      message: err instanceof Error ? err.message : String(err),
+    };
   }
-
-  throw lastError;
 }
 
-async function checkTxStatus(
-  txHash: string,
-  server: SorobanRpc.Server,
-  interval: number,
-  maxAttempts: number,
-): Promise<'LANDED' | 'FAILED' | 'PENDING'> {
-  const poller = new TransactionPoller(server);
-  const result = await poller.poll(txHash, {
-    strategy: PollingStrategy.LINEAR,
-    interval,
-    maxAttempts,
-  });
-  if (result.success) return 'LANDED';
-  if (result.error?.code === 'TX_FAILED') return 'FAILED';
-  return 'PENDING';
+export interface RetryDecision {
+  /** Whether it is safe to rebuild and resubmit the transaction. */
+  shouldRetry: boolean;
+  reason?: string;
+}
+
+/**
+ * Decide whether a transaction is safe to resubmit given its real status.
+ *
+ * - `SUCCESS` / `FAILED` -- the transaction already has a final on-chain
+ *   outcome. Resubmitting would either duplicate the effect (SUCCESS) or
+ *   is pointless (FAILED); either way, do not retry.
+ * - `NOT_FOUND` -- the network never saw it land, so it is safe to retry.
+ * - `ERROR` -- the status check itself failed. We can't confirm the
+ *   transaction didn't land, but favor availability over blocking forever;
+ *   callers combining this with other status sources (e.g. an external
+ *   bridge API) should prefer the more conservative of the two signals.
+ */
+export function shouldRetrySubmission(status: TransactionStatus): RetryDecision {
+  switch (status.status) {
+    case 'SUCCESS':
+      return { shouldRetry: false, reason: 'Transaction already succeeded' };
+    case 'FAILED':
+      return { shouldRetry: false, reason: 'Transaction already failed on-chain' };
+    case 'NOT_FOUND':
+      return { shouldRetry: true };
+    case 'ERROR':
+      return { shouldRetry: true, reason: 'Status check failed, allowing retry' };
+  }
 }

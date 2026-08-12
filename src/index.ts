@@ -84,6 +84,7 @@ export {
   DCAModule,
   LimitOrderModule,
   SquidModule,
+  BlendModule,
 } from "@/modules";
 export type { OptimalPath } from "@/modules/router";
 export type { TWAPObservation, TWAPResult, TraderRanking, GetTopTradersOptions } from "@/modules";
