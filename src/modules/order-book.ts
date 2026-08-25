@@ -4,7 +4,7 @@
  * Aggregated view of a user's open orders and trade history across the limit,
  * DCA and stop-loss modules.
  *
- * ## RPC audit (#437)
+ * ## RPC audit (#480)
  *
  * Audited for the raw-string `getEvents` topic-filter and zero-anchored
  * ledger-cursor bug classes: this module currently issues **no** RPC calls —
