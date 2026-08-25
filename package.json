@@ -66,8 +66,8 @@
   "devDependencies": {
     "@types/jest": "^29.5.0",
     "@types/node": "^26.1.2",
-    "@typescript-eslint/eslint-plugin": "^8.65.0",
-    "@typescript-eslint/parser": "^8.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.70.0",
+    "@typescript-eslint/parser": "^8.70.0",
     "dotenv": "^17.4.2",
     "eslint": "^10.8.0",
     "fast-check": "^4.9.0",
@@ -77,7 +77,8 @@
     "ts-node": "^10.9.2",
     "tsconfig-paths": "^4.2.0",
     "typedoc": "^0.28.20",
-    "typescript": "^5.6.0"
+    "typescript": "npm:@typescript/typescript6@^6.0.2",
+    "@typescript/native": "npm:typescript@^7.0.2"
   },
   "engines": {
     "node": ">=20.0.0"
