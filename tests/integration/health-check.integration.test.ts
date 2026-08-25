@@ -7,6 +7,9 @@ import { checkRPCHealth, getRPCLatency, getContractStatus } from '../../src/modu
  *   STELLAR_TESTNET      – must be 'true' to run
  *   TEST_RPC_URL         – optional RPC override (defaults to the public Testnet RPC)
  *   TEST_CONTRACT_ID     – optional override for the deployed contract to verify
+ *
+ * The contract-status check is skipped when TEST_CONTRACT_ID is not set because
+ * deployed testnet contracts can expire or be archived.
  */
 const SKIP = process.env.STELLAR_TESTNET !== 'true';
 

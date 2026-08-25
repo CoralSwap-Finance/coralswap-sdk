@@ -22,7 +22,10 @@ import { toSorobanAmount } from '../../src/utils/amounts';
  * run repeatedly against shared testnet pools.
  */
 
-const SKIP = process.env.STELLAR_TESTNET !== 'true' || !process.env.TEST_KEYPAIR;
+// Skip unless the full set of testnet fixtures is configured, so the suite
+// degrades to a clean skip on forks/PRs without secrets.
+const SKIP =
+  process.env.STELLAR_TESTNET !== 'true' || !process.env.TEST_KEYPAIR;
 
 function requireEnv(name: string): string {
   const val = process.env[name];

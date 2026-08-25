@@ -16,6 +16,7 @@
     "test:integration": "jest --config jest.integration.config.js",
     "test:integration:rwa": "jest --config jest.integration.config.js tests/integration/rwa.integration.test.ts",
     "test:integration:portfolio": "jest --config jest.integration.config.js --testPathPattern=portfolio.integration",
+    "test:integration:limit-orders": "jest --config jest.integration.config.js --testPathPattern=limit-orders.integration",
     "test:integration:price-feed": "jest --config jest.integration.config.js --testPathPattern=price-feed.integration",
     "test:integration:flash-loan": "jest --config jest.integration.config.js --testPathPattern=flash-loan.integration",
     "test:integration:health-check": "jest --config jest.integration.config.js --testPathPattern=health-check.integration",
@@ -26,6 +27,7 @@
     "test:integration:router": "jest --config jest.integration.config.js --testPathPattern=router.integration",
     "test:integration:tokens": "jest --config jest.integration.config.js --testPathPattern=tokens.integration",
     "test:integration:treasury": "jest --config jest.integration.config.js --testPathPattern=treasury.integration",
+    "test:integration:squid": "jest --config jest.integration.config.js --testPathPattern=squid.integration",
     "lint": "eslint src/**/*.ts",
     "lint:fix": "eslint src/**/*.ts --fix",
     "clean": "rimraf dist",
@@ -66,8 +68,8 @@
   "devDependencies": {
     "@types/jest": "^29.5.0",
     "@types/node": "^26.1.2",
-    "@typescript-eslint/eslint-plugin": "^8.65.0",
-    "@typescript-eslint/parser": "^8.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.68.0",
+    "@typescript-eslint/parser": "^8.68.0",
     "dotenv": "^17.4.2",
     "eslint": "^10.8.0",
     "fast-check": "^4.9.0",
@@ -77,7 +79,8 @@
     "ts-node": "^10.9.2",
     "tsconfig-paths": "^4.2.0",
     "typedoc": "^0.28.20",
-    "typescript": "^5.6.0"
+    "typescript": "npm:@typescript/typescript6@^6.0.2",
+    "@typescript/native": "npm:typescript@^7.0.2"
   },
   "engines": {
     "node": ">=20.0.0"

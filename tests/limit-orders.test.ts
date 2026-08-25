@@ -840,6 +840,120 @@ describe('LimitOrderModule', () => {
     });
   });
 
+  describe('cancelAndReplaceLimitOrder', () => {
+    const TOKEN_IN = 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM';
+    const TOKEN_OUT = 'GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFSHONUCEOASW7QC7OX2H';
+    const PAIR_ADDR = 'CAAQEAYEAUDAOCAJBIFQYDIOB4IBCEQTCQKRMFYYDENBWHA5DYPSBFLM';
+
+    const newParams = {
+      tokenIn: TOKEN_IN,
+      tokenOut: TOKEN_OUT,
+      amountIn: 1000n,
+      targetPrice: 1.75,
+      expiry: Math.floor(Date.now() / 1000) + 3600,
+      pairAddress: PAIR_ADDR,
+    };
+
+    beforeEach(() => {
+      mockClient.config = { retryDelayMs: 0 };
+      mockClient.submitTransaction = jest.fn();
+    });
+
+    it('cancels and places the replacement as a single atomic transaction', async () => {
+      mockServer.simulateTransaction
+        .mockResolvedValueOnce(mockSimulationResult(makeOrderVal('open', 0)))
+        .mockResolvedValueOnce(mockSimulationResult(
+          makeScMap({
+            refunded_amount: nativeToScVal(1000n, { type: 'i128' }),
+            filled_amount: nativeToScVal(0n, { type: 'i128' }),
+          }),
+        ))
+        .mockResolvedValueOnce(mockSimulationResult(xdr.ScVal.scvString('replacement-order')));
+      mockClient.submitTransaction.mockResolvedValue({
+        success: true,
+        data: { txHash: '0xatomic', ledger: 99999 },
+      });
+
+      const result = await module.cancelAndReplaceLimitOrder('order-open', newParams);
+
+      expect(result.refundedAmount).toBe(1000n);
+      expect(result.filledAmount).toBe(0n);
+      expect(result.orderId).toBe('replacement-order');
+      expect(result.refundTxHash).toBe('0xatomic');
+
+      // Both operations are submitted together, exactly once.
+      expect(mockClient.submitTransaction).toHaveBeenCalledTimes(1);
+      const [operations] = mockClient.submitTransaction.mock.calls[0];
+      expect(operations).toHaveLength(2);
+    });
+
+    it('leaves the original order untouched when the composed transaction fails outright', async () => {
+      mockServer.simulateTransaction
+        .mockResolvedValueOnce(mockSimulationResult(makeOrderVal('open', 0)))
+        .mockResolvedValueOnce(mockSimulationResult(
+          makeScMap({
+            refunded_amount: nativeToScVal(1000n, { type: 'i128' }),
+            filled_amount: nativeToScVal(0n, { type: 'i128' }),
+          }),
+        ))
+        .mockResolvedValueOnce(mockSimulationResult(xdr.ScVal.scvString('replacement-order')));
+      // A failure with no txHash never reached the network -- nothing to
+      // reconcile, so it must not be resubmitted.
+      mockClient.submitTransaction.mockResolvedValue({
+        success: false,
+        error: { code: 'TX_FAILED', message: 'Replacement rejected on-chain' },
+      });
+
+      await expect(
+        module.cancelAndReplaceLimitOrder('order-open', newParams),
+      ).rejects.toThrow('Replacement rejected on-chain');
+
+      // A single failed atomic submission -- no partial cancel-only transaction exists.
+      expect(mockClient.submitTransaction).toHaveBeenCalledTimes(1);
+    });
+
+    it('throws OrderNotFoundError without attempting to place the replacement', async () => {
+      mockServer.simulateTransaction.mockResolvedValue(
+        mockSimulationResult(makeOrderVal('cancelled', 0)),
+      );
+
+      await expect(
+        module.cancelAndReplaceLimitOrder('order-cancelled', newParams),
+      ).rejects.toThrow(OrderNotFoundError);
+
+      expect(mockClient.submitTransaction).not.toHaveBeenCalled();
+    });
+
+    it('throws InvalidOperationError for an already-filled order', async () => {
+      mockServer.simulateTransaction.mockResolvedValue(
+        mockSimulationResult(makeOrderVal('filled', 100, 110, 2000000)),
+      );
+
+      await expect(
+        module.cancelAndReplaceLimitOrder('order-filled', newParams),
+      ).rejects.toThrow(InvalidOperationError);
+    });
+
+    it('throws ValidationError for invalid replacement params, without submitting', async () => {
+      mockServer.simulateTransaction
+        .mockResolvedValueOnce(mockSimulationResult(makeOrderVal('open', 0)))
+        .mockResolvedValueOnce(mockSimulationResult(
+          makeScMap({
+            refunded_amount: nativeToScVal(1000n, { type: 'i128' }),
+            filled_amount: nativeToScVal(0n, { type: 'i128' }),
+          }),
+        ));
+
+      await expect(
+        module.cancelAndReplaceLimitOrder('order-open', { ...newParams, targetPrice: 0 }),
+      ).rejects.toThrow(ValidationError);
+
+      // The cancel leg was simulated but never submitted -- nothing was
+      // actually cancelled since the composed transaction never went out.
+      expect(mockClient.submitTransaction).not.toHaveBeenCalled();
+    });
+  });
+
   // -------------------------------------------------------------------------
   // Idempotent resubmission (#467)
   //

@@ -106,8 +106,8 @@ export interface CoralSwapConfig {
 export const TESTNET_NETWORK: NetworkConfig = {
   rpcUrl: "https://soroban-testnet.stellar.org",
   networkPassphrase: "Test SDF Network ; September 2015",
-  factoryAddress: "",
-  routerAddress: "",
+  factoryAddress: "CBLBMYODT37R3GJZLEFCGCYWOOVEUZ3MMTVR2QCOKOK2UPKSI3CXZBNB",
+  routerAddress: "CCDQYZKX5AUI7KSWXIFI7AFRQMWCZMOOUJXIDWEJ4IYX7XE7PHCMCBAF",
   sorobanTimeout: 30,
 };
 
@@ -124,8 +124,8 @@ export const MAINNET_NETWORK: NetworkConfig = {
 export const STAGING_NETWORK: NetworkConfig = {
   rpcUrl: "https://soroban-testnet.stellar.org",
   networkPassphrase: "Test SDF Network ; September 2015",
-  factoryAddress: "",
-  routerAddress: "",
+  factoryAddress: "CBLBMYODT37R3GJZLEFCGCYWOOVEUZ3MMTVR2QCOKOK2UPKSI3CXZBNB",
+  routerAddress: "CCDQYZKX5AUI7KSWXIFI7AFRQMWCZMOOUJXIDWEJ4IYX7XE7PHCMCBAF",
   sorobanTimeout: 30,
 };
 
