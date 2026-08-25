@@ -87,7 +87,6 @@ describe("PositionsModule (Testnet Integration)", () => {
         expect(typeof pos.feeBps).toBe("number");
         expect(pos.feeBps).toBeGreaterThanOrEqual(0);
       },
-      INTEGRATION_SKIP_REASON,
     );
 
     (ensureIntegrationEnv() ? it : it.skip)(
@@ -100,7 +99,6 @@ describe("PositionsModule (Testnet Integration)", () => {
           ),
         ).rejects.toThrow();
       },
-      INTEGRATION_SKIP_REASON,
     );
   });
 
@@ -125,7 +123,6 @@ describe("PositionsModule (Testnet Integration)", () => {
           expect(typeof pos.token1).toBe("string");
         }
       },
-      INTEGRATION_SKIP_REASON,
     );
 
     (ensureIntegrationEnv() ? it : it.skip)(
@@ -140,7 +137,6 @@ describe("PositionsModule (Testnet Integration)", () => {
           expect(pos.pairAddress).toBe(pairAddress);
         }
       },
-      INTEGRATION_SKIP_REASON,
     );
 
     (ensureIntegrationEnv() ? it : it.skip)(
@@ -157,7 +153,6 @@ describe("PositionsModule (Testnet Integration)", () => {
         expect(summary.totalPools).toBe(0);
         expect(summary.positions).toHaveLength(0);
       },
-      INTEGRATION_SKIP_REASON,
     );
 
     (ensureIntegrationEnv() ? it : it.skip)(
@@ -172,7 +167,6 @@ describe("PositionsModule (Testnet Integration)", () => {
         expect(summary.totalPools).toBe(0);
         expect(summary.positions).toHaveLength(0);
       },
-      INTEGRATION_SKIP_REASON,
     );
   });
 
@@ -186,7 +180,6 @@ describe("PositionsModule (Testnet Integration)", () => {
         const result = await positions.hasPosition(pairAddress, ownerAddress);
         expect(result).toBe(true);
       },
-      INTEGRATION_SKIP_REASON,
     );
 
     (ensureIntegrationEnv() ? it : it.skip)(
@@ -197,7 +190,6 @@ describe("PositionsModule (Testnet Integration)", () => {
         const result = await positions.hasPosition(pairAddress, emptyWallet);
         expect(result).toBe(false);
       },
-      INTEGRATION_SKIP_REASON,
     );
   });
 });

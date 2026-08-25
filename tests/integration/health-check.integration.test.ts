@@ -7,19 +7,15 @@ import { checkRPCHealth, getRPCLatency, getContractStatus } from '../../src/modu
  *   STELLAR_TESTNET      – must be 'true' to run
  *   TEST_RPC_URL         – optional RPC override (defaults to the public Testnet RPC)
  *   TEST_CONTRACT_ID     – optional override for the deployed contract to verify
- *
- * When TEST_CONTRACT_ID is not provided, the suite falls back to a known
- * RedStone testnet contract address so the integration check still exercises
- * a real deployed contract.
  */
 const SKIP = process.env.STELLAR_TESTNET !== 'true';
-const DEFAULT_TEST_CONTRACT_ID = 'CBVJ3SFNXDKZPCUV7WDQTFLFJXRN3FJGQNEXR5BZMJB3GBJT4LDABCX';
 
 const describeIntegration = SKIP ? describe.skip : describe;
+const itContractIntegration = process.env.TEST_CONTRACT_ID ? it : it.skip;
 
 describeIntegration('Health check module (testnet)', () => {
   const rpcUrl = process.env.TEST_RPC_URL ?? 'https://soroban-testnet.stellar.org';
-  const contractId = process.env.TEST_CONTRACT_ID ?? DEFAULT_TEST_CONTRACT_ID;
+  const contractId = process.env.TEST_CONTRACT_ID ?? '';
 
   it('returns a sane RPC health result and real latency against the live Testnet RPC', async () => {
     const health = await checkRPCHealth(rpcUrl, 10_000);
@@ -41,7 +37,7 @@ describeIntegration('Health check module (testnet)', () => {
     expect(latency.p99Ms).toBeGreaterThanOrEqual(latency.p95Ms);
   });
 
-  it('reports deployed contract status from the live Testnet RPC', async () => {
+  itContractIntegration('reports deployed contract status from the live Testnet RPC', async () => {
     const status = await getContractStatus(rpcUrl, contractId);
 
     expect(status.deployed).toBe(true);
