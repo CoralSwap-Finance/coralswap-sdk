@@ -2,9 +2,33 @@ import { CoralSwapClient } from '@/client';
 import { PairInfo } from '@/types/pool';
 import { sortTokens } from '@/utils/addresses';
 import { ValidationError, PairNotFoundError } from '@/errors';
+import { SorobanRpc } from '@stellar/stellar-sdk';
 
 /** Default cache TTL in milliseconds (60 seconds). */
 const DEFAULT_CACHE_TTL_MS = 60_000;
+
+/** Default polling interval for watchPool in milliseconds (5 seconds). */
+const DEFAULT_WATCH_INTERVAL_MS = 5_000;
+
+/** Maximum ledger window for getEvents queries in watchPool. */
+const WATCH_LEDGER_WINDOW = 100;
+
+/**
+ * A single pool event received by watchPool().
+ */
+export interface PoolEvent {
+  type: 'swap' | 'mint' | 'burn';
+  pairAddress: string;
+  ledger: number;
+  txHash: string;
+  timestamp: number;
+  data: Record<string, unknown>;
+}
+
+/**
+ * Callback invoked when watchPool() detects a new pool event.
+ */
+export type PoolEventCallback = (event: PoolEvent) => void;
 
 /**
  * A single entry in the pair-address cache.
@@ -276,4 +300,116 @@ export class FactoryModule {
     clearCache(): void {
         this.cache.clear();
     }
+
+    /**
+     * Poll a pair contract for swap/mint/burn events and invoke a callback.
+     *
+     * Uses Soroban RPC `getEvents` to poll for new events from the given pair
+     * contract at a regular interval. The callback is invoked for each new event
+     * detected since the previous poll. Returns an unsubscribe function that
+     * stops polling and cleans up the timer.
+     *
+     * The first poll fetches events from the current ledger minus a window of
+     * {@link WATCH_LEDGER_WINDOW} ledgers. Subsequent polls track the highest
+     * seen ledger to avoid re-emitting old events.
+     *
+     * @param pairAddress - The pair contract address to watch.
+     * @param callback - Function called for each new pool event detected.
+     * @param intervalMs - Polling interval in milliseconds (default 5000).
+     * @returns An unsubscribe function that stops polling. Idempotent.
+     * @throws {ValidationError} If `pairAddress` is empty or `callback` is not a function.
+     */
+    watchPool(
+        pairAddress: string,
+        callback: PoolEventCallback,
+        intervalMs?: number,
+    ): () => void {
+        if (!pairAddress || pairAddress.trim().length === 0) {
+            throw new ValidationError('pairAddress must not be empty');
+        }
+        if (typeof callback !== 'function') {
+            throw new ValidationError('callback must be a function');
+        }
+        const interval = intervalMs ?? DEFAULT_WATCH_INTERVAL_MS;
+        let active = true;
+        let lastSeenLedger = 0;
+
+        const poll = async () => {
+            if (!active) return;
+            try {
+                const currentLedger = await this.client.getCurrentLedger();
+                const startLedger = lastSeenLedger > 0
+                    ? lastSeenLedger + 1
+                    : Math.max(0, currentLedger - WATCH_LEDGER_WINDOW);
+
+                if (startLedger > currentLedger) return;
+
+                const request: SorobanRpc.Server.GetEventsRequest = {
+                    startLedger,
+                    filters: [
+                        {
+                            type: 'contract',
+                            contractIds: [pairAddress],
+                            topics: [
+                                ['swap'],
+                                ['mint'],
+                                ['burn'],
+                            ],
+                        },
+                    ],
+                    limit: 200,
+                };
+
+                const response = await this.client.server.getEvents(request);
+                if (!active) return;
+                if (!response || !Array.isArray(response.events)) return;
+
+                for (const ev of response.events) {
+                    if (ev.ledger > currentLedger) continue;
+                    if (ev.ledger > lastSeenLedger) {
+                        lastSeenLedger = ev.ledger;
+                    }
+
+                    const topicName = ev.topic?.[0]
+                        ? decodeScValString(ev.topic[0])
+                        : '';
+                    if (topicName !== 'swap' && topicName !== 'mint' && topicName !== 'burn') continue;
+
+                    const timestamp = ev.ledgerClosedAt
+                        ? Math.floor(new Date(ev.ledgerClosedAt).getTime() / 1000)
+                        : Math.floor(Date.now() / 1000);
+
+                    const event: PoolEvent = {
+                        type: topicName as PoolEvent['type'],
+                        pairAddress: ev.contractId?.toString() ?? pairAddress,
+                        ledger: ev.ledger,
+                        txHash: ev.txHash ?? '',
+                        timestamp,
+                        data: ev.value ? { raw: ev.value } : {},
+                    };
+
+                    callback(event);
+                }
+            } catch {
+                // Silently catch polling errors
+            }
+        };
+
+        poll();
+        const timer = setInterval(poll, interval);
+
+        return () => {
+            active = false;
+            clearInterval(timer);
+        };
+    }
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function decodeScValString(val: any): string {
+    if (!val) return '';
+    if (typeof val === 'string') return val;
+    if (typeof val.sym === 'function') return val.sym().toString();
+    if (typeof val.str === 'function') return val.str().toString();
+    return val.toString();
 }
