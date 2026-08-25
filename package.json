@@ -66,8 +66,8 @@
   "devDependencies": {
     "@types/jest": "^29.5.0",
     "@types/node": "^26.1.2",
-    "@typescript-eslint/eslint-plugin": "^8.70.0",
-    "@typescript-eslint/parser": "^8.70.0",
+    "@typescript-eslint/eslint-plugin": "^8.68.0",
+    "@typescript-eslint/parser": "^8.68.0",
     "dotenv": "^17.4.2",
     "eslint": "^10.8.0",
     "fast-check": "^4.9.0",
