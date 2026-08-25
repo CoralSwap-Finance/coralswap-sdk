@@ -23,7 +23,7 @@ import { toSorobanAmount } from '../../src/utils/amounts';
  * B/C pool is left untouched to exercise the empty/new-pool path.
  */
 
-const SKIP = process.env.STELLAR_TESTNET !== 'true';
+const SKIP = process.env.STELLAR_TESTNET !== 'true' || !process.env.TEST_KEYPAIR;
 
 function requireEnv(name: string): string {
   const val = process.env[name];
