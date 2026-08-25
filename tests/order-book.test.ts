@@ -73,9 +73,9 @@ describe('OrderBook Module', () => {
   });
 
   // -------------------------------------------------------------------------
-  // getEvents audit (#437)
+  // getEvents audit (#480)
   //
-  // Records the audit finding for this module: it issues no RPC calls, so it
+  // Records the audit finding for this module: it issues no getEvents calls,
   // has neither raw-string topic filters nor zero-anchored ledger cursors.
   // This test fails the moment a query is added without going through the
   // shared EventCursor, which is when the encoding rules start to matter.

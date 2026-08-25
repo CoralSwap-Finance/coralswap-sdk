@@ -11,6 +11,7 @@ module.exports = {
     'ts-jest': {
       tsconfig: {
         rootDir: '.',
+        types: ['jest', 'node'],
       },
     },
   },

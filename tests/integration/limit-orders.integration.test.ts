@@ -14,7 +14,16 @@ import { Network } from '../../src/types/common';
  *   TEST_RPC_URL          – optional RPC override
  */
 
-const SKIP = process.env.STELLAR_TESTNET !== 'true';
+// Skip unless the complete testnet fixture set is available. Fork pull
+// requests do not receive repository secrets, so they should report a clean
+// skip instead of failing during setup.
+const SKIP =
+  process.env.STELLAR_TESTNET !== 'true' ||
+  !process.env.TEST_KEYPAIR ||
+  !process.env.TEST_TOKEN_A ||
+  !process.env.TEST_TOKEN_B ||
+  !process.env.TEST_PAIR_ADDRESS ||
+  !process.env.TEST_LIMIT_ORDER_CONTRACT;
 
 function requireEnv(name: string): string {
   const val = process.env[name];
