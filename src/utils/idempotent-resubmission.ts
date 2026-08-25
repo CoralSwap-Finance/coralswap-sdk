@@ -43,7 +43,7 @@ export async function getTransactionStatus(
       case 'NOT_FOUND':
         return { status: 'NOT_FOUND' };
       default:
-        return { status: 'ERROR', message: `Unknown transaction status: ${result.status}` };
+        return { status: 'ERROR', message: `Unknown transaction status: ${(result as { status: string }).status}` };
     }
   } catch (err) {
     return {
