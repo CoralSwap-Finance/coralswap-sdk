@@ -83,8 +83,10 @@ export {
   EVENT_TOPICS,
   decodeEvents,
   decodeEventsFromXdr,
+  EventCursor,
+  encodeTopic,
 } from './events';
-export type { DecodeEventsOptions } from './events';
+export type { DecodeEventsOptions, EventCursorOptions } from './events';
 
 export {
   getVotingPower,

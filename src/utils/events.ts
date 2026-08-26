@@ -540,3 +540,122 @@ export function decodeEventsFromXdr(
   }
   return parser.parse(events, txHash, ledger);
 }
+
+// ---------------------------------------------------------------------------
+// EventCursor utility for getEvents RPC querying with ScVal topic encoding
+// ---------------------------------------------------------------------------
+
+export interface EventCursorOptions {
+  /** SorobanRpc.Server instance or object with getEvents method */
+  server: SorobanRpc.Server;
+  /** Contract IDs to filter events by */
+  contractIds?: string[];
+  /** Topic filters array. Raw topic strings like "swap", "sync" are automatically encoded as ScVal symbols */
+  topics?: (string | xdr.ScVal)[][];
+  /** Starting ledger sequence */
+  startLedger?: number;
+  /** Ending ledger sequence (optional) */
+  endLedger?: number;
+  /** Page size limit per RPC request (default 1000) */
+  limit?: number;
+}
+
+/**
+ * Encode a topic filter segment to a base64 ScVal string if given a raw string name.
+ * If topic is already an xdr.ScVal or valid ScVal base64 string, it is returned as base64 string.
+ */
+export function encodeTopic(topic: string | xdr.ScVal): string {
+  if (typeof topic !== "string") {
+    return topic.toXDR("base64");
+  }
+  try {
+    xdr.ScVal.fromXDR(topic, "base64");
+    return topic;
+  } catch {
+    return xdr.ScVal.scvSymbol(topic).toXDR("base64");
+  }
+}
+
+/**
+ * Shared utility for querying Soroban RPC getEvents with proper ScVal topic encoding and cursor pagination.
+ */
+export class EventCursor {
+  private readonly server: SorobanRpc.Server;
+  private readonly contractIds: string[];
+  private readonly topics: string[][];
+  private readonly startLedger?: number;
+  private readonly endLedger?: number;
+  private readonly limit: number;
+  private cursor?: string;
+  private hasMore = true;
+
+  constructor(options: EventCursorOptions) {
+    this.server = options.server;
+    this.contractIds = options.contractIds ?? [];
+    this.limit = options.limit ?? 1000;
+    this.startLedger = options.startLedger;
+    this.endLedger = options.endLedger;
+    this.topics = (options.topics ?? []).map((topicGroup) =>
+      topicGroup.map((t) => encodeTopic(t))
+    );
+  }
+
+  /**
+   * Fetch the next page of events from Soroban RPC.
+   */
+  async next(): Promise<SorobanRpc.Api.EventResponse[]> {
+    if (!this.hasMore) return [];
+
+    const filter: any = {
+      type: "contract",
+      contractIds: this.contractIds.length > 0 ? this.contractIds : undefined,
+      topics: this.topics.length > 0 ? this.topics : undefined,
+    };
+
+    const request: SorobanRpc.Server.GetEventsRequest = {
+      startLedger: this.startLedger,
+      filters: [filter],
+      cursor: this.cursor,
+      limit: this.limit,
+    };
+
+    const response = await this.server.getEvents(request);
+    const events = (response && Array.isArray(response.events)) ? response.events : [];
+
+    const nextCursor = (response as any)?.cursor;
+    if (nextCursor) {
+      this.cursor = nextCursor;
+    }
+    if (events.length < this.limit) {
+      this.hasMore = false;
+    }
+
+    return events;
+  }
+
+  /**
+   * Fetch all remaining pages of events up to maxPages.
+   */
+  async fetchAll(maxPages = 10): Promise<SorobanRpc.Api.EventResponse[]> {
+    const allEvents: SorobanRpc.Api.EventResponse[] = [];
+    let pages = 0;
+
+    while (this.hasMore && pages < maxPages) {
+      const page = await this.next();
+      if (page.length === 0) break;
+      allEvents.push(...page);
+      pages++;
+    }
+
+    return allEvents;
+  }
+
+  /**
+   * Reset pagination cursor to start over.
+   */
+  reset(): void {
+    this.cursor = undefined;
+    this.hasMore = true;
+  }
+}
+

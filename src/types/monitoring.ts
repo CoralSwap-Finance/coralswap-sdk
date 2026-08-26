@@ -50,3 +50,16 @@ export interface MetricQueryOptions {
   granularity?: MetricGranularity;
   limit?: number;
 }
+
+export interface SystemMetrics {
+  tvlUSD: number;
+  volume24hUSD: number;
+  revenue24hUSD: number;
+  previousTVLUSD: number;
+  previousVolume24hUSD: number;
+  previousRevenue24hUSD: number;
+  previousWindowTVLUSD: number;
+  previousWindowVolumeUSD: number;
+  previousWindowRevenueUSD: number;
+  timestamp: string;
+}
