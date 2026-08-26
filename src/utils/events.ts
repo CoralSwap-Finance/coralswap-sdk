@@ -540,3 +540,20 @@ export function decodeEventsFromXdr(
   }
   return parser.parse(events, txHash, ledger);
 }
+
+/**
+ * Encode a topic filter segment to a base64 ScVal string if given a raw string name.
+ * If topic is already an xdr.ScVal or valid ScVal base64 string, it is returned as base64 string.
+ */
+export function encodeTopic(topic: string | xdr.ScVal): string {
+  if (typeof topic !== "string") {
+    return topic.toXDR("base64");
+  }
+  try {
+    xdr.ScVal.fromXDR(topic, "base64");
+    return topic;
+  } catch {
+    return xdr.ScVal.scvSymbol(topic).toXDR("base64");
+  }
+}
+

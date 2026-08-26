@@ -83,6 +83,7 @@ export {
   EVENT_TOPICS,
   decodeEvents,
   decodeEventsFromXdr,
+  encodeTopic,
 } from './events';
 export type { DecodeEventsOptions } from './events';
 
