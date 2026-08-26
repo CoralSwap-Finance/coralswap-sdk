@@ -1,6 +1,27 @@
+/**
+ * @module order-book
+ *
+ * Aggregated view of a user's open orders and trade history across the limit,
+ * DCA and stop-loss modules.
+ *
+ * ## RPC audit (#480)
+ *
+ * Audited for the raw-string `getEvents` topic-filter and zero-anchored
+ * ledger-cursor bug classes: this module currently issues **no** RPC calls —
+ * every function below returns fixture data and the injected client is unused.
+ * There is therefore nothing to encode or anchor here yet.
+ *
+ * When these functions are wired to the chain, build their history queries on
+ * the shared `EventCursor` (`@/utils/event-cursor`) rather than hand-rolling
+ * `GetEventsRequest`: it encodes topic filters as base64 XDR `ScVal`s and
+ * anchors ledger windows against `getLatestLedger()`, which is exactly what
+ * the audited modules got wrong.
+ */
+
 import { Trade, TradeFilter } from '../types/trade';
 import { UnifiedOrder, OrderSummary } from '../types/order-book';
 import { CoralSwapClient } from '@/client';
+import { validateWithSchema, OrderBookAddressSchema, TradeFilterSchema } from '@/schemas';
 
 // Mock data for open orders
 const MOCK_OPEN_LIMIT_ORDERS: UnifiedOrder[] = [
@@ -50,22 +71,23 @@ const MOCK_OPEN_STOP_LOSS_ORDERS: UnifiedOrder[] = [
   },
 ];
 
-export async function getLimitOrders(_address: string): Promise<UnifiedOrder[]> {
-  // This is a mock implementation.
+export async function getLimitOrders(address: string): Promise<UnifiedOrder[]> {
+  validateWithSchema(OrderBookAddressSchema, address, 'getLimitOrders.address');
   return MOCK_OPEN_LIMIT_ORDERS;
 }
 
-export async function getDcaOrders(_address: string): Promise<UnifiedOrder[]> {
-  // This is a mock implementation.
+export async function getDcaOrders(address: string): Promise<UnifiedOrder[]> {
+  validateWithSchema(OrderBookAddressSchema, address, 'getDcaOrders.address');
   return MOCK_OPEN_DCA_ORDERS;
 }
 
-export async function getStopLossOrders(_address: string): Promise<UnifiedOrder[]> {
-  // This is a mock implementation.
+export async function getStopLossOrders(address: string): Promise<UnifiedOrder[]> {
+  validateWithSchema(OrderBookAddressSchema, address, 'getStopLossOrders.address');
   return MOCK_OPEN_STOP_LOSS_ORDERS;
 }
 
 export async function getOpenOrders(address: string): Promise<UnifiedOrder[]> {
+  validateWithSchema(OrderBookAddressSchema, address, 'getOpenOrders.address');
   const limitOrders = await getLimitOrders(address);
   const dcaOrders = await getDcaOrders(address);
   const stopLossOrders = await getStopLossOrders(address);
@@ -82,6 +104,7 @@ export async function getOrderSummary(
   address: string,
   _client: CoralSwapClient,
 ): Promise<OrderSummary> {
+  validateWithSchema(OrderBookAddressSchema, address, 'getOrderSummary.address');
   const openOrders = await getOpenOrders(address);
 
   const byType = {
@@ -115,6 +138,10 @@ export async function getOrderSummary(
 }
 
 export async function getTradeHistory(address: string, filter?: TradeFilter): Promise<Trade[]> {
+    validateWithSchema(OrderBookAddressSchema, address, 'getTradeHistory.address');
+    if (filter !== undefined) {
+      validateWithSchema(TradeFilterSchema, filter, 'getTradeHistory.filter');
+    }
     // Mock implementations for all trade types
     const limitOrders: Trade[] = [
         {

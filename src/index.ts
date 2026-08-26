@@ -83,9 +83,12 @@ export {
   GovernanceModule,
   DCAModule,
   LimitOrderModule,
+  SquidModule,
+  BlendModule,
 } from "@/modules";
 export type { OptimalPath } from "@/modules/router";
 export type { TWAPObservation, TWAPResult, TraderRanking, GetTopTradersOptions } from "@/modules";
+export { MIN_TWAP_WINDOW_SECONDS } from "@/modules";
 export type { TreasuryModuleOptions, LeaderboardEntry, LeaderboardOptions } from "@/modules";
 
 // Utilities
@@ -122,6 +125,8 @@ export {
   withRetry,
   isRetryable,
   sleep,
+  getTransactionStatus,
+  shouldRetrySubmission,
   validateAddress,
   validatePositiveAmount,
   validateNonNegativeAmount,
@@ -134,11 +139,14 @@ export {
   decodeEventsFromXdr,
   EventCursor,
   encodeTopic,
+  decodeEventTopic,
+  MIN_START_LEDGER,
   batchCall,
   batchCallSequential,
   batchRequest,
   batchRequestOrThrow,
   DEFAULT_BATCH_CONCURRENCY,
+  ConnectionPool,
 } from './utils';
 
 
@@ -152,7 +160,12 @@ export type {
   SimulateFn,
   BatchRequestOptions,
   BatchResult,
+  TransactionStatus,
+  RetryDecision,
 } from "./utils";
+
+// Schema validation
+export { validateWithSchema, OrderBookAddressSchema, TradeFilterSchema, GetOpenOrdersSchema, GetOrderSummarySchema } from "@/schemas";
 
 // Errors
 export {
@@ -168,6 +181,7 @@ export {
   ValidationError,
   FlashLoanError,
   FlashLoanFailedError,
+  CrossChainError,
   CircuitBreakerError,
   SignerError,
   MissingPriceFeedError,
@@ -177,3 +191,5 @@ export {
   WebhookDisabledError,
   mapError,
 } from "@/errors";
+
+export { TransactionComposer } from "./transaction-composer";

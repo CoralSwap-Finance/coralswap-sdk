@@ -1,107 +1,121 @@
-import { xdr } from '@stellar/stellar-sdk';
-import { EventCursor, encodeTopic } from '../src/utils/events';
+import { xdr } from "@stellar/stellar-sdk";
+import EventCursor, {
+  decodeEventTopic,
+  MIN_START_LEDGER,
+} from "../src/utils/event-cursor";
 
-describe('encodeTopic()', () => {
-  it('encodes raw topic strings into valid ScVal symbol base64', () => {
-    const encodedSwap = encodeTopic('swap');
-    expect(encodedSwap).toBe(xdr.ScVal.scvSymbol('swap').toXDR('base64'));
+describe("EventCursor", () => {
+  it("anchors initial cursor via getLatestLedger and uses defaultWindow", async () => {
+    const server: any = {
+      getLatestLedger: jest.fn().mockResolvedValue({ sequence: 2000 }),
+      getEvents: jest.fn().mockResolvedValue({ events: [], latestLedger: 2000 }),
+    };
 
-    const encodedSync = encodeTopic('sync');
-    expect(encodedSync).toBe(xdr.ScVal.scvSymbol('sync').toXDR('base64'));
+    const cursor = new EventCursor(server);
+    await cursor.scan();
+
+    // anchored to 2000 - 1000
+    expect(server.getLatestLedger).toHaveBeenCalled();
+    expect(server.getEvents).toHaveBeenCalled();
+    const req = server.getEvents.mock.calls[0][0];
+    expect(req.startLedger).toBe(1000);
   });
 
-  it('preserves topic if already an xdr.ScVal object', () => {
-    const scVal = xdr.ScVal.scvSymbol('mint');
-    expect(encodeTopic(scVal)).toBe(scVal.toXDR('base64'));
+  it("encodes topic filters as base64 XDR ScVal, not raw strings", async () => {
+    let captured: any = null;
+    const server: any = {
+      getLatestLedger: jest.fn().mockResolvedValue({ sequence: 2000 }),
+      getEvents: jest.fn().mockImplementation(async (req: any) => {
+        captured = req;
+        return { events: [], latestLedger: 2000 };
+      }),
+    };
+
+    const cursor = new EventCursor(server);
+    await cursor.scan({ topics: ["swap"] });
+
+    expect(captured).not.toBeNull();
+    const topicEntry = captured.filters[0].topics[0][0];
+    const expected = xdr.ScVal.scvSymbol("swap").toXDR("base64");
+    expect(topicEntry).toBe(expected);
+    expect(topicEntry).not.toBe("swap");
   });
 
-  it('preserves topic if already valid ScVal base64 string', () => {
-    const base64 = xdr.ScVal.scvSymbol('burn').toXDR('base64');
-    expect(encodeTopic(base64)).toBe(base64);
-  });
-});
+  it("paginates when responses are full and aggregates results", async () => {
+    const eventsPage1 = [
+      { ledger: 1, txHash: 'a' },
+      { ledger: 2, txHash: 'b' },
+      { ledger: 3, txHash: 'c' },
+    ];
+    const eventsPage2 = [
+      { ledger: 4, txHash: 'd' },
+      { ledger: 5, txHash: 'e' },
+    ];
 
-describe('EventCursor', () => {
-  it('encodes raw string topics when instantiating cursor and making getEvents requests', async () => {
-    const mockGetEvents = jest.fn().mockResolvedValue({
-      events: [],
-      cursor: 'cursor_123',
-    });
+    let call = 0;
+    const server: any = {
+      getLatestLedger: jest.fn().mockResolvedValue({ sequence: 500 }),
+      getEvents: jest.fn().mockImplementation(async (req: any) => {
+        call += 1;
+        if (call === 1) return { events: eventsPage1, latestLedger: 5 };
+        return { events: eventsPage2, latestLedger: 5 };
+      }),
+    };
 
-    const mockServer = {
-      getEvents: mockGetEvents,
-    } as any;
+    const cursor = new EventCursor(server);
+    const all = await cursor.scan({ fromLedger: 1, limit: 3 });
 
-    const cursor = new EventCursor({
-      server: mockServer,
-      contractIds: ['C123'],
-      topics: [['swap'], ['sync']],
-      startLedger: 100,
-      endLedger: 200,
-      limit: 50,
-    });
-
-    await cursor.next();
-
-    expect(mockGetEvents).toHaveBeenCalledTimes(1);
-    const request = mockGetEvents.mock.calls[0][0];
-    expect(request.startLedger).toBe(100);
-    expect(request.filters[0].contractIds).toEqual(['C123']);
-    expect(request.filters[0].topics).toEqual([
-      [xdr.ScVal.scvSymbol('swap').toXDR('base64')],
-      [xdr.ScVal.scvSymbol('sync').toXDR('base64')],
-    ]);
+    expect(server.getEvents).toHaveBeenCalledTimes(2);
+    expect(all.map((e: any) => e.txHash)).toEqual(['a','b','c','d','e']);
   });
 
-  it('paginates correctly across multiple pages via fetchAll()', async () => {
-    const mockGetEvents = jest
-      .fn()
-      .mockResolvedValueOnce({
-        events: [{ id: 'evt1' } as any, { id: 'evt2' } as any],
-        cursor: 'c1',
-      })
-      .mockResolvedValueOnce({
-        events: [{ id: 'evt3' } as any],
-        cursor: 'c2',
-      });
+  // ---------------------------------------------------------------------------
+  // Ledger anchoring floor (#437)
+  // ---------------------------------------------------------------------------
+  it("clamps the anchored cursor to ledger 1, never 0", async () => {
+    const server: any = {
+      // Chain head is younger than the default 1000-ledger window, so
+      // `sequence - defaultWindow` is negative.
+      getLatestLedger: jest.fn().mockResolvedValue({ sequence: 400 }),
+      getEvents: jest.fn().mockResolvedValue({ events: [], latestLedger: 400 }),
+    };
 
-    const mockServer = {
-      getEvents: mockGetEvents,
-    } as any;
+    const cursor = new EventCursor(server);
+    await cursor.scan();
 
-    const cursor = new EventCursor({
-      server: mockServer,
-      limit: 2,
-    });
-
-    const events = await cursor.fetchAll();
-
-    expect(events.length).toBe(3);
-    expect(mockGetEvents).toHaveBeenCalledTimes(2);
-
-    const secondCallRequest = mockGetEvents.mock.calls[1][0];
-    expect(secondCallRequest.cursor).toBe('c1');
+    const req = server.getEvents.mock.calls[0][0];
+    expect(req.startLedger).toBe(MIN_START_LEDGER);
+    expect(req.startLedger).toBeGreaterThan(0);
   });
 
-  it('resets cursor state on reset()', async () => {
-    const mockGetEvents = jest.fn().mockResolvedValue({
-      events: [{ id: 'evt1' } as any],
-      cursor: 'c1',
+  // ---------------------------------------------------------------------------
+  // Response topic decoding (#437)
+  // ---------------------------------------------------------------------------
+  describe("decodeEventTopic", () => {
+    it("decodes a parsed ScVal symbol topic", () => {
+      expect(decodeEventTopic(xdr.ScVal.scvSymbol("swap"))).toBe("swap");
     });
 
-    const mockServer = {
-      getEvents: mockGetEvents,
-    } as any;
-
-    const cursor = new EventCursor({
-      server: mockServer,
-      limit: 1,
+    it("decodes a base64 XDR topic as returned over raw JSON-RPC", () => {
+      const encoded = xdr.ScVal.scvSymbol("add_liquidity").toXDR("base64");
+      expect(decodeEventTopic(encoded)).toBe("add_liquidity");
     });
 
-    await cursor.next();
-    cursor.reset();
+    it("decodes scvString topics as well as symbols", () => {
+      expect(decodeEventTopic(xdr.ScVal.scvString("transfer"))).toBe("transfer");
+    });
 
-    await cursor.next();
-    expect(mockGetEvents.mock.calls[1][0].cursor).toBeUndefined();
+    // The whole point of the audit: a fixture that hands back a bare string
+    // must not compare equal to the symbol it is imitating, otherwise mocks
+    // silently hide the raw-string topic bug in the module under test.
+    it("refuses a bare unencoded string", () => {
+      expect(decodeEventTopic("swap")).toBe("");
+    });
+
+    it("returns an empty string for missing or non-topic values", () => {
+      expect(decodeEventTopic(undefined)).toBe("");
+      expect(decodeEventTopic(null)).toBe("");
+      expect(decodeEventTopic(xdr.ScVal.scvU32(7))).toBe("");
+    });
   });
 });

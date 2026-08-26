@@ -1,3 +1,4 @@
+import { SorobanRpc } from "@stellar/stellar-sdk";
 import { CoralSwapClient } from "@/client";
 import { FeeEstimate } from "@/types/fee";
 import { FeeState } from "@/types/pool";
@@ -148,5 +149,207 @@ export class FeeModule {
    */
   async compareFees(pairAddresses: string[]): Promise<FeeEstimate[]> {
     return Promise.all(pairAddresses.map((addr) => this.getCurrentFee(addr)));
+  }
+
+  /**
+   * Get historical fee revenue for a pair by querying on-chain swap events.
+   *
+   * Reads swap events from the ledger, extracts fee amounts per swap,
+   * and aggregates them into a revenue total with a per-event breakdown.
+   *
+   * @param pairAddress - The address of the pair contract
+   * @param options - Optional ledger range and result limit
+   * @returns Aggregated fee revenue and swap event breakdown
+   * @example
+   * const revenue = await client.fees.getFeeRevenue('C...');
+   * console.log(revenue.totalFeeXLM);
+   */
+  async getFeeRevenue(
+    pairAddress: string,
+    options: {
+      fromLedger?: number;
+      toLedger?: number;
+      limit?: number;
+    } = {},
+  ): Promise<{
+    pairAddress: string;
+    totalFeeXLM: number;
+    swapCount: number;
+    history: Array<{
+      ledger: number;
+      timestamp: number;
+      feeBps: number;
+      feeXLM: number;
+    }>;
+  }> {
+    validateAddress(pairAddress, "pairAddress");
+
+    const currentLedger = await this.client.getCurrentLedger();
+    const fromLedger = options.fromLedger ?? Math.max(0, currentLedger - 518400);
+    const toLedger = options.toLedger ?? currentLedger;
+
+    // Query swap events directly from the RPC for fee revenue
+    const request: SorobanRpc.Server.GetEventsRequest = {
+      startLedger: fromLedger,
+      filters: [
+        {
+          type: "contract",
+          contractIds: [pairAddress],
+          topics: [["swap"]],
+        },
+      ],
+      limit: options.limit ?? 200,
+    };
+    const response = await this.client.server.getEvents(request);
+    const rawEvents = response?.events ?? [];
+
+    let totalFeeXLM = 0;
+    const history: Array<{
+      ledger: number;
+      timestamp: number;
+      feeBps: number;
+      feeXLM: number;
+    }> = [];
+
+    for (const event of rawEvents) {
+      if (event.ledger > toLedger) continue;
+      try {
+        // Parse fee from the swap event value
+        const value = event.value as unknown as Record<string, unknown>;
+        if (!value) continue;
+
+        // Extract fee_bps from the ScVal payload
+        let feeBps = 0;
+        let amountIn = 0;
+        const map = typeof (value as any)._value !== 'undefined'
+          ? (value as any)._value
+          : value;
+
+        if (Array.isArray(map)) {
+          for (const entry of map) {
+            const key = entry?.key;
+            const val = entry?.val;
+            if (!key || !val) continue;
+            const keyStr = typeof key._value === 'string'
+              ? key._value
+              : key?.sym?.()?.toString?.() ?? key?.str?.()?.toString?.() ?? '';
+            if (keyStr === 'fee_bps') {
+              feeBps = val?.u32?.() ?? 0;
+            }
+            if (keyStr === 'amount_in') {
+              const lo = val?.i128?.()?.lo?.() ?? 0n;
+              const hi = val?.i128?.()?.hi?.() ?? 0n;
+              amountIn = Number((BigInt(hi.toString()) << 64n) + BigInt(lo.toString()));
+            }
+          }
+        }
+
+        if (feeBps === 0) continue;
+        const feeAmount = amountIn * feeBps / 10000;
+        const feeXLM = feeAmount / 1e7;
+        totalFeeXLM += feeXLM;
+        history.push({
+          ledger: event.ledger,
+          timestamp: Number(event.ledgerClosedAt) || 0,
+          feeBps,
+          feeXLM,
+        });
+      } catch {
+        continue;
+      }
+    }
+
+    return {
+      pairAddress,
+      totalFeeXLM,
+      swapCount: history.length,
+      history,
+    };
+  }
+
+  /**
+   * Calculate the LP yield for an address in a pair over a given period.
+   *
+   * Computes yield as the ratio of fee revenue earned by the LP's share
+   * of the pool relative to their deposited value, annualized.
+   *
+   * @param pairAddress - The address of the pair contract
+   * @param lpAddress - The LP token holder address
+   * @param options - Optional ledger range
+   * @returns LP yield metrics including APR and fee share
+   * @example
+   * const yield_ = await client.fees.getLPYield('C...', 'G...');
+   * console.log(`APR: ${yield_.aprPercent}%`);
+   */
+  async getLPYield(
+    pairAddress: string,
+    lpAddress: string,
+    options: {
+      fromLedger?: number;
+      toLedger?: number;
+    } = {},
+  ): Promise<{
+    pairAddress: string;
+    lpAddress: string;
+    totalFeeRevenueXLM: number;
+    lpSharePercent: number;
+    lpFeeShareXLM: number;
+    lpValueXLM: number;
+    aprPercent: number;
+  }> {
+    validateAddress(pairAddress, "pairAddress");
+    validateAddress(lpAddress, "lpAddress");
+
+    const pair = this.client.pair(pairAddress);
+    const lpTokenAddr = await pair.getLPTokenAddress();
+    const lpToken = this.client.lpToken(lpTokenAddr);
+
+    const [lpBalance, totalSupply, { reserve0, reserve1 }] =
+      await Promise.all([
+        lpToken.balance(lpAddress),
+        lpToken.totalSupply(),
+        pair.getReserves(),
+      ]);
+
+    const feeRevenue = await this.getFeeRevenue(pairAddress, options);
+
+    if (totalSupply === 0n || lpBalance === 0n) {
+      return {
+        pairAddress,
+        lpAddress,
+        totalFeeRevenueXLM: feeRevenue.totalFeeXLM,
+        lpSharePercent: 0,
+        lpFeeShareXLM: 0,
+        lpValueXLM: 0,
+        aprPercent: 0,
+      };
+    }
+
+    const lpSharePercent = (Number(lpBalance) / Number(totalSupply)) * 100;
+    const lpFeeShareXLM = feeRevenue.totalFeeXLM * (lpSharePercent / 100);
+    const lpValueXLM =
+      (Number(reserve0) / 1e7 + Number(reserve1) / 1e7) *
+      (Number(lpBalance) / Number(totalSupply));
+
+    // Annualize based on the actual ledger range queried
+    const currentLedger = await this.client.getCurrentLedger();
+    const fromLedger = options.fromLedger ?? Math.max(0, currentLedger - 518400);
+    const toLedger = options.toLedger ?? currentLedger;
+    const ledgerSpan = toLedger - fromLedger;
+    const daysInPeriod = (ledgerSpan * 5) / 86400; // 5s per ledger
+    const aprPercent =
+      daysInPeriod > 0 && lpValueXLM > 0
+        ? (lpFeeShareXLM / lpValueXLM) * (365 / daysInPeriod) * 100
+        : 0;
+
+    return {
+      pairAddress,
+      lpAddress,
+      totalFeeRevenueXLM: feeRevenue.totalFeeXLM,
+      lpSharePercent,
+      lpFeeShareXLM,
+      lpValueXLM,
+      aprPercent,
+    };
   }
 }

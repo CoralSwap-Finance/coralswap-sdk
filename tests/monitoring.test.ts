@@ -10,6 +10,7 @@ describe('MonitoringModule', () => {
       getCurrentLedger: jest.fn().mockResolvedValue(100000),
       server: {
         getEvents: jest.fn(),
+        getLatestLedger: jest.fn().mockResolvedValue({ sequence: 100000 }),
       },
       factory: {
         getAllPairs: jest.fn().mockResolvedValue(['CPAIR1', 'CPAIR2']),

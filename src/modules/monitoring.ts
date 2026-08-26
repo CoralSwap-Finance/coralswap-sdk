@@ -18,10 +18,26 @@ import {
   MetricQueryOptions,
   MonitoringDashboard,
   SystemMetrics,
+  ProtocolMetrics,
+  PoolMetrics,
 } from '@/types/monitoring';
 import { ValidationError } from '@/errors';
 import { validateAddress } from '@/utils/validation';
-import { EventCursor } from '@/utils/events';
+import EventCursor from '@/utils/event-cursor';
+import { TreasuryModule, TreasuryModuleOptions } from '@/modules/treasury';
+import { SwapModule } from '@/modules/swap';
+
+const STROOP = 1e7;
+/** Cache TTL for getProtocolMetrics()/getPoolMetrics(), per acceptance criteria. */
+const METRICS_CACHE_TTL_MS = 60_000;
+/** Approximate ledger count for a 24h window at Stellar's ~5s ledger close time. */
+const LEDGERS_PER_DAY = 17_280;
+/**
+ * Max swap events fetched per 24h-window query. getSwapHistory() reads a single
+ * RPC page with no pagination, so pools/protocols with more than this many swaps
+ * in 24h will under-count totalSwaps24h/uniqueUsers24h/volume24hUSD.
+ */
+const HISTORY_QUERY_LIMIT = 1000;
 
 // ---------------------------------------------------------------------------
 // Built-in metric definitions
@@ -140,6 +156,10 @@ const DEFAULT_GRANULARITY: MetricGranularity = '1h';
  * const health = await monitor.checkSystemHealth();
  * const poolHealth = await monitor.getPoolHealth('CA3D...');
  *
+ * // Dashboard aggregator (cached for 60s)
+ * const metrics = await monitor.getProtocolMetrics();
+ * const poolMetrics = await monitor.getPoolMetrics('CA3D...');
+ *
  * // Custom metric collection
  * const id = await monitor.registerMetric({
  *   name: 'CORAL-USDC TVL', category: 'liquidity',
@@ -148,13 +168,167 @@ const DEFAULT_GRANULARITY: MetricGranularity = '1h';
  * await monitor.collect(id);
  * const dashboard = await monitor.getDashboard();
  * ```
+ *
+ * ### USD pricing note
+ * `getProtocolMetrics()`/`getPoolMetrics()` price reserves and swap volume in
+ * USD using the same stablecoin-anchored spot pricing as
+ * {@link TreasuryModule}/`PortfolioModule` (reserve ratios against
+ * caller-supplied `stableAddresses`), not RedStone. RedStone in this SDK is a
+ * per-swap price *guard* that requires the caller to supply a signed
+ * `RedStonePayload` keyed by feed symbol (see `utils/redstone.ts`); it isn't a
+ * queryable price source the SDK can call on its own, and it has no built-in
+ * mapping from arbitrary token addresses to feed symbols. Pass
+ * `stableAddresses` in the constructor options to enable USD valuations;
+ * without at least one, all USD fields are 0.
  */
 export class MonitoringModule {
   private readonly client: CoralSwapClient;
   private readonly metrics: Map<string, MetricInstance> = new Map();
+  private readonly pricing: TreasuryModule;
+  private readonly swap: SwapModule;
+  private readonly cache: Map<string, { value: unknown; expiresAt: number }> = new Map();
 
-  constructor(client: CoralSwapClient) {
+  constructor(client: CoralSwapClient, options: TreasuryModuleOptions = {}) {
     this.client = client;
+    this.pricing = new TreasuryModule(client, options);
+    this.swap = new SwapModule(client);
+  }
+
+  private getCached<T>(key: string): T | undefined {
+    const entry = this.cache.get(key);
+    if (!entry || entry.expiresAt < Date.now()) return undefined;
+    return entry.value as T;
+  }
+
+  private setCached(key: string, value: unknown): void {
+    this.cache.set(key, { value, expiresAt: Date.now() + METRICS_CACHE_TTL_MS });
+  }
+
+  // -----------------------------------------------------------------------
+  // Dashboard aggregator (protocol + per-pool metrics, 60s cache)
+  // -----------------------------------------------------------------------
+
+  /**
+   * Aggregate key protocol-wide metrics for a dashboard: TVL, 24h volume,
+   * active pool count, unique users, swap count, and average swap size.
+   *
+   * Cached for 60 seconds to avoid redundant RPC calls.
+   */
+  async getProtocolMetrics(): Promise<ProtocolMetrics> {
+    const cached = this.getCached<ProtocolMetrics>('protocol');
+    if (cached) return cached;
+
+    const allPairs = await this.client.factory.getAllPairs();
+    const priceMap = await this.pricing.getSpotPriceMap(allPairs);
+
+    let tvlUSD = 0;
+    let activePools = 0;
+
+    await Promise.all(
+      allPairs.map(async (pairAddress) => {
+        try {
+          const pair = this.client.pair(pairAddress);
+          const [{ token0, token1 }, { reserve0, reserve1 }] = await Promise.all([
+            pair.getTokens(),
+            pair.getReserves(),
+          ]);
+          if (reserve0 === 0n || reserve1 === 0n) return;
+          activePools++;
+          const price0 = priceMap.get(token0) ?? 0;
+          const price1 = priceMap.get(token1) ?? 0;
+          tvlUSD += (Number(reserve0) / STROOP) * price0 + (Number(reserve1) / STROOP) * price1;
+        } catch {
+          // Skip pools we can't read; don't fail the whole aggregate.
+        }
+      }),
+    );
+
+    const currentLedger = await this.client.getCurrentLedger();
+    const fromLedger = Math.max(0, currentLedger - LEDGERS_PER_DAY);
+    const events = await this.swap.getSwapHistory({
+      fromLedger,
+      toLedger: currentLedger,
+      limit: HISTORY_QUERY_LIMIT,
+    });
+
+    const totalSwaps24h = events.length;
+    const uniqueUsers24h = new Set(events.map((e) => e.sender)).size;
+    const volume24hUSD = events.reduce((sum, e) => {
+      const price = priceMap.get(e.tokenIn) ?? 0;
+      return sum + (Number(e.amountIn) / STROOP) * price;
+    }, 0);
+    const avgSwapSizeUSD = totalSwaps24h > 0 ? volume24hUSD / totalSwaps24h : 0;
+
+    const result: ProtocolMetrics = {
+      tvlUSD,
+      volume24hUSD,
+      activePools,
+      uniqueUsers24h,
+      totalSwaps24h,
+      avgSwapSizeUSD,
+      computedAt: Date.now(),
+    };
+    this.setCached('protocol', result);
+    return result;
+  }
+
+  /**
+   * Detailed metrics for a single pool: TVL, 24h volume, swap count, unique
+   * users, average swap size, reserves, and current fee.
+   *
+   * Cached for 60 seconds to avoid redundant RPC calls.
+   */
+  async getPoolMetrics(pairAddress: string): Promise<PoolMetrics> {
+    validateAddress(pairAddress, 'pairAddress');
+    const cacheKey = `pool:${pairAddress}`;
+    const cached = this.getCached<PoolMetrics>(cacheKey);
+    if (cached) return cached;
+
+    const allPairs = await this.client.factory.getAllPairs();
+    const priceMap = await this.pricing.getSpotPriceMap(allPairs);
+
+    const pair = this.client.pair(pairAddress);
+    const [{ token0, token1 }, { reserve0, reserve1 }, feeBps] = await Promise.all([
+      pair.getTokens(),
+      pair.getReserves(),
+      pair.getDynamicFee(),
+    ]);
+
+    const price0 = priceMap.get(token0) ?? 0;
+    const price1 = priceMap.get(token1) ?? 0;
+    const tvlUSD = (Number(reserve0) / STROOP) * price0 + (Number(reserve1) / STROOP) * price1;
+
+    const currentLedger = await this.client.getCurrentLedger();
+    const fromLedger = Math.max(0, currentLedger - LEDGERS_PER_DAY);
+    const events = await this.swap.getSwapHistory({
+      pairAddress,
+      fromLedger,
+      toLedger: currentLedger,
+      limit: HISTORY_QUERY_LIMIT,
+    });
+
+    const totalSwaps24h = events.length;
+    const uniqueUsers24h = new Set(events.map((e) => e.sender)).size;
+    const volume24hUSD = events.reduce((sum, e) => {
+      const price = priceMap.get(e.tokenIn) ?? 0;
+      return sum + (Number(e.amountIn) / STROOP) * price;
+    }, 0);
+    const avgSwapSizeUSD = totalSwaps24h > 0 ? volume24hUSD / totalSwaps24h : 0;
+
+    const result: PoolMetrics = {
+      pairAddress,
+      tvlUSD,
+      volume24hUSD,
+      totalSwaps24h,
+      uniqueUsers24h,
+      avgSwapSizeUSD,
+      reserve0,
+      reserve1,
+      feeBps,
+      computedAt: Date.now(),
+    };
+    this.setCached(cacheKey, result);
+    return result;
   }
 
   // -----------------------------------------------------------------------
@@ -460,15 +634,14 @@ export class MonitoringModule {
   ): Promise<{ tvlUSD: number }> {
     if (pairAddresses.length === 0) return { tvlUSD: 0 };
 
-    const cursor = new EventCursor({
-      server: this.client.server,
+    const cursor = new EventCursor(this.client.server);
+    const events = await cursor.scan({
       contractIds: pairAddresses,
-      topics: [['sync']],
-      startLedger,
-      endLedger,
+      topics: ['sync'],
+      fromLedger: startLedger,
+      toLedger: endLedger,
     });
 
-    const events = await cursor.fetchAll();
     if (events.length === 0) return { tvlUSD: 0 };
 
     let totalReserves = 0n;
@@ -494,15 +667,14 @@ export class MonitoringModule {
   ): Promise<{ volumeUSD: number; revenueUSD: number }> {
     if (pairAddresses.length === 0) return { volumeUSD: 0, revenueUSD: 0 };
 
-    const cursor = new EventCursor({
-      server: this.client.server,
+    const cursor = new EventCursor(this.client.server);
+    const events = await cursor.scan({
       contractIds: pairAddresses,
-      topics: [['swap']],
-      startLedger,
-      endLedger,
+      topics: ['swap'],
+      fromLedger: startLedger,
+      toLedger: endLedger,
     });
 
-    const events = await cursor.fetchAll();
     if (events.length === 0) return { volumeUSD: 0, revenueUSD: 0 };
 
     let totalVolume = 0n;

@@ -1,7 +1,7 @@
 import { CoralSwapClient } from "@/client";
 import { validateAddress } from "@/utils/validation";
 import { ValidationError } from "@/errors";
-import { SorobanRpc } from "@stellar/stellar-sdk";
+import { EventCursor, decodeEventTopic, MIN_START_LEDGER } from "@/utils/event-cursor";
 import { TreasuryModule, TreasuryModuleOptions } from "./treasury";
 import { SwapModule } from "./swap";
 
@@ -54,6 +54,9 @@ export interface GetTopTradersOptions {
   /** Optional ending ledger sequence override. */
   toLedger?: number;
 }
+
+/** Upper bound on events aggregated per leaderboard query. */
+const MAX_LEADERBOARD_EVENTS = 1000;
 
 const decimalsCache = new Map<string, number>();
 
@@ -114,36 +117,40 @@ export class LeaderboardModule extends TreasuryModule {
     else if (period === "30d") periodLedgers = ledgersPerDay * 30;
 
     const currentLedger = await this.leaderboardClient.getCurrentLedger();
-    const startLedger = Math.max(0, currentLedger - periodLedgers - ledgersPerDay);
+    // Anchored against the chain head: the window covers the reporting period
+    // plus one extra day so the 24h comparison baseline is in range. Clamped to
+    // MIN_START_LEDGER because ledger 0 does not exist and RPC rejects it.
+    const startLedger = Math.max(
+      MIN_START_LEDGER,
+      currentLedger - (periodLedgers + ledgersPerDay),
+    );
     const endLedger = currentLedger;
 
     const topic = type === "trader" ? "swap" : "add_liquidity";
 
-    const request: SorobanRpc.Server.GetEventsRequest = {
-      startLedger,
-      filters: [
-        {
-          type: "contract",
-          contractIds: options.pairAddress ? [options.pairAddress] : [],
-          topics: [[topic]],
-        },
-      ],
-      limit: 1000,
-    };
-
-    const response = await this.leaderboardClient.server.getEvents(request);
-    if (!response || !Array.isArray(response.events)) return [];
+    // The shared cursor encodes the topic as a base64 XDR ScVal symbol; a raw
+    // string filter is silently ignored by a real RPC node.
+    const cursor = new EventCursor(this.leaderboardClient.server);
+    const events = await cursor.scan({
+      contractIds: options.pairAddress ? [options.pairAddress] : [],
+      topics: [topic],
+      fromLedger: startLedger,
+      toLedger: endLedger,
+      limit: MAX_LEADERBOARD_EVENTS,
+    });
+    if (events.length === 0) return [];
 
     const currentMap = new Map<string, bigint>();
     const previousMap = new Map<string, bigint>();
 
-    const currentStartBound = Math.max(0, currentLedger - periodLedgers);
-    const previousStartBound = Math.max(0, currentLedger - periodLedgers - ledgersPerDay);
-    const previousEndBound = Math.max(0, currentLedger - ledgersPerDay);
+    const currentStartBound = Math.max(startLedger, currentLedger - periodLedgers);
+    const previousStartBound = startLedger;
+    const previousEndBound = Math.max(startLedger, currentLedger - ledgersPerDay);
 
-    for (const ev of response.events) {
+    for (const ev of events) {
       if (options.pairAddress && ev.contractId?.toString() !== options.pairAddress) continue;
-      const topicName = ev.topic?.[0] ? decodeScValString(ev.topic[0]) : "";
+      // Topics arrive as XDR ScVals — decode before comparing.
+      const topicName = ev.topic?.[0] ? decodeEventTopic(ev.topic[0]) : "";
       if (topicName !== topic) continue;
       if (!ev.value) continue;
 
@@ -422,13 +429,4 @@ function readI128(map: Map<string, any>, key: string): bigint | undefined {
     }
   } catch { /* skip */ }
   return undefined;
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function decodeScValString(val: any): string {
-  if (!val) return "";
-  if (typeof val === "string") return val;
-  if (typeof val.sym === "function") return val.sym().toString();
-  if (typeof val.str === "function") return val.str().toString();
-  return val.toString();
 }

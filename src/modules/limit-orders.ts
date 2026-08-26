@@ -84,7 +84,11 @@ import {
   LimitOrderDetails,
   PlaceLimitOrderResult,
 } from '@/types/limit-orders';
-import { withRetry, RetryOptions } from '@/utils/retry';
+import { withRetry, RetryOptions, sleep, isRetryable } from '@/utils/retry';
+import {
+  getTransactionStatus,
+  shouldRetrySubmission,
+} from '@/utils/idempotent-resubmission';
 import { OrderNotFoundError, InvalidOperationError, ValidationError } from '@/errors';
 import { validateAddress, validatePositiveAmount, validateDistinctTokens } from '@/utils/validation';
 
@@ -331,6 +335,60 @@ export function parseOrderDetails(result: xdr.ScVal): LimitOrderDetails {
   };
 }
 
+
+
+function validateLimitOrderParams(
+  params: LimitOrderParams,
+): LimitOrderParams {
+  if (
+    !Number.isFinite(params.targetPrice) ||
+    params.targetPrice <= 0
+  ) {
+    throw new ValidationError("targetPrice must be positive");
+  }
+
+  if (params.targetPrice > 1_000_000) {
+    throw new ValidationError(
+      "targetPrice exceeds maximum allowed range (1,000,000)"
+    );
+  }
+
+  if (params.expiry <= Math.floor(Date.now() / 1000)) {
+    throw new ValidationError(
+      "expiry must be a Unix timestamp in the future"
+    );
+  }
+
+  return params;
+}
+/**
+ * Error codes that mean "the contract has no such order".
+ *
+ * Used to tell a definitively-not-landed placement (safe to resubmit) apart
+ * from an unknown state (never safe to resubmit).
+ */
+const ORDER_MISSING_CODES = new Set(['SIMULATION_ERROR', 'ORDER_NOT_FOUND']);
+
+function isOrderMissingCode(code: string): boolean {
+  return ORDER_MISSING_CODES.has(code);
+}
+
+/** How many times a provably-not-landed order transaction may be resubmitted. */
+const MAX_IDEMPOTENT_RESUBMISSIONS = 2;
+
+/** Fallback pause between resubmissions when the client sets no retry delay. */
+const DEFAULT_RESUBMIT_DELAY_MS = 2000;
+
+/**
+ * What really happened to a submission that reported failure.
+ *
+ * - `landed` — the operation is on-chain. Resubmitting would escrow or refund
+ *   a second time, so the caller must return the recovered result instead.
+ * - `not-landed` — the network never accepted it; safe to resubmit.
+ * - `failed-on-chain` — it landed and reverted. Resubmitting is pointless.
+ */
+type SubmissionOutcome = 'landed' | 'not-landed' | 'failed-on-chain';
+
 /**
  * High-level interface for CoralSwap limit orders.
  *
@@ -538,6 +596,39 @@ export class LimitOrderModule {
    * }
    */
   async cancelLimitOrder(orderId: string, signer?: string): Promise<CancelResult> {
+    const { operation: op, refundedAmount, filledAmount } = await this.buildCancelOperation(
+      orderId,
+      signer,
+    );
+
+    // Cancellation releases escrowed funds, so a timed-out submission must never
+    // be blindly resubmitted — the first attempt may already have landed and
+    // refunded. Check the real on-chain status before each retry (#467).
+    const txHash = await this.submitWithIdempotentResubmission(
+      [op],
+      `Failed to cancel order ${orderId}`,
+      async () => (await this.getLimitOrderStatus(orderId)).state === 'cancelled',
+    );
+
+    return {
+      refundedAmount,
+      filledAmount,
+      // Empty when the cancellation was recovered rather than confirmed: the
+      // refund landed under a hash whose confirmation we never received.
+      refundTxHash: txHash ?? '',
+    };
+  }
+
+  /**
+   * Validate and simulate a cancellation, returning the built operation and
+   * the refund/fill amounts the simulation reports, without submitting.
+   *
+   * Shared by {@link cancelLimitOrder} and {@link cancelAndReplaceLimitOrder}.
+   */
+  private async buildCancelOperation(
+    orderId: string,
+    signer?: string,
+  ): Promise<{ operation: xdr.Operation; refundedAmount: bigint; filledAmount: bigint }> {
     if (!orderId || typeof orderId !== 'string' || orderId.trim().length === 0) {
       throw new ValidationError('orderId must be a non-empty string', { orderId });
     }
@@ -599,20 +690,7 @@ export class LimitOrderModule {
 
     const { refundedAmount, filledAmount } = parseCancelResult(sim.result.retval);
 
-    const submitResult = await this.client.submitTransaction([op]);
-
-    if (!submitResult.success || !submitResult.data) {
-      throw new CoralSwapSDKError(
-        "TRANSACTION_ERROR",
-        `Failed to cancel order ${orderId}: ${submitResult.error?.message ?? 'Unknown error'}`,
-      );
-    }
-
-    return {
-      refundedAmount,
-      filledAmount,
-      refundTxHash: submitResult.data.txHash,
-    };
+    return { operation: op, refundedAmount, filledAmount };
   }
 
   /**
@@ -644,22 +722,31 @@ export class LimitOrderModule {
    * console.log('Placed order:', orderId);
    */
   async placeLimitOrder(params: LimitOrderParams, signer?: string): Promise<PlaceLimitOrderResult> {
-    if (!params || typeof params !== 'object') {
-      throw new ValidationError('params must be a valid object');
-    }
-    if (typeof params.targetPrice !== 'number' || isNaN(params.targetPrice) || !isFinite(params.targetPrice) || params.targetPrice <= 0) {
-      throw new ValidationError('targetPrice must be positive', { targetPrice: params.targetPrice });
-    }
-    if (params.targetPrice > 1_000_000) {
-      throw new ValidationError('targetPrice exceeds maximum allowed range (1,000,000)', {
-        targetPrice: params.targetPrice,
-      });
-    }
-    if (typeof params.expiry !== 'number' || isNaN(params.expiry) || !isFinite(params.expiry) || params.expiry <= Math.floor(Date.now() / 1000)) {
-      throw new ValidationError('expiry must be a Unix timestamp in the future', {
-        expiry: params.expiry,
-      });
-    }
+    const { operation: op, orderId } = await this.buildPlaceOperation(params, signer);
+
+    // Placement escrows funds, so a timed-out submission must never be blindly
+    // resubmitted — that would escrow twice. If the order already exists
+    // on-chain the placement landed and the confirmation was simply lost (#467).
+    await this.submitWithIdempotentResubmission(
+      [op],
+      'Failed to place limit order',
+      () => this.orderExists(orderId),
+    );
+
+    return { orderId };
+  }
+
+  /**
+   * Validate and simulate a new order placement, returning the built
+   * operation and the order ID the simulation reports, without submitting.
+   *
+   * Shared by {@link placeLimitOrder} and {@link cancelAndReplaceLimitOrder}.
+   */
+  private async buildPlaceOperation(
+    params: LimitOrderParams,
+    signer?: string,
+  ): Promise<{ operation: xdr.Operation; orderId: string }> {
+    params = validateLimitOrderParams(params);
 
     validateAddress(params.tokenIn, 'tokenIn');
     validateAddress(params.tokenOut, 'tokenOut');
@@ -723,16 +810,187 @@ export class LimitOrderModule {
 
     const orderId = scValToString(sim.result.retval);
 
-    const submitResult = await this.client.submitTransaction([op]);
+    return { operation: op, orderId };
+  }
 
-    if (!submitResult.success || !submitResult.data) {
-      throw new CoralSwapSDKError(
-        "TRANSACTION_ERROR",
-        `Failed to place limit order: ${submitResult.error?.message ?? 'Unknown error'}`,
-      );
+  /**
+   * Cancel an existing limit order and place its replacement as a single
+   * atomic transaction.
+   *
+   * Adjusting an order's price today means cancelling the existing order and
+   * placing a new one as two sequential transactions, leaving a window where
+   * the position is completely unprotected if the new order fails to place
+   * after the old one is cancelled. Composing both operations into a single
+   * transaction closes that window: either both take effect, or the original
+   * order remains exactly as it was. As with {@link cancelLimitOrder} and
+   * {@link placeLimitOrder}, a submission whose confirmation is lost is
+   * resolved against on-chain state rather than blindly resubmitted (#467),
+   * since both legs escrow or release real funds.
+   *
+   * @param orderId - The on-chain order ID to cancel.
+   * @param newParams - Parameters for the replacement order.
+   * @param signer - Optional Stellar address that will sign both operations.
+   *   Defaults to `client.publicKey`.
+   * @returns The refund/fill amounts from the cancelled order and the new
+   *   order's ID.
+   * @throws {@link ValidationError} if `orderId` or `newParams` are invalid.
+   * @throws {@link OrderNotFoundError} if the order to cancel is already cancelled.
+   * @throws {@link InvalidOperationError} if the order to cancel is filled or expired.
+   * @throws {@link CoralSwapSDKError} with code `TRANSACTION_ERROR` if the
+   *   composed transaction is rejected — in that case the original order
+   *   remains in place, untouched.
+   *
+   * @example
+   * ```ts
+   * const result = await limit.cancelAndReplaceLimitOrder(orderId, {
+   *   tokenIn: 'CAXFG3HY6H...',
+   *   tokenOut: 'CBOB7D2F5...',
+   *   amountIn: 500_000_000n,
+   *   targetPrice: 1.30,
+   *   expiry: Math.floor(Date.now() / 1000) + 3600 * 24,
+   *   pairAddress: 'CP5KJ7A2E...',
+   * });
+   * console.log(`Replaced ${orderId} with ${result.orderId}`);
+   * ```
+   */
+  async cancelAndReplaceLimitOrder(
+    orderId: string,
+    newParams: LimitOrderParams,
+    signer?: string,
+  ): Promise<CancelResult & PlaceLimitOrderResult> {
+    const cancel = await this.buildCancelOperation(orderId, signer);
+    const place = await this.buildPlaceOperation(newParams, signer);
+
+    const txHash = await this.submitWithIdempotentResubmission(
+      [cancel.operation, place.operation],
+      `Failed to cancel and replace order ${orderId}`,
+      () => this.orderExists(place.orderId),
+    );
+
+    return {
+      refundedAmount: cancel.refundedAmount,
+      filledAmount: cancel.filledAmount,
+      // Empty when the replacement was recovered rather than confirmed: the
+      // composed transaction landed under a hash whose confirmation we never received.
+      refundTxHash: txHash ?? '',
+      orderId: place.orderId,
+    };
+  }
+
+  /**
+   * Does the contract hold this order?
+   *
+   * Used as a second, contract-level source of truth when the transaction
+   * status alone cannot prove whether a submission landed.
+   *
+   * @throws the original error if the order's state cannot be determined, so
+   *   an unknown state is never mistaken for "not placed".
+   */
+  private async orderExists(orderId: string): Promise<boolean> {
+    try {
+      await this.getLimitOrderStatus(orderId);
+      // Any readable state means the order exists on-chain. A cancelled or
+      // expired order still counts as placed — do not place it again.
+      return true;
+    } catch (err) {
+      // A failed status simulation means the contract holds no such order, so
+      // the placement definitively did not land.
+      if (err instanceof CoralSwapSDKError && isOrderMissingCode(err.code)) {
+        return false;
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Submit an order-mutating transaction, resubmitting only when the previous
+   * attempt provably did not land.
+   *
+   * Placement escrows funds and cancellation refunds them, so a client-side
+   * timeout is never sufficient grounds to retry: the transaction may already
+   * be in a ledger. Before each resubmission the real outcome is resolved via
+   * the shared {@link getTransactionStatus} helper, falling back to the
+   * contract's own view of the order when the status check is inconclusive.
+   *
+   * @param ops - Operations to submit.
+   * @param failureMessage - Prefix for the thrown error message.
+   * @param landed - Contract-level check answering "did this already happen?".
+   * @returns The transaction hash, or `undefined` when the operation was found
+   *   to have already landed under a hash we never got confirmation for.
+   * @throws {@link CoralSwapSDKError} with code `TRANSACTION_ERROR` if the
+   *   operation did not land and cannot safely be retried again.
+   */
+  private async submitWithIdempotentResubmission(
+    ops: Parameters<CoralSwapClient['submitTransaction']>[0],
+    failureMessage: string,
+    landed: () => Promise<boolean>,
+  ): Promise<string | undefined> {
+    const maxRetries = MAX_IDEMPOTENT_RESUBMISSIONS;
+    const retryDelayMs = this.retryOptions.retryDelayMs ?? DEFAULT_RESUBMIT_DELAY_MS;
+    let lastError: string | undefined;
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      const result = await this.client.submitTransaction(ops);
+
+      if (result.success && result.data) {
+        return result.data.txHash;
+      }
+
+      lastError = result.error?.message;
+
+      // A non-retryable failure with no transaction hash never reached the
+      // network, so there is no ambiguity to resolve and nothing to re-read.
+      if (!result.txHash && !isRetryable(result.error)) {
+        throw new CoralSwapSDKError(
+          'TRANSACTION_ERROR',
+          `${failureMessage}: ${lastError ?? 'Unknown error'}`,
+        );
+      }
+
+      const outcome = await this.classifyFailedSubmission(result.txHash, landed);
+
+      if (outcome === 'landed') return undefined;
+
+      if (outcome === 'failed-on-chain' || attempt >= maxRetries) {
+        throw new CoralSwapSDKError(
+          'TRANSACTION_ERROR',
+          `${failureMessage}: ${lastError ?? 'Unknown error'}`,
+        );
+      }
+
+      await sleep(retryDelayMs);
     }
 
-    return { orderId };
+    throw new CoralSwapSDKError(
+      'TRANSACTION_ERROR',
+      `${failureMessage}: ${lastError ?? 'Unknown error'}`,
+    );
+  }
+
+  /**
+   * Work out what really happened to a submission that reported failure.
+   */
+  private async classifyFailedSubmission(
+    txHash: string | undefined,
+    landed: () => Promise<boolean>,
+  ): Promise<SubmissionOutcome> {
+    if (txHash) {
+      const status = await getTransactionStatus(this.server, txHash);
+      const { shouldRetry } = shouldRetrySubmission(status);
+
+      if (!shouldRetry) {
+        // The transaction reached a final on-chain outcome.
+        return status.status === 'SUCCESS' ? 'landed' : 'failed-on-chain';
+      }
+      // NOT_FOUND is authoritative: the network never saw the transaction.
+      if (status.status === 'NOT_FOUND') return 'not-landed';
+      // Otherwise the status check itself failed. shouldRetrySubmission()
+      // favours availability there, but escrowed funds make a wrong retry the
+      // expensive mistake — so fall through to the more conservative
+      // contract-level source its docs recommend combining with.
+    }
+
+    return (await landed()) ? 'landed' : 'not-landed';
   }
 
   /**

@@ -35,45 +35,60 @@ describe('TransactionPoller', () => {
     });
 
     it('polls multiple times until success (LINEAR)', async () => {
-        mockServer.getTransaction
-            .mockResolvedValueOnce({ status: 'NOT_FOUND' } as any)
-            .mockResolvedValueOnce({ status: 'NOT_FOUND' } as any)
-            .mockResolvedValueOnce({ status: 'SUCCESS', ledger: 101 } as any);
+        // See the EXPONENTIAL backoff test below for why this uses fake
+        // timers instead of a wall-clock Date.now() duration assertion.
+        jest.useFakeTimers();
+        try {
+            mockServer.getTransaction
+                .mockResolvedValueOnce({ status: 'NOT_FOUND' } as any)
+                .mockResolvedValueOnce({ status: 'NOT_FOUND' } as any)
+                .mockResolvedValueOnce({ status: 'SUCCESS', ledger: 101 } as any);
 
-        const startTime = Date.now();
-        const result = await poller.poll('TX_HASH', {
-            strategy: PollingStrategy.LINEAR,
-            interval: 100, // Short interval for tests
-            maxAttempts: 5,
-        });
-        const duration = Date.now() - startTime;
+            const pollPromise = poller.poll('TX_HASH', {
+                strategy: PollingStrategy.LINEAR,
+                interval: 100, // Short interval for tests
+                maxAttempts: 5,
+            });
 
-        expect(result.success).toBe(true);
-        expect(result.data?.ledger).toBe(101);
-        expect(mockServer.getTransaction).toHaveBeenCalledTimes(3);
-        expect(duration).toBeGreaterThanOrEqual(200); // 2 intervals of 100ms
+            // 2 intervals of 100ms between the 3 attempts.
+            await jest.advanceTimersByTimeAsync(200);
+            const result = await pollPromise;
+
+            expect(result.success).toBe(true);
+            expect(result.data?.ledger).toBe(101);
+            expect(mockServer.getTransaction).toHaveBeenCalledTimes(3);
+        } finally {
+            jest.useRealTimers();
+        }
     });
 
     it('uses EXPONENTIAL backoff', async () => {
-        mockServer.getTransaction
-            .mockResolvedValueOnce({ status: 'NOT_FOUND' } as any)
-            .mockResolvedValueOnce({ status: 'NOT_FOUND' } as any)
-            .mockResolvedValueOnce({ status: 'SUCCESS', ledger: 102 } as any);
+        // Real-timer duration assertions are inherently flaky (a run can land
+        // a millisecond under the boundary from ordinary timer jitter), so
+        // this drives the backoff deterministically with fake timers instead
+        // of asserting on wall-clock Date.now() deltas.
+        jest.useFakeTimers();
+        try {
+            mockServer.getTransaction
+                .mockResolvedValueOnce({ status: 'NOT_FOUND' } as any)
+                .mockResolvedValueOnce({ status: 'NOT_FOUND' } as any)
+                .mockResolvedValueOnce({ status: 'SUCCESS', ledger: 102 } as any);
 
-        const startTime = Date.now();
-        await poller.poll('TX_HASH', {
-            strategy: PollingStrategy.EXPONENTIAL,
-            interval: 100,
-            backoffFactor: 2,
-            maxAttempts: 5,
-        });
-        const duration = Date.now() - startTime;
+            const pollPromise = poller.poll('TX_HASH', {
+                strategy: PollingStrategy.EXPONENTIAL,
+                interval: 100,
+                backoffFactor: 2,
+                maxAttempts: 5,
+            });
 
-        // First wait: 100ms
-        // Second wait: 200ms
-        // Total: ~300ms
-        expect(duration).toBeGreaterThanOrEqual(300);
-        expect(mockServer.getTransaction).toHaveBeenCalledTimes(3);
+            // First wait: 100ms, second wait: 200ms — advance past both.
+            await jest.advanceTimersByTimeAsync(300);
+            await pollPromise;
+
+            expect(mockServer.getTransaction).toHaveBeenCalledTimes(3);
+        } finally {
+            jest.useRealTimers();
+        }
     });
 
     it('handles FAILED status immediately', async () => {
