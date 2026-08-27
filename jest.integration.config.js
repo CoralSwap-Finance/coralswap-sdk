@@ -7,12 +7,26 @@ module.exports = {
   moduleNameMapper: {
     '^@/(.*)$': '<rootDir>/src/$1',
   },
-  globals: {
-    'ts-jest': {
-      tsconfig: {
-        rootDir: '.',
-        types: ['jest', 'node'],
+  transform: {
+    '^.+\\.tsx?$': [
+      'ts-jest',
+      {
+        // Type-checking is enforced separately via `tsc --noEmit`.
+        diagnostics: false,
+        tsconfig: {
+          types: ['jest', 'node'],
+        },
       },
-    },
+    ],
+    '^.+\\.jsx?$': [
+      'ts-jest',
+      {
+        diagnostics: false,
+        isolatedModules: true,
+      },
+    ],
   },
+  transformIgnorePatterns: [
+    'node_modules/(?!(@stellar/stellar-sdk|@stellar/js-xdr|@noble/ed25519|@noble/hashes|uint8array-extras|@exodus/bytes|zod)/)',
+  ],
 };

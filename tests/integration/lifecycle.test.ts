@@ -1,7 +1,7 @@
 import {
   Contract,
   TransactionBuilder,
-  SorobanRpc,
+  rpc as SorobanRpc,
   nativeToScVal,
   scValToNative,
   Address,

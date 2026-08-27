@@ -1,4 +1,4 @@
-import { SorobanRpc } from "@stellar/stellar-sdk";
+import { rpc } from "@stellar/stellar-sdk";
 import { CoralSwapClient } from "@/client";
 import { FeeEstimate } from "@/types/fee";
 import { FeeState } from "@/types/pool";
@@ -189,7 +189,7 @@ export class FeeModule {
     const toLedger = options.toLedger ?? currentLedger;
 
     // Query swap events directly from the RPC for fee revenue
-    const request: SorobanRpc.Server.GetEventsRequest = {
+    const request: rpc.Server.GetEventsRequest = {
       startLedger: fromLedger,
       filters: [
         {
@@ -234,12 +234,17 @@ export class FeeModule {
               ? key._value
               : key?.sym?.()?.toString?.() ?? key?.str?.()?.toString?.() ?? '';
             if (keyStr === 'fee_bps') {
-              feeBps = val?.u32?.() ?? 0;
+              feeBps = val?.type === 'scvU32' ? val.u32 ?? 0 : 0;
             }
             if (keyStr === 'amount_in') {
-              const lo = val?.i128?.()?.lo?.() ?? 0n;
-              const hi = val?.i128?.()?.hi?.() ?? 0n;
-              amountIn = Number((BigInt(hi.toString()) << 64n) + BigInt(lo.toString()));
+              if (val?.type === 'scvI128') {
+                const i128 = val.i128 as unknown;
+                amountIn = typeof i128 === 'bigint'
+                  ? Number(i128)
+                  : Number(((i128 as { hi: bigint; lo: bigint }).hi << 64n) + (i128 as { hi: bigint; lo: bigint }).lo);
+              } else {
+                amountIn = 0;
+              }
             }
           }
         }

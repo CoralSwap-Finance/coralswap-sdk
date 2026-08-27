@@ -41,8 +41,8 @@ jest.mock('@stellar/stellar-sdk', () => {
   const actual = jest.requireActual('@stellar/stellar-sdk');
   return {
     ...actual,
-    SorobanRpc: {
-      ...(actual.SorobanRpc ?? {}),
+    rpc: {
+      ...actual.rpc,
       Server: class MockServer {
         public url: string;
         readonly serverURL = { toString: () => 'http://mock.local' };

@@ -20,8 +20,15 @@ module.exports = {
         diagnostics: false,
       },
     ],
+    '^.+\\.jsx?$': [
+      'ts-jest',
+      {
+        diagnostics: false,
+        isolatedModules: true,
+      },
+    ],
   },
   transformIgnorePatterns: [
-    'node_modules/(?!(@stellar/stellar-sdk|@noble/hashes|zod)/)',
+    'node_modules/(?!(@stellar/stellar-sdk|@stellar/js-xdr|@noble/ed25519|@noble/hashes|uint8array-extras|@exodus/bytes|zod)/)',
   ],
 };

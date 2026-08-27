@@ -36,12 +36,12 @@ function makeDiagnosticEvent(
 ): xdr.DiagnosticEvent {
   const topics = [symbolVal(topic)];
   const bodyV0 = new xdr.ContractEventV0({ topics, data });
-  const body = new (xdr.ContractEventBody as any)(0, bodyV0) as xdr.ContractEventBody;
+  const body = xdr.ContractEventBody.v0(bodyV0) as xdr.ContractEventBody;
 
   const contractEvent = new xdr.ContractEvent({
-    ext: new (xdr.ExtensionPoint as any)(0) as xdr.ExtensionPoint,
+    ext: xdr.ExtensionPoint.v0() as xdr.ExtensionPoint,
     contractId: contractBuf,
-    type: xdr.ContractEventType.contract(),
+    type: xdr.ContractEventType.contract,
     body,
   });
 
@@ -72,11 +72,10 @@ const nestedMap: fc.Arbitrary<xdr.ScVal> = fc.nat({ max: 100 }).chain((depth) =>
 const largeVec: fc.Arbitrary<xdr.ScVal> = fc
   .array(fc.bigInt({ min: 0n, max: 2n ** 64n }), { minLength: 0, maxLength: 1000 })
   .map((items) => {
-    const vals = items.map((n) =>
-      n % 2n === 0n
-        ? xdr.ScVal.scvU64(new (xdr.Uint64 as any)(n.toString()))
-        : xdr.ScVal.scvI64(new (xdr.Int64 as any)(n.toString())),
-    );
+    const vals = items.map((n) => {
+      const signed = n > 0x7fffffffffffffffn ? n - 2n ** 64n : n;
+      return n % 2n === 0n ? xdr.ScVal.scvU64(n) : xdr.ScVal.scvI64(signed);
+    });
     return xdr.ScVal.scvVec(vals);
   });
 
@@ -92,8 +91,8 @@ const unexpectedType: fc.Arbitrary<xdr.ScVal> = fc.oneof(
   fc.constant(xdr.ScVal.scvMap([])),
   fc.constant(xdr.ScVal.scvVec([xdr.ScVal.scvU32(1), xdr.ScVal.scvU32(2)])),
   fc.constant(xdr.ScVal.scvContractInstance()),
-  fc.constant(xdr.ScVal.scvTimepoint(new (xdr.TimePoint as any)("0"))),
-  fc.constant(xdr.ScVal.scvDuration(new (xdr.Duration as any)("0"))),
+  fc.constant(xdr.ScVal.scvTimepoint(0n)),
+  fc.constant(xdr.ScVal.scvDuration(0n)),
   fc.constant(
     (() => {
       try {
@@ -372,11 +371,11 @@ describe("A3 – Unexpected XDR type tags", () => {
           }),
         ]);
         const bodyV0 = new xdr.ContractEventV0({ topics, data });
-        const body = new (xdr.ContractEventBody as any)(0, bodyV0) as xdr.ContractEventBody;
+        const body = xdr.ContractEventBody.v0(bodyV0) as xdr.ContractEventBody;
         const contractEvent = new xdr.ContractEvent({
-          ext: new (xdr.ExtensionPoint as any)(0) as xdr.ExtensionPoint,
+          ext: xdr.ExtensionPoint.v0() as xdr.ExtensionPoint,
           contractId: CONTRACT_BUF,
-          type: xdr.ContractEventType.contract(),
+          type: xdr.ContractEventType.contract,
           body,
         });
         const diag = new xdr.DiagnosticEvent({

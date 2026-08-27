@@ -1,4 +1,4 @@
-import type { SorobanRpc, xdr } from '@stellar/stellar-sdk';
+import type { rpc, xdr } from '@stellar/stellar-sdk';
 
 /**
  * Supported Soroban networks for CoralSwap deployment.
@@ -228,5 +228,5 @@ export interface SimulateTransactionResult {
   /**
    * Full, unmodified RPC response for advanced or escape-hatch use.
    */
-  raw: SorobanRpc.Api.SimulateTransactionResponse;
+  raw: rpc.Api.SimulateTransactionResponse;
 }

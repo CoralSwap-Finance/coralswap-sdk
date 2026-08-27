@@ -62,7 +62,7 @@
     "url": "https://github.com/CoralSwap-Finance/coralswap-sdk.git"
   },
   "dependencies": {
-    "@stellar/stellar-sdk": "^12.3.0",
+    "@stellar/stellar-sdk": "^17.0.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {

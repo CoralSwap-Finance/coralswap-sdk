@@ -38,6 +38,19 @@ export {
 export type { SimulationResult, SimulationResourceEstimate } from './simulation';
 
 export {
+  decodeI128,
+  decodeI32,
+  decodeI64,
+  decodeU32,
+  decodeU64,
+  decodeBool,
+  decodeAddress,
+  decodeString,
+  getMapValue,
+  mapValue,
+} from "./scval";
+
+export {
   withRetry,
   isRetryable,
   sleep,

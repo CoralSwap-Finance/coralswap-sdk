@@ -1,5 +1,6 @@
 import { StakingModule } from "../src/modules/staking";
 import { CoralSwapClient } from "../src/client";
+import { xdr, Address } from "@stellar/stellar-sdk";
 import {
   ValidationError,
   TransactionError,
@@ -113,6 +114,14 @@ function createMockClient(
   } as unknown as CoralSwapClient;
 }
 
+function symVal(key: string): xdr.ScVal {
+  return xdr.ScVal.scvSymbol(key);
+}
+
+function mapEntry(key: string, val: xdr.ScVal): xdr.ScMapEntry {
+  return new xdr.ScMapEntry({ key: symVal(key), val });
+}
+
 /**
  * Create a mock ScVal map representing a StakedPosition.
  */
@@ -120,28 +129,12 @@ function createMockStakeResult(
   amount: bigint,
   stakedAt: number,
   cooldownEnd: number,
-) {
-  return {
-    map: () => [
-      {
-        key: () => ({ sym: () => ({ toString: () => "amount" }) }),
-        val: () => ({
-          i128: () => ({
-            lo: () => ({ toString: () => (amount & ((1n << 64n) - 1n)).toString() }),
-            hi: () => ({ toString: () => (amount >> 64n).toString() }),
-          }),
-        }),
-      },
-      {
-        key: () => ({ sym: () => ({ toString: () => "staked_at" }) }),
-        val: () => ({ u64: () => BigInt(stakedAt) }),
-      },
-      {
-        key: () => ({ sym: () => ({ toString: () => "cooldown_end" }) }),
-        val: () => ({ u64: () => BigInt(cooldownEnd) }),
-      },
-    ],
-  };
+): xdr.ScVal {
+  return xdr.ScVal.scvMap([
+    mapEntry("amount", xdr.ScVal.scvI128(amount)),
+    mapEntry("staked_at", xdr.ScVal.scvU64(BigInt(stakedAt))),
+    mapEntry("cooldown_end", xdr.ScVal.scvU64(BigInt(cooldownEnd))),
+  ]);
 }
 
 /**
@@ -152,62 +145,32 @@ function createMockRewardsResult(
   claimedRewards: bigint,
   projectedAPYBps: number,
   rewardToken: string = MOCK_REWARD_TOKEN,
-) {
-  return {
-    map: () => [
-      {
-        key: () => ({ sym: () => ({ toString: () => "pending_rewards" }) }),
-        val: () => ({
-          i128: () => ({
-            lo: () => ({ toString: () => (pendingRewards & ((1n << 64n) - 1n)).toString() }),
-            hi: () => ({ toString: () => (pendingRewards >> 64n).toString() }),
-          }),
-        }),
-      },
-      {
-        key: () => ({ sym: () => ({ toString: () => "claimed_rewards" }) }),
-        val: () => ({
-          i128: () => ({
-            lo: () => ({ toString: () => (claimedRewards & ((1n << 64n) - 1n)).toString() }),
-            hi: () => ({ toString: () => (claimedRewards >> 64n).toString() }),
-          }),
-        }),
-      },
-      {
-        key: () => ({ sym: () => ({ toString: () => "projected_apy" }) }),
-        val: () => ({ u32: () => projectedAPYBps }),
-      },
-      {
-        key: () => ({ sym: () => ({ toString: () => "reward_token" }) }),
-        val: () => ({
-          address: () => ({ toString: () => rewardToken }),
-        }),
-      },
-    ],
-  };
+): xdr.ScVal {
+  return xdr.ScVal.scvMap([
+    mapEntry("pending_rewards", xdr.ScVal.scvI128(pendingRewards)),
+    mapEntry("claimed_rewards", xdr.ScVal.scvI128(claimedRewards)),
+    mapEntry("projected_apy", xdr.ScVal.scvU32(projectedAPYBps)),
+    mapEntry(
+      "reward_token",
+      xdr.ScVal.scvAddress(Address.fromString(rewardToken)),
+    ),
+  ]);
 }
 
 /**
  * Create a mock ScVal map representing CooldownStatus.
  */
-function createMockCooldownResult(cooldownEnd: number) {
-  return {
-    map: () => [
-      {
-        key: () => ({ sym: () => ({ toString: () => "cooldown_end" }) }),
-        val: () => ({ u64: () => BigInt(cooldownEnd) }),
-      },
-    ],
-  };
+function createMockCooldownResult(cooldownEnd: number): xdr.ScVal {
+  return xdr.ScVal.scvMap([
+    mapEntry("cooldown_end", xdr.ScVal.scvU64(BigInt(cooldownEnd))),
+  ]);
 }
 
 /**
  * Create a mock ScVal for getStakingAPY (returns u32 basis points).
  */
-function createMockAPYResult(apyBps: number) {
-  return {
-    u32: () => apyBps,
-  };
+function createMockAPYResult(apyBps: number): xdr.ScVal {
+  return xdr.ScVal.scvU32(apyBps);
 }
 
 /**

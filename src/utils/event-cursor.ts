@@ -1,4 +1,4 @@
-import { xdr, SorobanRpc } from "@stellar/stellar-sdk";
+import { xdr, rpc } from "@stellar/stellar-sdk";
 
 /**
  * Lowest ledger sequence that can legally be passed as `startLedger`.
@@ -27,7 +27,7 @@ export function decodeEventTopic(topic: unknown): string {
   let val: xdr.ScVal;
   if (typeof topic === "string") {
     try {
-      val = xdr.ScVal.fromXDR(topic, "base64");
+      val = xdr.ScVal.fromXdr(topic, "base64");
     } catch {
       return "";
     }
@@ -36,11 +36,11 @@ export function decodeEventTopic(topic: unknown): string {
   }
 
   try {
-    switch (val.switch().name) {
+    switch (val.type) {
       case "scvSymbol":
-        return val.sym().toString();
+        return val.sym.toString();
       case "scvString":
-        return val.str().toString();
+        return val.str.toString();
       default:
         return "";
     }
@@ -65,7 +65,7 @@ export interface EventCursorOptions {
  *   using `latestLedger - defaultWindow` (clamped to 0). This guarantees
  *   we never default to ledger 0/1 arbitrarily.
  * - Encodes topic filters as base64 XDR `ScVal` via
- *   `xdr.ScVal.scvSymbol(...).toXDR('base64')` so callers must not pass
+ *   `xdr.ScVal.scvSymbol(...).toXdr('base64')` so callers must not pass
  *   raw strings directly to RPC filters.
  * - Persists a cursor in-memory per-instance and advances it as scans
  *   progress.
@@ -85,12 +85,12 @@ export interface EventCursorOptions {
  * ```
  */
 export class EventCursor {
-  private server: SorobanRpc.Server;
+  private server: rpc.Server;
   private cursor?: number;
   private readonly defaultWindow: number;
   private readonly defaultLimit: number;
 
-  constructor(server: SorobanRpc.Server, opts: EventCursorOptions = {}) {
+  constructor(server: rpc.Server, opts: EventCursorOptions = {}) {
     this.server = server;
     this.defaultWindow = opts.defaultWindow ?? 1000;
     this.defaultLimit = opts.defaultLimit ?? 200;
@@ -116,7 +116,7 @@ export class EventCursor {
     if (!topics || topics.length === 0) return undefined;
     // RPC expects an array-of-arrays for topic positions (preserve simple
     // callers by placing all symbols in the first position array).
-    const encoded = topics.map((t) => xdr.ScVal.scvSymbol(t).toXDR('base64'));
+    const encoded = topics.map((t) => xdr.ScVal.scvSymbol(t).toXdr('base64'));
     return [encoded];
   }
 
@@ -130,7 +130,7 @@ export class EventCursor {
     fromLedger?: number;
     toLedger?: number;
     limit?: number;
-  } = {}): Promise<SorobanRpc.Api.EventResponse[]> {
+  } = {}): Promise<rpc.Api.EventResponse[]> {
     await this.anchorIfNeeded();
 
     const limit = params.limit ?? this.defaultLimit;
@@ -140,10 +140,10 @@ export class EventCursor {
     const contractIds = params.contractIds ?? [];
     const topics = this.encodeTopics(params.topics);
 
-    const allEvents: SorobanRpc.Api.EventResponse[] = [];
+    const allEvents: rpc.Api.EventResponse[] = [];
 
     while (true) {
-      const request: SorobanRpc.Server.GetEventsRequest = {
+      const request: rpc.Server.GetEventsRequest = {
         startLedger,
         filters: [
           {
@@ -153,7 +153,7 @@ export class EventCursor {
           },
         ],
         limit,
-      } as unknown as SorobanRpc.Server.GetEventsRequest;
+      } as unknown as rpc.Server.GetEventsRequest;
 
       const res = await this.server.getEvents(request as any);
       const events = Array.isArray(res?.events) ? res.events : [];
@@ -163,7 +163,7 @@ export class EventCursor {
         break;
       }
 
-      allEvents.push(...events as SorobanRpc.Api.EventResponse[]);
+      allEvents.push(...events as rpc.Api.EventResponse[]);
 
       // Determine last seen ledger to advance the cursor and next startLedger
       const lastLedger = (events[events.length - 1] as any).ledger ??

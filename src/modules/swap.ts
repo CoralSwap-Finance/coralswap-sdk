@@ -16,7 +16,7 @@ import {
 import { PRECISION, DEFAULTS } from '../config';
 import { PairNotFoundError, ValidationError, InsufficientLiquidityError, TransactionError } from '../errors';
 import { PairClient } from '@/contracts/pair';
-import { SorobanRpc, xdr } from '@stellar/stellar-sdk';
+import { rpc, xdr } from '@stellar/stellar-sdk';
 import { GasEstimate } from '../types/gas';
 import { estimateGas } from '../utils/gas';
 import { resolveTokenIdentifier } from '../utils/addresses';
@@ -770,13 +770,13 @@ export class SwapModule {
     // Build the getEvents request.
     // When pairAddress is given we scope the query to that contract, which is
     // the most efficient path. Without it we query all contracts for "swap" topic.
-    const request: SorobanRpc.Server.GetEventsRequest = {
+    const request: rpc.Server.GetEventsRequest = {
       startLedger: fromLedger,
       filters: [
         {
           type: "contract",
           contractIds: filter.pairAddress ? [filter.pairAddress] : [],
-          topics: [[xdr.ScVal.scvSymbol("swap").toXDR("base64")]],
+          topics: [[xdr.ScVal.scvSymbol("swap").toXdr("base64")]],
         },
       ],
       limit: filter.limit ?? 200,

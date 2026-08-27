@@ -36,7 +36,7 @@ describe("EventCursor", () => {
 
     expect(captured).not.toBeNull();
     const topicEntry = captured.filters[0].topics[0][0];
-    const expected = xdr.ScVal.scvSymbol("swap").toXDR("base64");
+    const expected = xdr.ScVal.scvSymbol("swap").toXdr("base64");
     expect(topicEntry).toBe(expected);
     expect(topicEntry).not.toBe("swap");
   });
@@ -97,7 +97,7 @@ describe("EventCursor", () => {
     });
 
     it("decodes a base64 XDR topic as returned over raw JSON-RPC", () => {
-      const encoded = xdr.ScVal.scvSymbol("add_liquidity").toXDR("base64");
+      const encoded = xdr.ScVal.scvSymbol("add_liquidity").toXdr("base64");
       expect(decodeEventTopic(encoded)).toBe("add_liquidity");
     });
 

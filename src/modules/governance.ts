@@ -450,9 +450,9 @@ export class GovernanceModule {
       return [];
     }
 
-    const items = sim.returnValue.vec();
+    const items = sim.returnValue.type === "scvVec" ? sim.returnValue.vec : undefined;
     if (!items) return [];
-    return items.map((v) => this.decodeProposal(v));
+    return items.map((v: xdr.ScVal) => this.decodeProposal(v));
   }
 
   /**
@@ -550,10 +550,10 @@ export class GovernanceModule {
       return [];
     }
 
-    const items = sim.returnValue.vec();
+    const items = sim.returnValue.type === "scvVec" ? sim.returnValue.vec : undefined;
     if (!items) return [];
 
-    let proposals = items.map((v) => this.decodeProposal(v));
+    let proposals = items.map((v: xdr.ScVal) => this.decodeProposal(v));
 
     if (filter?.status) {
       proposals = proposals.filter((p) => p.status === filter.status);

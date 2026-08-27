@@ -1,4 +1,4 @@
-import { Keypair, SorobanRpc, xdr, Transaction, TransactionBuilder } from '@stellar/stellar-sdk';
+import { Keypair, rpc as SorobanRpc, xdr, Transaction, TransactionBuilder } from '@stellar/stellar-sdk';
 import { CoralSwapClient } from '../src/client';
 import { ConnectionPool } from '../src';
 import { Network, Signer } from '../src/types/common';
@@ -8,6 +8,7 @@ import { resetCircuitBreakers, DeadlineError } from '../src/utils/retry';
 
 // Mock transaction for testing
 const mockTx = {
+  toXdr: jest.fn().mockReturnValue('mock-tx-xdr'),
   toXDR: jest.fn().mockReturnValue('mock-tx-xdr'),
   sign: jest.fn(),
 } as unknown as Transaction;
@@ -29,13 +30,13 @@ jest.mock('@stellar/stellar-sdk', () => {
       ...mockTx,
       toXDR: jest.fn().mockReturnValue(xdr),
     })),
-    SorobanRpc: {
-      ...actual.SorobanRpc,
+    rpc: {
+      ...actual.rpc,
       assembleTransaction: jest.fn((tx: any) => ({
         build: () => mockTx,
       })),
       Api: {
-        ...actual.SorobanRpc.Api,
+        ...actual.rpc.Api,
         isSimulationSuccess: jest.fn((sim: any) => !sim.error),
       },
     },

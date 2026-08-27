@@ -1,4 +1,4 @@
-import { xdr } from '@stellar/stellar-sdk';
+import { xdr, Address } from '@stellar/stellar-sdk';
 import { TreasuryModule } from '../src/modules/treasury';
 import { CoralSwapClient } from '../src/client';
 import { MIN_START_LEDGER } from '../src/utils/event-cursor';
@@ -59,25 +59,30 @@ function makeSwapEvent(
   feeBps: number,
   tokenIn: string,
 ) {
-  const makeI128 = (n: bigint) => ({
-    i128: () => ({ hi: () => ({ toString: () => (n >> 64n).toString() }), lo: () => ({ toString: () => (n & ((1n << 64n) - 1n)).toString() }) }),
-  });
-  const makeU32 = (n: number) => ({ u32: () => n });
-  const makeAddr = (s: string) => ({ address: () => ({ toString: () => s }) });
+  const entry = (key: string, val: xdr.ScVal) =>
+    new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol(key), val });
+  const addrVal = (s: string) =>
+    ({
+      type: 'scvAddress',
+      address: { toString: () => s },
+    }) as unknown as xdr.ScVal;
 
-  const entries = [
-    { key: { sym: () => ({ toString: () => 'amount_in' }) }, val: makeI128(amountIn) },
-    { key: { sym: () => ({ toString: () => 'fee_bps' }) }, val: makeU32(feeBps) },
-    { key: { sym: () => ({ toString: () => 'token_in' }) }, val: makeAddr(tokenIn) },
-    { key: { sym: () => ({ toString: () => 'amount_out' }) }, val: makeI128(amountIn - (amountIn * BigInt(feeBps)) / 10000n) },
-    { key: { sym: () => ({ toString: () => 'token_out' }) }, val: makeAddr(TOKEN_B) },
-    { key: { sym: () => ({ toString: () => 'sender' }) }, val: makeAddr('GSENDER') },
-  ];
+  const value = xdr.ScVal.scvMap([
+    entry('amount_in', xdr.ScVal.scvI128(amountIn)),
+    entry('fee_bps', xdr.ScVal.scvU32(feeBps)),
+    entry('token_in', addrVal(tokenIn)),
+    entry(
+      'amount_out',
+      xdr.ScVal.scvI128(amountIn - (amountIn * BigInt(feeBps)) / 10000n),
+    ),
+    entry('token_out', addrVal(TOKEN_B)),
+    entry('sender', addrVal('GSENDER')),
+  ]);
 
   return {
     // Real getEvents responses carry topics as XDR ScVals, never bare strings.
     topic: [xdr.ScVal.scvSymbol('swap')],
-    value: { map: () => entries },
+    value,
     ledger,
     contractId: PAIR_ADDR_1,
     txHash: `txhash_${ledger}`,
@@ -94,11 +99,11 @@ function makeSwapEvent(
  */
 function decodeTopicFilter(segment: string): string {
   if (segment === '*') return segment;
-  const decoded = xdr.ScVal.fromXDR(segment, 'base64');
-  if (decoded.switch().name !== 'scvSymbol') {
-    throw new Error(`topic filter must be an scvSymbol, got ${decoded.switch().name}`);
+  const decoded = xdr.ScVal.fromXdr(segment, 'base64');
+  if (decoded.type !== 'scvSymbol') {
+    throw new Error(`topic filter must be an scvSymbol, got ${decoded.type}`);
   }
-  return decoded.sym().toString();
+  return decoded.sym.toString();
 }
 
 /**
@@ -674,7 +679,7 @@ describe('TreasuryModule', () => {
 
       const request = (client.server.getEvents as jest.Mock).mock.calls[0][0];
       const [segment] = request.filters[0].topics[0];
-      expect(segment).toBe(xdr.ScVal.scvSymbol('swap').toXDR('base64'));
+      expect(segment).toBe(xdr.ScVal.scvSymbol('swap').toXdr('base64'));
       expect(decodeTopicFilter(segment)).toBe('swap');
     });
 

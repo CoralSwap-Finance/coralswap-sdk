@@ -14,7 +14,7 @@
  *  - `getBestEndpoint`     — rank endpoints by latency + error rate
  */
 
-import { SorobanRpc, Contract, xdr, StrKey } from '@stellar/stellar-sdk';
+import { rpc, Contract, xdr, StrKey } from '@stellar/stellar-sdk';
 
 /** Default RPC health-probe timeout in milliseconds. */
 const DEFAULT_RPC_TIMEOUT_MS = 5_000;
@@ -128,13 +128,13 @@ export interface EndpointScore {
 }
 
 /**
- * Create a SorobanRpc.Server bound to the given URL with a fixed timeout.
+ * Create a rpc.Server bound to the given URL with a fixed timeout.
  *
  * We cannot set `AbortSignal` directly on the server in older SDK versions,
  * so the timeout is enforced at the probe-call layer via `Promise.race`.
  */
-function makeServer(url: string): SorobanRpc.Server {
-  return new SorobanRpc.Server(url, { allowHttp: url.startsWith('http://') });
+function makeServer(url: string): rpc.Server {
+  return new rpc.Server(url, { allowHttp: url.startsWith('http://') });
 }
 
 /**
@@ -181,7 +181,7 @@ export async function checkRPCHealth(
     return { healthy: false, status: 'unknown', latencyMs: -1, error: 'Invalid RPC URL' };
   }
 
-  let server: SorobanRpc.Server;
+  let server: rpc.Server;
   try {
     server = makeServer(url);
   } catch (err) {
@@ -283,7 +283,7 @@ export async function getRPCLatency(
     if (cached) return { ...cached.stats };
   }
 
-  let server: SorobanRpc.Server;
+  let server: rpc.Server;
   try {
     server = makeServer(url);
   } catch {
@@ -370,7 +370,7 @@ export async function getContractStatus(
     };
   }
 
-  let server: SorobanRpc.Server;
+  let server: rpc.Server;
   try {
     server = makeServer(url);
   } catch (err) {
