@@ -632,7 +632,7 @@ export function mapError(err: unknown): CoralSwapSDKError {
   }
 
   // Extract deadline value from message - improved regex
-  const deadlineMatch = message.match(/deadline[:\s]*[a-z]*[:\s]*(\d+)/i);
+  const deadlineMatch = message.match(/deadline[^\d]*(\d+)/i);
   if (message.includes("EXPIRED") || normalizedMessage.includes("deadline")) {
     const deadline = deadlineMatch ? parseInt(deadlineMatch[1], 10) : 0;
     return new DeadlineError(deadline);
