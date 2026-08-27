@@ -1,4 +1,4 @@
-import { Account, FeeBumpTransaction, Transaction, xdr, SorobanRpc } from '@stellar/stellar-sdk';
+import { Account, FeeBumpTransaction, Transaction, xdr, rpc as SorobanRpc } from '@stellar/stellar-sdk';
 import { MockProvider } from '../src/test/mocks/MockProvider';
 
 function sleep(ms: number): Promise<void> {

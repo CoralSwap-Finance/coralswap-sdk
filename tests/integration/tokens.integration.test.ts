@@ -1,4 +1,4 @@
-import { Address, Contract, SorobanRpc, TransactionBuilder, nativeToScVal, scValToNative } from '@stellar/stellar-sdk';
+import { Address, Contract, rpc as SorobanRpc, TransactionBuilder, nativeToScVal, scValToNative } from '@stellar/stellar-sdk';
 import { CoralSwapClient } from '../../src/client';
 import { Network } from '../../src/types/common';
 
