@@ -17,11 +17,13 @@ import {
   MetricGranularity,
   MetricQueryOptions,
   MonitoringDashboard,
+  SystemMetrics,
   ProtocolMetrics,
   PoolMetrics,
 } from '@/types/monitoring';
 import { ValidationError } from '@/errors';
 import { validateAddress } from '@/utils/validation';
+import EventCursor from '@/utils/event-cursor';
 import { TreasuryModule, TreasuryModuleOptions } from '@/modules/treasury';
 import { SwapModule } from '@/modules/swap';
 
@@ -569,4 +571,184 @@ export class MonitoringModule {
     try { return (await this.client.factory.getAllPairs()).length; }
     catch { return 0; }
   }
+
+  /**
+   * Fetch protocol-wide system metrics including current and previous-window TVL, volume, and revenue.
+   * Uses the shared EventCursor utility to query historical events with proper ScVal topic encoding.
+   */
+  async getSystemMetrics(periodLedgers = 17280): Promise<SystemMetrics> {
+    const currentLedger = await this.client.getCurrentLedger();
+    const currentStartLedger = Math.max(0, currentLedger - periodLedgers);
+    const previousStartLedger = Math.max(0, currentLedger - 2 * periodLedgers);
+    const previousEndLedger = Math.max(0, currentStartLedger - 1);
+
+    let pairs: string[] = [];
+    try {
+      pairs = await this.client.factory.getAllPairs();
+    } catch {
+      pairs = [];
+    }
+
+    const allHealth = await this.getAllPoolHealth();
+    const active = allHealth.filter((p) => p.operational);
+    const tvlUSD = active.reduce((s, p) => s + p.tvlUSD, 0);
+    const volume24hUSD = active.reduce((s, p) => s + p.volume24hUSD, 0);
+    const revenue24hUSD = active.reduce((s, p) => s + p.fees24hUSD, 0);
+
+    const previousReserves = await this.fetchPreviousReserves(
+      pairs,
+      previousStartLedger,
+      previousEndLedger
+    );
+    const previousSwapActivity = await this.fetchPoolSwapActivity(
+      pairs,
+      previousStartLedger,
+      previousEndLedger
+    );
+
+    const previousTVLUSD = previousReserves.tvlUSD;
+    const previousVolume24hUSD = previousSwapActivity.volumeUSD;
+    const previousRevenue24hUSD = previousSwapActivity.revenueUSD;
+
+    return {
+      tvlUSD,
+      volume24hUSD,
+      revenue24hUSD,
+      previousTVLUSD,
+      previousVolume24hUSD,
+      previousRevenue24hUSD,
+      previousWindowTVLUSD: previousTVLUSD,
+      previousWindowVolumeUSD: previousVolume24hUSD,
+      previousWindowRevenueUSD: previousRevenue24hUSD,
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  /**
+   * Fetch previous-window reserves for pair contracts using EventCursor with ScVal topic encoding.
+   */
+  async fetchPreviousReserves(
+    pairAddresses: string[],
+    startLedger: number,
+    endLedger: number
+  ): Promise<{ tvlUSD: number }> {
+    if (pairAddresses.length === 0) return { tvlUSD: 0 };
+
+    const cursor = new EventCursor(this.client.server);
+    const events = await cursor.scan({
+      contractIds: pairAddresses,
+      topics: ['sync'],
+      fromLedger: startLedger,
+      toLedger: endLedger,
+    });
+
+    if (events.length === 0) return { tvlUSD: 0 };
+
+    let totalReserves = 0n;
+    for (const ev of events) {
+      if (!ev.value) continue;
+      const data = decodeMapEvent(ev.value);
+      if (!data) continue;
+      const r0 = readI128(data, 'reserve0') ?? 0n;
+      const r1 = readI128(data, 'reserve1') ?? 0n;
+      totalReserves += r0 + r1;
+    }
+
+    return { tvlUSD: Number(totalReserves) / 1e7 };
+  }
+
+  /**
+   * Fetch previous-window swap activity (volume and revenue) using EventCursor with ScVal topic encoding.
+   */
+  async fetchPoolSwapActivity(
+    pairAddresses: string[],
+    startLedger: number,
+    endLedger: number
+  ): Promise<{ volumeUSD: number; revenueUSD: number }> {
+    if (pairAddresses.length === 0) return { volumeUSD: 0, revenueUSD: 0 };
+
+    const cursor = new EventCursor(this.client.server);
+    const events = await cursor.scan({
+      contractIds: pairAddresses,
+      topics: ['swap'],
+      fromLedger: startLedger,
+      toLedger: endLedger,
+    });
+
+    if (events.length === 0) return { volumeUSD: 0, revenueUSD: 0 };
+
+    let totalVolume = 0n;
+    let totalRevenue = 0n;
+
+    for (const ev of events) {
+      if (!ev.value) continue;
+      const data = decodeMapEvent(ev.value);
+      if (!data) continue;
+
+      const amountIn = readI128(data, 'amount_in') ?? 0n;
+      const feeBps = readU32(data, 'fee_bps') ?? 30;
+
+      totalVolume += amountIn;
+      totalRevenue += (amountIn * BigInt(feeBps)) / 10000n;
+    }
+
+    return {
+      volumeUSD: Number(totalVolume) / 1e7,
+      revenueUSD: Number(totalRevenue) / 1e7,
+    };
+  }
 }
+
+// ---------------------------------------------------------------------------
+// Event decoding helpers for monitoring metrics
+// ---------------------------------------------------------------------------
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function decodeMapEvent(value: any): Map<string, any> | null {
+  const entries: unknown[] =
+    typeof value?.map === 'function' ? value.map() : value?._value;
+  if (!Array.isArray(entries)) return null;
+
+  const map = new Map<string, unknown>();
+  for (const entry of entries as Array<any>) {
+    const k = typeof entry?.key === 'function' ? entry.key() : entry?.key;
+    const v = typeof entry?.val === 'function' ? entry.val() : entry?.val;
+    let key: string | undefined;
+    try {
+      key = k?.sym?.().toString() ?? k?.str?.().toString();
+    } catch {
+      /* skip */
+    }
+    if (key) map.set(key, v);
+  }
+  return map as Map<string, unknown>;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function readI128(map: Map<string, any>, key: string): bigint | undefined {
+  const val = map.get(key);
+  if (!val) return undefined;
+  try {
+    if (typeof val.i128 === 'function') {
+      const parts = val.i128();
+      return (BigInt(parts.hi().toString()) << 64n) + BigInt(parts.lo().toString());
+    }
+  } catch {
+    /* skip */
+  }
+  return undefined;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function readU32(map: Map<string, any>, key: string): number | undefined {
+  const val = map.get(key);
+  if (!val) return undefined;
+  try {
+    if (typeof val.u32 === 'function') return val.u32();
+    if (typeof val === 'number') return val;
+  } catch {
+    /* skip */
+  }
+  return undefined;
+}
+

@@ -138,6 +138,7 @@ export {
   decodeEvents,
   decodeEventsFromXdr,
   EventCursor,
+  encodeTopic,
   decodeEventTopic,
   MIN_START_LEDGER,
   batchCall,
@@ -155,12 +156,12 @@ export type {
   SimulationResourceEstimate,
   WaitNextLedgerOptions,
   DecodeEventsOptions,
+  EventCursorOptions,
   SimulateFn,
   BatchRequestOptions,
   BatchResult,
   TransactionStatus,
   RetryDecision,
-  EventCursorOptions,
 } from "./utils";
 
 // Schema validation
