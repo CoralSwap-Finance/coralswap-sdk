@@ -14,23 +14,23 @@ import { Logger } from "@/types/common";
  * Helper function to parse an XDR struct (ScMap) into a Record map.
  */
 function parseScStruct(val: xdr.ScVal): Record<string, xdr.ScVal> {
-  const map = val.map();
+  const map = val.type === "scvMap" ? val.map : undefined;
   if (!map) {
     throw new Error("Invalid XDR format: expected ScMap");
   }
   const result: Record<string, xdr.ScVal> = {};
   for (const entry of map) {
-    const k = entry.key();
-    const tag = k.switch().name;
+    const k = entry.key;
+    const tag = k.type;
     let keyStr = "";
     if (tag === "scvString") {
-      keyStr = k.str().toString();
+      keyStr = k.str.toString();
     } else if (tag === "scvSymbol") {
-      keyStr = k.sym().toString();
+      keyStr = k.sym.toString();
     } else {
       continue;
     }
-    result[keyStr] = entry.val();
+    result[keyStr] = entry.val;
   }
   return result;
 }
@@ -40,10 +40,10 @@ function parseScStruct(val: xdr.ScVal): Record<string, xdr.ScVal> {
  */
 function scValToU32(val: xdr.ScVal | undefined): number {
   if (!val) throw new Error("Missing field");
-  if (val.switch().name !== "scvU32") {
-    throw new Error(`Expected u32, got ${val.switch().name}`);
+  if (val.type !== "scvU32") {
+    throw new Error(`Expected u32, got ${val.type}`);
   }
-  return Number(val.u32());
+  return val.u32;
 }
 
 /**
@@ -51,11 +51,13 @@ function scValToU32(val: xdr.ScVal | undefined): number {
  */
 function scValToI128(val: xdr.ScVal | undefined): bigint {
   if (!val) throw new Error("Missing field");
-  if (val.switch().name !== "scvI128") {
-    throw new Error(`Expected i128, got ${val.switch().name}`);
+  if (val.type !== "scvI128") {
+    throw new Error(`Expected i128, got ${val.type}`);
   }
-  const parts = val.i128();
-  return BigInt(parts.lo().toString()) + (BigInt(parts.hi().toString()) << 64n);
+  const i128 = val.i128 as unknown;
+  if (typeof i128 === "bigint") return i128;
+  const parts = i128 as { hi: bigint; lo: bigint };
+  return (parts.hi << 64n) + parts.lo;
 }
 
 /**
@@ -63,12 +65,10 @@ function scValToI128(val: xdr.ScVal | undefined): bigint {
  */
 function scValToU64(val: xdr.ScVal | undefined): number {
   if (!val) throw new Error("Missing field");
-  if (val.switch().name !== "scvU64") {
-    throw new Error(`Expected u64, got ${val.switch().name}`);
+  if (val.type !== "scvU64") {
+    throw new Error(`Expected u64, got ${val.type}`);
   }
-  // u64 returns Uint64 - convert to number
-  const u64Val = val.u64();
-  return Number(u64Val.toBigInt());
+  return Number(val.u64);
 }
 
 /**
@@ -122,15 +122,11 @@ export class PairClient {
     const op = this.contract.call("get_reserves");
     const result = await this.simulateRead(op);
     if (!result) throw new Error("Failed to read reserves");
-    const vec = result.vec();
+    const vec = result.type === "scvVec" ? result.vec : undefined;
     if (!vec || vec.length < 2) throw new Error("Invalid reserves response");
     return {
-      reserve0:
-        BigInt(vec[0].i128().lo().toString()) +
-        (BigInt(vec[0].i128().hi().toString()) << 64n),
-      reserve1:
-        BigInt(vec[1].i128().lo().toString()) +
-        (BigInt(vec[1].i128().hi().toString()) << 64n),
+      reserve0: scValToI128(vec[0]),
+      reserve1: scValToI128(vec[1]),
     };
   }
 
@@ -179,7 +175,7 @@ export class PairClient {
     const op = this.contract.call("get_dynamic_fee");
     const result = await this.simulateRead(op);
     if (!result) throw new Error("Failed to read dynamic fee");
-    return result.u32() ?? 30;
+    return result.type === "scvU32" ? result.u32 : 30;
   }
 
   /**
@@ -225,7 +221,7 @@ export class PairClient {
     const lockedVal = struct["locked"];
     if (!lockedVal) throw new Error("Missing field locked");
     const locked =
-      lockedVal.switch().name === "scvBool" ? lockedVal.b() : false;
+      lockedVal.type === "scvBool" ? lockedVal.b : false;
 
     return {
       flashFeeBps: scValToU32(struct["flash_fee_bps"]),

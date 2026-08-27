@@ -135,10 +135,8 @@ export class FactoryClient {
     const op = this.contract.call("all_pairs");
     const result = await this.simulateRead(op);
     if (!result) return [];
-    const vec = result.vec();
-    return vec
-      ? vec.map((v: xdr.ScVal) => Address.fromScVal(v).toString())
-      : [];
+    const vec = result.type === "scvVec" ? result.vec ?? [] : [];
+    return vec.map((v: xdr.ScVal) => Address.fromScVal(v).toString());
   }
 
   /**
@@ -157,7 +155,7 @@ export class FactoryClient {
     const op = this.contract.call("get_fee_parameters");
     const result = await this.simulateRead(op);
     if (!result) throw new Error("Failed to read fee parameters");
-    const map = result.map();
+    const map = result.type === "scvMap" ? result.map : undefined;
     if (!map) throw new Error("Invalid fee parameters response");
     return {
       feeMin: 10,
@@ -189,7 +187,7 @@ export class FactoryClient {
     const op = this.contract.call("is_paused");
     const result = await this.simulateRead(op);
     if (!result) return false;
-    return result.b() ?? false;
+    return result.type === "scvBool" ? result.b : false;
   }
 
   /**
@@ -201,7 +199,7 @@ export class FactoryClient {
     const op = this.contract.call("protocol_version");
     const result = await this.simulateRead(op);
     if (!result) return 0;
-    return result.u32() ?? 0;
+    return result.type === "scvU32" ? result.u32 : 0;
   }
 
   /**

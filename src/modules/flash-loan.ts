@@ -473,8 +473,7 @@ export class FlashLoanModule {
 
   private getRawEvents(txResult: any): xdr.ContractEvent[] {
     try {
-      const sorobanMeta = txResult.resultMetaXdr.v3().sorobanMeta();
-      return sorobanMeta?.events() ?? [];
+      return txResult?.resultMetaXdr?.v3?.sorobanMeta?.events ?? [];
     } catch {
       return [];
     }
@@ -483,8 +482,8 @@ export class FlashLoanModule {
   private hasEventsAccessor(txResult: any): boolean {
     try {
       return (
-        typeof txResult?.resultMetaXdr?.v3()?.sorobanMeta()?.events ===
-        "function"
+        Array.isArray(txResult?.resultMetaXdr?.v3?.sorobanMeta?.events) &&
+        txResult.resultMetaXdr.v3.sorobanMeta.events.length > 0
       );
     } catch {
       return false;
@@ -495,16 +494,18 @@ export class FlashLoanModule {
     events: xdr.ContractEvent[],
   ): FlashLoanExecutedEvent | null {
     for (const event of events) {
-      if (event.type().name !== "contract") continue;
+      if (event.type.name !== "contract") continue;
 
-      const topics = event.body().v0().topics();
+      const body = event.body;
+      if (body.type !== "v0") continue;
+      const topics = body.v0.topics;
       if (!topics.length) continue;
 
       const eventName = this.topicSymbol(topics[0]);
       if (eventName !== "FlashLoanExecuted") continue;
 
       try {
-        const data = scValToNative(event.body().v0().data()) as Record<
+        const data = scValToNative(body.v0.data) as Record<
           string,
           unknown
         >;
@@ -534,16 +535,18 @@ export class FlashLoanModule {
     events: xdr.ContractEvent[],
   ): FlashLoanFailedEvent | null {
     for (const event of events) {
-      if (event.type().name !== "contract") continue;
+      if (event.type.name !== "contract") continue;
 
-      const topics = event.body().v0().topics();
+      const body = event.body;
+      if (body.type !== "v0") continue;
+      const topics = body.v0.topics;
       if (!topics.length) continue;
 
       const eventName = this.topicSymbol(topics[0]);
       if (eventName !== "FlashLoanFailed") continue;
 
       try {
-        const data = scValToNative(event.body().v0().data()) as Record<
+        const data = scValToNative(body.v0.data) as Record<
           string,
           unknown
         >;
@@ -567,7 +570,7 @@ export class FlashLoanModule {
 
   private topicSymbol(topic: xdr.ScVal): string {
     try {
-      return topic.sym().toString();
+      return topic.type === "scvSymbol" ? topic.sym.toString() : "";
     } catch {
       return "";
     }

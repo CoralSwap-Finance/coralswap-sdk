@@ -104,10 +104,10 @@ import { validateAddress, validatePositiveAmount, validateDistinctTokens } from 
  */
 export function scValToString(val: xdr.ScVal | undefined): string {
   if (!val) throw new CoralSwapSDKError("PARSING_ERROR", "Missing field");
-  const tag = val.switch().name;
-  if (tag === 'scvString') return val.str().toString();
-  if (tag === 'scvSymbol') return val.sym().toString();
-  if (tag === 'scvBytes') return Buffer.from(val.bytes()).toString('utf8');
+  const tag = val.type;
+  if (tag === 'scvString') return val.str.toString();
+  if (tag === 'scvSymbol') return val.sym.toString();
+  if (tag === 'scvBytes') return Buffer.from(val.bytes.toBytes()).toString('utf8');
   throw new CoralSwapSDKError("PARSING_ERROR", `Expected string/symbol/bytes, got ${tag}`);
 }
 
@@ -123,11 +123,11 @@ export function scValToString(val: xdr.ScVal | undefined): string {
  */
 export function scValToNumber(val: xdr.ScVal | undefined): number {
   if (!val) throw new CoralSwapSDKError("PARSING_ERROR", "Missing field");
-  const tag = val.switch().name;
-  if (tag === 'scvU32') return Number(val.u32());
-  if (tag === 'scvU64') return Number(val.u64().toBigInt());
-  if (tag === 'scvI32') return val.i32();
-  if (tag === 'scvI64') return Number(val.i64().toBigInt());
+  const tag = val.type;
+  if (tag === 'scvU32') return val.u32;
+  if (tag === 'scvU64') return Number(val.u64);
+  if (tag === 'scvI32') return val.i32;
+  if (tag === 'scvI64') return Number(val.i64);
   throw new CoralSwapSDKError("PARSING_ERROR", `Expected number type, got ${tag}`);
 }
 
@@ -142,7 +142,7 @@ export function scValToNumber(val: xdr.ScVal | undefined): number {
  */
 export function scValToOptionalNumber(val: xdr.ScVal | undefined): number | undefined {
   if (!val) return undefined;
-  if (val.switch().name === 'scvVoid') return undefined;
+  if (val.type === 'scvVoid') return undefined;
   return scValToNumber(val);
 }
 
@@ -158,19 +158,32 @@ export function scValToOptionalNumber(val: xdr.ScVal | undefined): number | unde
  */
 export function scValToBigInt(val: xdr.ScVal | undefined): bigint {
   if (!val) throw new CoralSwapSDKError("PARSING_ERROR", "Missing field");
-  const tag = val.switch().name;
+  const tag = val.type;
   if (tag === 'scvI128') {
-    const parts = val.i128();
-    const lo = BigInt(parts.lo().toString());
-    const hi = BigInt(parts.hi().toString());
-    const loUnsigned = lo < 0n ? lo + (1n << 64n) : lo;
-    return (hi << 64n) + loUnsigned;
+    const i128 = val.i128 as unknown;
+    if (typeof i128 === 'bigint') return i128;
+    const parts = i128 as { hi: bigint; lo: bigint };
+    return (parts.hi << 64n) + parts.lo;
   }
-  if (tag === 'scvU64') return val.u64().toBigInt();
-  if (tag === 'scvI64') return BigInt(val.i64().toBigInt());
-  if (tag === 'scvU32') return BigInt(val.u32());
-  if (tag === 'scvI32') return BigInt(val.i32());
+  if (tag === 'scvU64') return val.u64;
+  if (tag === 'scvI64') return val.i64;
+  if (tag === 'scvU32') return BigInt(val.u32);
+  if (tag === 'scvI32') return BigInt(val.i32);
   throw new CoralSwapSDKError("PARSING_ERROR", `Expected bigint type, got ${tag}`);
+}
+
+function scMapToRecord(map: xdr.ScMapEntry[]): Record<string, xdr.ScVal> {
+  const fields: Record<string, xdr.ScVal> = {};
+  for (const entry of map) {
+    const k = entry.key;
+    const tag = k.type;
+    let keyStr = '';
+    if (tag === 'scvString') keyStr = k.str.toString();
+    else if (tag === 'scvSymbol') keyStr = k.sym.toString();
+    else continue;
+    fields[keyStr] = entry.val;
+  }
+  return fields;
 }
 
 /**
@@ -186,22 +199,13 @@ export function scValToBigInt(val: xdr.ScVal | undefined): bigint {
  *   or required fields cannot be read.
  */
 export function parseCancelResult(result: xdr.ScVal): { refundedAmount: bigint; filledAmount: bigint } {
-  if (result.switch().name !== 'scvMap') {
+  if (result.type !== 'scvMap') {
     throw new CoralSwapSDKError("PARSING_ERROR", "Invalid cancel result: expected ScMap");
   }
-  const map = result.map();
+  const map = result.map;
   if (!map) throw new CoralSwapSDKError("PARSING_ERROR", "Invalid cancel result: expected ScMap");
 
-  const fields: Record<string, xdr.ScVal> = {};
-  for (const entry of map) {
-    const k = entry.key();
-    const tag = k.switch().name;
-    let keyStr = '';
-    if (tag === 'scvString') keyStr = k.str().toString();
-    else if (tag === 'scvSymbol') keyStr = k.sym().toString();
-    else continue;
-    fields[keyStr] = entry.val();
-  }
+  const fields = scMapToRecord(map);
 
   const refundedAmount = scValToBigInt(fields['refunded_amount'] ?? fields['refundedAmount']);
   const filledAmount = scValToBigInt(fields['filled_amount'] ?? fields['filledAmount']);
@@ -224,19 +228,13 @@ export function parseCancelResult(result: xdr.ScVal): { refundedAmount: bigint; 
  *   unrecognised, `fillPercent` is outside 0–100, or the ScVal is not a map.
  */
 export function parseOrderStatus(result: xdr.ScVal): OrderStatus {
-  const map = result.map();
+  if (result.type !== 'scvMap') {
+    throw new CoralSwapSDKError("PARSING_ERROR", "Invalid order status: expected ScMap");
+  }
+  const map = result.map;
   if (!map) throw new CoralSwapSDKError("PARSING_ERROR", "Invalid order status: expected ScMap");
 
-  const fields: Record<string, xdr.ScVal> = {};
-  for (const entry of map) {
-    const k = entry.key();
-    const tag = k.switch().name;
-    let keyStr = '';
-    if (tag === 'scvString') keyStr = k.str().toString();
-    else if (tag === 'scvSymbol') keyStr = k.sym().toString();
-    else continue;
-    fields[keyStr] = entry.val();
-  }
+  const fields = scMapToRecord(map);
 
   const stateStr = scValToString(fields['state']).toLowerCase();
   if (!['open', 'partial', 'filled', 'cancelled', 'expired'].includes(stateStr)) {
@@ -271,8 +269,8 @@ export function parseOrderStatus(result: xdr.ScVal): OrderStatus {
  */
 export function scValToStringVec(val: xdr.ScVal | undefined): string[] {
   if (!val) throw new CoralSwapSDKError("PARSING_ERROR", "Missing field");
-  if (val.switch().name !== 'scvVec') throw new CoralSwapSDKError("PARSING_ERROR", "Expected Vec");
-  const vec = val.vec();
+  if (val.type !== 'scvVec') throw new CoralSwapSDKError("PARSING_ERROR", "Expected Vec");
+  const vec = val.vec;
   if (!vec) return [];
   return vec.map((v) => scValToString(v));
 }
@@ -289,19 +287,13 @@ export function scValToStringVec(val: xdr.ScVal | undefined): string[] {
  *   the state is unrecognised, or `fillPercent` is outside 0–100.
  */
 export function parseOrderDetails(result: xdr.ScVal): LimitOrderDetails {
-  const map = result.map();
+  if (result.type !== 'scvMap') {
+    throw new CoralSwapSDKError("PARSING_ERROR", "Invalid order details: expected ScMap");
+  }
+  const map = result.map;
   if (!map) throw new CoralSwapSDKError("PARSING_ERROR", "Invalid order details: expected ScMap");
 
-  const fields: Record<string, xdr.ScVal> = {};
-  for (const entry of map) {
-    const k = entry.key();
-    const tag = k.switch().name;
-    let keyStr = '';
-    if (tag === 'scvString') keyStr = k.str().toString();
-    else if (tag === 'scvSymbol') keyStr = k.sym().toString();
-    else continue;
-    fields[keyStr] = entry.val();
-  }
+  const fields = scMapToRecord(map);
 
   const id = scValToString(fields['id']);
 

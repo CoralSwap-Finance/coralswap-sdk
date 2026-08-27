@@ -259,10 +259,22 @@ export class TreasuryModule {
       if (!value || typeof value !== 'object') return null;
       const valueObj = value as Record<string, unknown>;
 
-      const map = typeof valueObj.map === 'function' 
-        ? (valueObj.map as () => unknown[])() 
-        : (valueObj._value as unknown[]);
+      const map = Array.isArray(valueObj.map)
+        ? valueObj.map
+        : typeof valueObj.map === 'function'
+          ? (valueObj.map as () => unknown[])()
+          : (valueObj._value as unknown[]);
       if (!Array.isArray(map)) return null;
+
+      const decodeKey = (kObj: Record<string, unknown>): string | undefined => {
+        try {
+          if (typeof kObj.sym === 'function') return (kObj.sym as () => { toString(): string })().toString();
+          if (typeof (kObj.sym as { toString?: () => string } | undefined)?.toString === 'function') return (kObj.sym as { toString(): string }).toString();
+          if (typeof kObj.str === 'function') return (kObj.str as () => { toString(): string })().toString();
+          if (typeof (kObj.str as { toString?: () => string } | undefined)?.toString === 'function') return (kObj.str as { toString(): string }).toString();
+        } catch { /* skip */ }
+        return undefined;
+      };
 
       const get = (key: string): unknown => {
         for (const entry of map) {
@@ -270,20 +282,16 @@ export class TreasuryModule {
           const entryObj = entry as { key: unknown; val: unknown };
           const k = entryObj.key;
           if (!k || typeof k !== 'object') continue;
-          const kObj = k as Record<string, unknown>;
-          let keyStr: string | undefined;
-          try {
-            if (typeof kObj.sym === 'function') keyStr = (kObj.sym as () => { toString(): string })().toString();
-            else if (typeof kObj.str === 'function') keyStr = (kObj.str as () => { toString(): string })().toString();
-          } catch { /* skip */ }
-          if (keyStr === key) return entryObj.val;
+          if (decodeKey(k as Record<string, unknown>) === key) return entryObj.val;
         }
         return undefined;
       };
 
       const decodeI128 = (val: unknown): bigint => {
+        if (typeof val === 'bigint') return val;
         if (val && typeof val === 'object') {
-          const valObj = val as Record<string, unknown>;
+          const valObj = val as { i128?: unknown };
+          if (typeof valObj.i128 === 'bigint') return valObj.i128;
           if (typeof valObj.i128 === 'function') {
             const parts = (valObj.i128 as () => { hi(): { toString(): string }; lo(): { toString(): string } })();
             return (BigInt(parts.hi().toString()) << 64n) + BigInt(parts.lo().toString());
@@ -293,8 +301,10 @@ export class TreasuryModule {
       };
 
       const decodeU32 = (val: unknown): number => {
+        if (typeof val === 'number') return val;
         if (val && typeof val === 'object') {
-          const valObj = val as Record<string, unknown>;
+          const valObj = val as { u32?: unknown };
+          if (typeof valObj.u32 === 'number') return valObj.u32;
           if (typeof valObj.u32 === 'function') return (valObj.u32 as () => number)();
         }
         throw new Error('cannot decode u32');
@@ -302,9 +312,20 @@ export class TreasuryModule {
 
       const decodeAddr = (val: unknown): string => {
         if (val && typeof val === 'object') {
-          const valObj = val as Record<string, unknown>;
+          const valObj = val as { address?: unknown; _value?: unknown };
           if (typeof valObj.address === 'function') return (valObj.address as () => { toString(): string })().toString();
-          if (typeof valObj._value?.toString === 'function') return (valObj._value as { toString(): string }).toString();
+          if (
+            valObj.address &&
+            typeof (valObj.address as { toString?: () => string }).toString === 'function'
+          ) {
+            return (valObj.address as { toString(): string }).toString();
+          }
+          if (
+            valObj._value &&
+            typeof (valObj._value as { toString?: () => string }).toString === 'function'
+          ) {
+            return (valObj._value as { toString(): string }).toString();
+          }
         }
         throw new Error('cannot decode address');
       };

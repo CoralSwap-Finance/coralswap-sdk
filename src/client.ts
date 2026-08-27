@@ -481,7 +481,7 @@ export class CoralSwapClient {
         };
       }
 
-      const signedXdr = await this.signer.signTransaction(preparedTx.toXDR());
+      const signedXdr = await this.signer.signTransaction(preparedTx.toXdr());
       const signedTx = new Transaction(
           signedXdr,
           this.networkConfig.networkPassphrase,

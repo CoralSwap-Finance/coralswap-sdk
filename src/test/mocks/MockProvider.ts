@@ -85,7 +85,7 @@ export type QueuedTransaction = MockSendSuccess | MockSendFailure | MockSendNotF
  */
 function ledgerKeyId(key: xdr.LedgerKey): string {
   try {
-    return key.toXDR('base64');
+    return key.toXdr('base64');
   } catch {
     // Fallback for non-XDR-serializable stubs used in tests.
     return String(key);
@@ -235,7 +235,12 @@ export class MockProvider {
    * CoralSwapClient.isHealthy() work out of the box.
    */
   async getHealth(): Promise<rpc.Api.GetHealthResponse> {
-    return { status: 'healthy' };
+    return {
+      latestLedger: this._latestLedgerSequence,
+      ledgerRetentionWindow: 17280,
+      oldestLedger: this._latestLedgerSequence - 17280,
+      status: 'healthy',
+    };
   }
 
   /**
@@ -367,7 +372,66 @@ export class MockProvider {
       id: `mock-ledger-${this._latestLedgerSequence}`,
       sequence: this._latestLedgerSequence,
       protocolVersion: '21',
+      closeTime: String(Math.floor(Date.now() / 1000)),
+      headerXdr: this.buildMockLedgerHeader(),
+      metadataXdr: this.buildMockLedgerCloseMeta(),
     };
+  }
+
+  /**
+   * Construct a minimal but valid LedgerCloseMeta XDR object.
+   *
+   * Uses the v0 variant with empty tx processing, upgrade, and SCP arrays so
+   * the object round-trips through the SDK's XDR encoding/decoding without
+   * carrying real ledger data.
+   */
+  private buildMockLedgerCloseMeta(): xdr.LedgerCloseMeta {
+    const headerEntry = new xdr.LedgerHeaderHistoryEntry({
+      hash: new Uint8Array(32),
+      header: this.buildMockLedgerHeader(),
+      ext: xdr.LedgerHeaderHistoryEntryExt.v0(),
+    });
+    const txSet = new xdr.TransactionSet({
+      previousLedgerHash: new Uint8Array(32),
+      txs: [],
+    });
+    const v0 = new xdr.LedgerCloseMetaV0({
+      ledgerHeader: headerEntry,
+      txSet,
+      txProcessing: [],
+      upgradesProcessing: [],
+      scpInfo: [],
+    });
+    return xdr.LedgerCloseMeta.v0(v0);
+  }
+
+  /**
+   * Construct a minimal but valid LedgerHeader XDR object.
+   */
+  private buildMockLedgerHeader(): xdr.LedgerHeader {
+    const zeroHash = new Uint8Array(32);
+    return new xdr.LedgerHeader({
+      ledgerVersion: 20,
+      previousLedgerHash: zeroHash,
+      scpValue: new xdr.StellarValue({
+        txSetHash: zeroHash,
+        closeTime: BigInt(Math.floor(Date.now() / 1000)),
+        upgrades: [],
+        ext: xdr.StellarValueExt.stellarValueBasic(),
+      }),
+      txSetResultHash: zeroHash,
+      bucketListHash: zeroHash,
+      ledgerSeq: this._latestLedgerSequence,
+      totalCoins: 0n,
+      feePool: 0n,
+      inflationSeq: 0,
+      idPool: 0n,
+      baseFee: 100,
+      baseReserve: 5000000,
+      maxTxSetSize: 1000,
+      skipList: [],
+      ext: xdr.LedgerHeaderExt.v0(),
+    });
   }
 
   /**
@@ -389,9 +453,20 @@ export class MockProvider {
       id: 'mock-sim-id',
       latestLedger: this._latestLedgerSequence,
       events: [],
-      transactionData: new (xdr.SorobanTransactionData as unknown as new () => xdr.SorobanTransactionData)(),
+      transactionData: new xdr.SorobanTransactionData({
+        ext: xdr.SorobanTransactionDataExt.v0() as xdr.SorobanTransactionDataExt,
+        resources: new xdr.SorobanResources({
+          footprint: new xdr.LedgerFootprint({
+            readOnly: [],
+            readWrite: [],
+          }),
+          instructions: 0,
+          diskReadBytes: 0,
+          writeBytes: 0,
+        }),
+        resourceFee: 0n,
+      }),
       minResourceFee: '100',
-      cost: { cpuInsns: '100000', memBytes: '10000' },
       result: undefined,
     } as unknown as rpc.Api.SimulateTransactionSuccessResponse;
   }

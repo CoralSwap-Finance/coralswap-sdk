@@ -17,8 +17,8 @@ jest.mock('@stellar/stellar-sdk', () => {
   const actual = jest.requireActual('@stellar/stellar-sdk');
   return {
     ...actual,
-    SorobanRpc: {
-      ...(actual.SorobanRpc ?? {}),
+    rpc: {
+      ...actual.rpc,
       Server: class MockServer {
         public url: string;
         constructor(url: string, _options?: Record<string, unknown>) {

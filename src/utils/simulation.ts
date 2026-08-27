@@ -75,15 +75,19 @@ export function getResourceEstimate(
     return simulationFailedResult(null);
   }
 
-  const cost = sim.cost;
+  const resources = sim.transactionData
+    ? sim.transactionData.build().resources
+    : null;
   return {
     success: true,
-    data: {
-      cpuInstructions: cost?.cpuInsns ? Number(cost.cpuInsns) : 0,
-      memoryBytes: cost?.memBytes ? Number(cost.memBytes) : 0,
-      readBytes: 0,
-      writeBytes: 0,
-    },
+    data: resources
+      ? {
+          cpuInstructions: resources.instructions,
+          memoryBytes: resources.diskReadBytes + resources.writeBytes,
+          readBytes: resources.diskReadBytes,
+          writeBytes: resources.writeBytes,
+        }
+      : null,
   };
 }
 
@@ -109,7 +113,7 @@ export function decodeDiagnosticEvents(
       try {
         return {
           xdr: entry,
-          decoded: xdr.DiagnosticEvent.fromXDR(entry, 'base64'),
+          decoded: xdr.DiagnosticEvent.fromXdr(entry, 'base64'),
         };
       } catch {
         return { xdr: entry, decoded: null };
@@ -118,7 +122,7 @@ export function decodeDiagnosticEvents(
     // Already a decoded DiagnosticEvent — serialise back to base64 for the xdr field
     try {
       return {
-        xdr: entry.toXDR('base64'),
+        xdr: entry.toXdr('base64'),
         decoded: entry,
       };
     } catch {
@@ -161,13 +165,19 @@ export function buildSimulationResult(
   }
 
   const ok = sim as rpc.Api.SimulateTransactionSuccessResponse;
+  const resources = ok.transactionData
+    ? ok.transactionData.build().resources
+    : null;
   return {
     success: true,
     returnValue: ok.result?.retval ?? null,
     auth: ok.result?.auth ?? [],
     minResourceFee: ok.minResourceFee,
-    cost: ok.cost
-      ? { cpuInsns: ok.cost.cpuInsns, memBytes: ok.cost.memBytes }
+    cost: resources
+      ? {
+          cpuInsns: String(resources.instructions),
+          memBytes: String(resources.diskReadBytes + resources.writeBytes),
+        }
       : null,
     transactionData: ok.transactionData ? ok.transactionData.build() : null,
     latestLedger: ok.latestLedger,

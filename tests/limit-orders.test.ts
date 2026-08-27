@@ -1,4 +1,4 @@
-import { SorobanRpc, xdr, nativeToScVal } from '@stellar/stellar-sdk';
+import { rpc as SorobanRpc, xdr, nativeToScVal } from '@stellar/stellar-sdk';
 import {
   LimitOrderModule,
   parseOrderStatus,
@@ -31,7 +31,7 @@ function makeOrderVal(
     fields.execution_price = xdr.ScVal.scvVoid();
   }
   if (filledAt !== undefined) {
-    fields.filled_at = xdr.ScVal.scvU64(new xdr.Uint64(filledAt));
+    fields.filled_at = xdr.ScVal.scvU64(xdr.Uint64(filledAt));
   } else {
     fields.filled_at = xdr.ScVal.scvVoid();
   }
@@ -512,7 +512,7 @@ describe('LimitOrderModule', () => {
         fill_percent: xdr.ScVal.scvU32(fillPercent),
         amount_filled: nativeToScVal(amountFilled, { type: 'i128' }),
         amount_remaining: nativeToScVal(amountRemaining, { type: 'i128' }),
-        created_at: xdr.ScVal.scvU64(new xdr.Uint64(createdAt)),
+        created_at: xdr.ScVal.scvU64(xdr.Uint64(createdAt)),
       };
       if (executionPrice !== undefined) {
         fields.execution_price = xdr.ScVal.scvU32(executionPrice);
@@ -520,7 +520,7 @@ describe('LimitOrderModule', () => {
         fields.execution_price = xdr.ScVal.scvVoid();
       }
       if (filledAt !== undefined) {
-        fields.filled_at = xdr.ScVal.scvU64(new xdr.Uint64(filledAt));
+        fields.filled_at = xdr.ScVal.scvU64(xdr.Uint64(filledAt));
       } else {
         fields.filled_at = xdr.ScVal.scvVoid();
       }
@@ -732,7 +732,7 @@ describe('LimitOrderModule', () => {
         fill_percent: xdr.ScVal.scvU32(fillPercent),
         amount_filled: nativeToScVal(amountFilled, { type: 'i128' }),
         amount_remaining: nativeToScVal(amountRemaining, { type: 'i128' }),
-        created_at: xdr.ScVal.scvU64(new xdr.Uint64(createdAt)),
+        created_at: xdr.ScVal.scvU64(xdr.Uint64(createdAt)),
       };
       if (executionPrice !== undefined) {
         fields.execution_price = xdr.ScVal.scvU32(executionPrice);
@@ -740,7 +740,7 @@ describe('LimitOrderModule', () => {
         fields.execution_price = xdr.ScVal.scvVoid();
       }
       if (filledAt !== undefined) {
-        fields.filled_at = xdr.ScVal.scvU64(new xdr.Uint64(filledAt));
+        fields.filled_at = xdr.ScVal.scvU64(xdr.Uint64(filledAt));
       } else {
         fields.filled_at = xdr.ScVal.scvVoid();
       }
@@ -796,7 +796,7 @@ describe('LimitOrderModule', () => {
         fill_percent: xdr.ScVal.scvU32(fillPercent),
         amount_filled: nativeToScVal(amountFilled, { type: 'i128' }),
         amount_remaining: nativeToScVal(amountRemaining, { type: 'i128' }),
-        created_at: xdr.ScVal.scvU64(new xdr.Uint64(createdAt)),
+        created_at: xdr.ScVal.scvU64(xdr.Uint64(createdAt)),
         execution_price: xdr.ScVal.scvVoid(),
         filled_at: xdr.ScVal.scvVoid(),
       };

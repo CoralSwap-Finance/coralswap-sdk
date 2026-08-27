@@ -7,6 +7,7 @@ import {
   nativeToScVal,
 } from "@stellar/stellar-sdk";
 import { withRetry, RetryOptions } from "@/utils/retry";
+import { decodeI128 } from "@/utils/scval";
 import { Logger } from "@/types/common";
 
 /**
@@ -224,7 +225,7 @@ export class RouterClient {
     );
     const result = await this.simulateRead(op);
     if (!result) return 30;
-    return result.u32() ?? 30;
+    return result.type === "scvU32" ? result.u32 : 30;
   }
 
   /**
@@ -249,10 +250,7 @@ export class RouterClient {
     );
     const result = await this.simulateRead(op);
     if (!result) throw new Error("Failed to get quote");
-    return (
-      BigInt(result.i128().lo().toString()) +
-      (BigInt(result.i128().hi().toString()) << 64n)
-    );
+    return decodeI128(result);
   }
 
   /**

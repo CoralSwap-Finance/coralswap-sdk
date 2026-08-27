@@ -1,5 +1,5 @@
 import { PairClient } from "../src/contracts/pair";
-import { xdr, SorobanRpc } from "@stellar/stellar-sdk";
+import { xdr, rpc as SorobanRpc } from "@stellar/stellar-sdk";
 
 describe("PairClient Parsing", () => {
   const RPC_URL = "https://soroban-testnet.stellar.org";

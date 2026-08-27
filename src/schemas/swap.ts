@@ -3,9 +3,12 @@ import { isValidAddress } from '../utils/addresses';
 import { TradeType } from '../types/common';
 import { ValidationError } from '../errors';
 
-const stellarAddress = z.string().min(1, { message: 'must not be empty' }).refine(
-  (val) => isValidAddress(val),
-  (val) => ( { message: `is not a valid Stellar address: ${val}` }),
+const stellarAddress = z.string().min(1, { message: 'must not be empty' }).superRefine(
+  (val, ctx) => {
+    if (!isValidAddress(val)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: `is not a valid Stellar address: ${val}` });
+    }
+  },
 );
 
 const positiveAmount = z.bigint().refine((val) => val > 0n, {
@@ -40,7 +43,11 @@ export const swapHistoryFilterSchema = z
     toLedger: z.number().int().nonnegative().optional(),
     limit: z.number().int().positive().optional(),
   })
-  .refine((d) => { if (d.fromLedger !== undefined && d.toLedger !== undefined) { return d.fromLedger <= d.toLedger; } return true; }, (d) => ({ message: `fromLedger (${d.fromLedger}) must not be greater than toLedger (${d.toLedger})` }));
+  .superRefine((d, ctx) => {
+    if (d.fromLedger !== undefined && d.toLedger !== undefined && d.fromLedger > d.toLedger) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: `fromLedger (${d.fromLedger}) must not be greater than toLedger (${d.toLedger})` });
+    }
+  });
 
 export const priceGuardConfigSchema = z.object({
   maxDeviationBps: z.number().int().min(0).max(10000, { message: 'maxDeviationBps must be between 0 and 10000' }),

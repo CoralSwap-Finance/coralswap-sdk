@@ -3,7 +3,7 @@ import { SwapModule } from "../src/modules/swap";
 import { Network } from "../src/types/common";
 import { SwapHistoryFilter, SwapHistoryEvent } from "../src/types/swap";
 import { ValidationError } from "../src/errors";
-import { SorobanRpc, xdr } from "@stellar/stellar-sdk";
+import { rpc as SorobanRpc, xdr } from "@stellar/stellar-sdk";
 
 // ---------------------------------------------------------------------------
 // Shared test fixtures
@@ -88,7 +88,7 @@ function makeEventsResponse(
   };
 }
 
-const EXPECTED_SWAP_TOPIC = xdr.ScVal.scvSymbol("swap").toXDR("base64");
+const EXPECTED_SWAP_TOPIC = xdr.ScVal.scvSymbol("swap").toXdr("base64");
 
 function mockGetEvents(
   client: CoralSwapClient,

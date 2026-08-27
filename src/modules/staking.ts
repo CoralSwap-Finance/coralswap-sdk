@@ -57,13 +57,19 @@ const StakeOperationSchema = z.object({
   lpTokenAddress: z
     .string()
     .min(1, "lpTokenAddress must not be empty")
-    .refine(
-      (val) => isValidAddress(val),
-      (val) => ({ message: `lpTokenAddress is not a valid Stellar address: ${val}` }),
+    .superRefine(
+      (val, ctx) => {
+        if (!isValidAddress(val)) {
+          ctx.addIssue({ code: z.ZodIssueCode.custom, message: `lpTokenAddress is not a valid Stellar address: ${val}` });
+        }
+      },
     ),
-  amount: z.bigint().refine(
-    (val) => val > 0n,
-    (val) => ({ message: `amount must be greater than 0, got ${val}` }),
+  amount: z.bigint().superRefine(
+    (val, ctx) => {
+      if (val <= 0n) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: `amount must be greater than 0, got ${val}` });
+      }
+    },
   ),
 });
 
@@ -183,7 +189,7 @@ export class StakingModule {
       return { amount: 0n, stakedAt: 0, cooldownEnd: 0 };
     }
 
-    const fields = result.map();
+    const fields = result.type === "scvMap" ? result.map : undefined;
     return {
       amount: this.extractI128(fields, "amount"),
       stakedAt: this.extractU64(fields, "staked_at"),
@@ -219,7 +225,8 @@ export class StakingModule {
     }
 
     // APY is returned as basis points (u32), convert to decimal
-    return result.u32() / 10000;
+    const apyVal = result.type === "scvU32" ? result.u32 : 0;
+    return apyVal / 10000;
   }
 
   /**
@@ -265,7 +272,7 @@ export class StakingModule {
       };
     }
 
-    const fields = result.map();
+    const fields = result.type === "scvMap" ? result.map : undefined;
     return {
       pendingRewards: this.extractI128(fields, "pending_rewards"),
       claimedRewards: this.extractI128(fields, "claimed_rewards"),
@@ -534,7 +541,7 @@ export class StakingModule {
       };
     }
 
-    const fields = result.map();
+    const fields = result.type === "scvMap" ? result.map : undefined;
     const cooldownEnd = this.extractU64(fields, "cooldown_end");
     const nowSec = Math.floor(Date.now() / 1000);
     const isInCooldown = cooldownEnd > nowSec;
@@ -640,13 +647,16 @@ export class StakingModule {
     key: string,
   ): bigint {
     if (!fields) return 0n;
-    const entry = fields.find((f) => f.key().sym().toString() === key);
-    if (!entry) return 0n;
-    const val = entry.val();
-    return (
-      BigInt(val.i128().lo().toString()) +
-      (BigInt(val.i128().hi().toString()) << 64n)
+    const entry = fields.find(
+      (f) => f.key.type === "scvSymbol" && f.key.sym.toString() === key,
     );
+    if (!entry) return 0n;
+    const val = entry.val;
+    if (val.type !== "scvI128") return 0n;
+    const i128 = val.i128 as unknown;
+    if (typeof i128 === "bigint") return i128;
+    const parts = i128 as { hi: bigint; lo: bigint };
+    return (parts.hi << 64n) + parts.lo;
   }
 
   /**
@@ -657,9 +667,13 @@ export class StakingModule {
     key: string,
   ): number {
     if (!fields) return 0;
-    const entry = fields.find((f) => f.key().sym().toString() === key);
+    const entry = fields.find(
+      (f) => f.key.type === "scvSymbol" && f.key.sym.toString() === key,
+    );
     if (!entry) return 0;
-    return Number(entry.val().u64());
+    const val = entry.val;
+    if (val.type !== "scvU64") return 0;
+    return Number(val.u64);
   }
 
   /**
@@ -670,9 +684,13 @@ export class StakingModule {
     key: string,
   ): number {
     if (!fields) return 0;
-    const entry = fields.find((f) => f.key().sym().toString() === key);
+    const entry = fields.find(
+      (f) => f.key.type === "scvSymbol" && f.key.sym.toString() === key,
+    );
     if (!entry) return 0;
-    return entry.val().u32();
+    const val = entry.val;
+    if (val.type !== "scvU32") return 0;
+    return val.u32;
   }
 
   /**
@@ -683,16 +701,17 @@ export class StakingModule {
     key: string,
   ): string {
     if (!fields) return "";
-    const entry = fields.find((f) => f.key().sym().toString() === key);
+    const entry = fields.find(
+      (f) => f.key.type === "scvSymbol" && f.key.sym.toString() === key,
+    );
     if (!entry) return "";
     try {
-      return Address.fromScVal(entry.val()).toString();
+      return Address.fromScVal(entry.val).toString();
     } catch {
-      // Fallback for environments where the ScVal isn't a real XDR object
-      const val = entry.val() as unknown as {
-        address?: () => { toString(): string };
+      const val = entry.val as unknown as {
+        address?: { toString(): string };
       };
-      return val.address?.().toString() ?? "";
+      return val.address?.toString() ?? "";
     }
   }
 }

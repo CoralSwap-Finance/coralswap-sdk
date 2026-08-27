@@ -2,7 +2,7 @@ import { CoralSwapClient } from "../src/client";
 import { LeaderboardModule } from "../src/modules/leaderboard";
 import { Network } from "../src/types/common";
 import { ValidationError } from "../src/errors";
-import { SorobanRpc, xdr } from "@stellar/stellar-sdk";
+import { rpc as SorobanRpc, xdr } from "@stellar/stellar-sdk";
 import { SwapModule } from "../src/modules/swap";
 
 // ---------------------------------------------------------------------------
@@ -501,11 +501,11 @@ describe("LeaderboardModule getEvents encoding", () => {
   /** Decode a topic filter segment the way a real RPC node does. */
   function decodeTopicFilter(segment: string): string {
     if (segment === "*") return segment;
-    const decoded = xdr.ScVal.fromXDR(segment, "base64");
-    if (decoded.switch().name !== "scvSymbol") {
-      throw new Error(`topic filter must be an scvSymbol, got ${decoded.switch().name}`);
+    const decoded = xdr.ScVal.fromXdr(segment, "base64");
+    if (decoded.type !== "scvSymbol") {
+      throw new Error(`topic filter must be an scvSymbol, got ${decoded.type}`);
     }
-    return decoded.sym().toString();
+    return decoded.sym.toString();
   }
 
   beforeEach(() => {
@@ -525,7 +525,7 @@ describe("LeaderboardModule getEvents encoding", () => {
 
     const request = spy.mock.calls[0][0];
     const [segment] = request.filters[0].topics![0];
-    expect(segment).toBe(xdr.ScVal.scvSymbol("swap").toXDR("base64"));
+    expect(segment).toBe(xdr.ScVal.scvSymbol("swap").toXdr("base64"));
     expect(decodeTopicFilter(segment)).toBe("swap");
   });
 

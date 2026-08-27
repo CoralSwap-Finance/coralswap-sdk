@@ -50,8 +50,8 @@ describe("Network Switching", () => {
       NETWORK_CONFIGS[Network.MAINNET].networkPassphrase,
     );
     expect(client.server).not.toBe(initialServer);
-    expect((client.server as any).rpcUrl).toBe(
-      NETWORK_CONFIGS[Network.MAINNET].rpcUrl,
+    expect(String((client.server as any).serverURL)).toBe(
+      NETWORK_CONFIGS[Network.MAINNET].rpcUrl + "/",
     );
   });
 
@@ -110,7 +110,7 @@ describe("Network Switching", () => {
 
     expect(client.network).toBe(Network.MAINNET);
     expect(client.networkConfig.rpcUrl).toBe(customRpc);
-    expect((client.server as any).rpcUrl).toBe(customRpc);
+    expect(String((client.server as any).serverURL)).toBe(customRpc + "/");
   });
 });
 

@@ -776,7 +776,7 @@ export class SwapModule {
         {
           type: "contract",
           contractIds: filter.pairAddress ? [filter.pairAddress] : [],
-          topics: [[xdr.ScVal.scvSymbol("swap").toXDR("base64")]],
+          topics: [[xdr.ScVal.scvSymbol("swap").toXdr("base64")]],
         },
       ],
       limit: filter.limit ?? 200,
