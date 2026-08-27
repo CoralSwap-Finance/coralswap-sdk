@@ -19,7 +19,7 @@ import { validateAddress, validatePositiveAmount } from "@/utils/validation";
 import { estimateGas } from "@/utils/gas";
 import { DEFAULTS } from "@/config";
 import { decodeEvents } from "@/utils/events";
-import { SorobanRpc, scValToNative, xdr } from "@stellar/stellar-sdk";
+import { rpc, scValToNative, xdr } from "@stellar/stellar-sdk";
 import { getTransactionStatus, shouldRetrySubmission } from "@/utils/idempotent-resubmission";
 
 /**
@@ -302,7 +302,7 @@ export class FlashLoanModule {
           try {
             // Fall back to decodeEvents
             const events = decodeEvents(
-              txResult as SorobanRpc.Api.GetSuccessfulTransactionResponse,
+              txResult as rpc.Api.GetSuccessfulTransactionResponse,
               {
                 contractId: request.pairAddress,
               },
@@ -427,7 +427,7 @@ export class FlashLoanModule {
   }
 
   private async parseFlashLoanEvents(
-    txResult: SorobanRpc.Api.GetSuccessfulTransactionResponse,
+    txResult: rpc.Api.GetSuccessfulTransactionResponse,
     request: FlashLoanRequest,
     _feeAmount: bigint,
   ): Promise<FlashLoanExecutedEvent | undefined> {

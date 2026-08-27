@@ -1,4 +1,4 @@
-import { SorobanRpc } from '@stellar/stellar-sdk';
+import { rpc } from '@stellar/stellar-sdk';
 
 /**
  * Real, on-chain outcome of a previously-submitted Soroban transaction.
@@ -10,7 +10,7 @@ import { SorobanRpc } from '@stellar/stellar-sdk';
  * the operation.
  */
 export type TransactionStatus =
-  | { status: 'SUCCESS'; ledger: number; txHash: string; result?: SorobanRpc.Api.GetSuccessfulTransactionResponse }
+  | { status: 'SUCCESS'; ledger: number; txHash: string; result?: rpc.Api.GetSuccessfulTransactionResponse }
   | { status: 'FAILED'; ledger?: number }
   | { status: 'NOT_FOUND' }
   | { status: 'ERROR'; message: string };
@@ -22,7 +22,7 @@ export type TransactionStatus =
  * @param txHash - Hash of the transaction to check.
  */
 export async function getTransactionStatus(
-  server: SorobanRpc.Server,
+  server: rpc.Server,
   txHash: string,
 ): Promise<TransactionStatus> {
   try {
@@ -33,7 +33,7 @@ export async function getTransactionStatus(
           status: 'SUCCESS',
           ledger: result.ledger ?? 0,
           txHash,
-          result: result as SorobanRpc.Api.GetSuccessfulTransactionResponse,
+          result: result as rpc.Api.GetSuccessfulTransactionResponse,
         };
       case 'FAILED':
         return {

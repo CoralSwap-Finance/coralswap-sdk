@@ -1,6 +1,6 @@
 import {
   Contract,
-  SorobanRpc,
+  rpc,
   TransactionBuilder,
   xdr,
   Address,
@@ -79,7 +79,7 @@ function scValToU64(val: xdr.ScVal | undefined): number {
  */
 export class PairClient {
   private contract: Contract;
-  private server: SorobanRpc.Server;
+  private server: rpc.Server;
   private networkPassphrase: string;
   private retryOptions: RetryOptions;
   private logger?: Logger;
@@ -97,7 +97,7 @@ export class PairClient {
    */
   constructor(
     contractAddress: string,
-    server: SorobanRpc.Server,
+    server: rpc.Server,
     networkPassphrase: string,
     retryOptions: RetryOptions,
     logger?: Logger,
@@ -428,7 +428,7 @@ export class PairClient {
       this.logger,
       "PairClient_simulateTransaction",
     );
-    if (SorobanRpc.Api.isSimulationSuccess(sim) && sim.result) {
+    if (rpc.Api.isSimulationSuccess(sim) && sim.result) {
       return sim.result.retval;
     }
     return null;

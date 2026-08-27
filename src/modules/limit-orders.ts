@@ -70,7 +70,7 @@
 import { CoralSwapSDKError } from "@/errors";
 import {
   Contract,
-  SorobanRpc,
+  rpc,
   TransactionBuilder,
   xdr,
   nativeToScVal,
@@ -406,7 +406,7 @@ type SubmissionOutcome = 'landed' | 'not-landed' | 'failed-on-chain';
 export class LimitOrderModule {
   private client: CoralSwapClient;
   private contract: Contract;
-  private server: SorobanRpc.Server;
+  private server: rpc.Server;
   private networkPassphrase: string;
   private retryOptions: RetryOptions;
 
@@ -497,7 +497,7 @@ export class LimitOrderModule {
       'LimitOrderModule_simulate',
     );
 
-    if (!SorobanRpc.Api.isSimulationSuccess(sim) || !sim.result) {
+    if (!rpc.Api.isSimulationSuccess(sim) || !sim.result) {
       throw new CoralSwapSDKError("SIMULATION_ERROR", `Failed to read order status: simulation did not succeed`);
     }
 
@@ -681,7 +681,7 @@ export class LimitOrderModule {
       'LimitOrderModule_cancel_simulate',
     );
 
-    if (!SorobanRpc.Api.isSimulationSuccess(sim) || !sim.result) {
+    if (!rpc.Api.isSimulationSuccess(sim) || !sim.result) {
       throw new CoralSwapSDKError(
         "SIMULATION_ERROR",
         `Failed to cancel order ${orderId}: simulation did not succeed`,
@@ -804,7 +804,7 @@ export class LimitOrderModule {
       'LimitOrderModule_place_simulate',
     );
 
-    if (!SorobanRpc.Api.isSimulationSuccess(sim) || !sim.result) {
+    if (!rpc.Api.isSimulationSuccess(sim) || !sim.result) {
       throw new CoralSwapSDKError("SIMULATION_ERROR", 'Failed to place limit order: simulation did not succeed');
     }
 
@@ -1042,7 +1042,7 @@ export class LimitOrderModule {
       'LimitOrderModule_getOrder_simulate',
     );
 
-    if (!SorobanRpc.Api.isSimulationSuccess(sim) || !sim.result) {
+    if (!rpc.Api.isSimulationSuccess(sim) || !sim.result) {
       throw new CoralSwapSDKError("SIMULATION_ERROR", `Failed to read order ${orderId}: simulation did not succeed`);
     }
 
@@ -1099,7 +1099,7 @@ export class LimitOrderModule {
       'LimitOrderModule_openOrders_simulate',
     );
 
-    if (!SorobanRpc.Api.isSimulationSuccess(sim) || !sim.result) {
+    if (!rpc.Api.isSimulationSuccess(sim) || !sim.result) {
       throw new CoralSwapSDKError("SIMULATION_ERROR", `Failed to fetch orders for ${address}: simulation did not succeed`);
     }
 

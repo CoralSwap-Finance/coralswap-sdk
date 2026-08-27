@@ -1,7 +1,7 @@
 /**
- * MockProvider — an offline drop-in replacement for SorobanRpc.Server.
+ * MockProvider — an offline drop-in replacement for rpc.Server.
  *
- * Implements every method on SorobanRpc.Server so the CoralSwap SDK client
+ * Implements every method on rpc.Server so the CoralSwap SDK client
  * can be instantiated and exercised in tests without a live network.
  *
  * Usage
@@ -33,7 +33,7 @@ import {
   FeeBumpTransaction,
   Transaction,
   xdr,
-  SorobanRpc,
+  rpc,
 } from '@stellar/stellar-sdk';
 
 // ---------------------------------------------------------------------------
@@ -103,7 +103,7 @@ const DEFAULT_LEDGER_SEQUENCE = 1000;
 // ---------------------------------------------------------------------------
 
 /**
- * Offline implementation of {@link SorobanRpc.Server} for use in tests.
+ * Offline implementation of {@link rpc.Server} for use in tests.
  *
  * Every method on the real Server exists here. Core SDK methods are
  * fully implemented with configurable staged state; methods not called
@@ -121,7 +121,7 @@ export class MockProvider {
    * Ledger entries registered via setLedgerEntry(), keyed by the base64-XDR
    * representation of the LedgerKey.
    */
-  private _ledgerEntries = new Map<string, SorobanRpc.Api.LedgerEntryResult>();
+  private _ledgerEntries = new Map<string, rpc.Api.LedgerEntryResult>();
 
   /**
    * FIFO queue of transactions staged via queueTransaction().
@@ -141,11 +141,11 @@ export class MockProvider {
   private _latestLedgerSequence = DEFAULT_LEDGER_SEQUENCE;
 
   // -------------------------------------------------------------------------
-  // Expose serverURL so the class structurally satisfies SorobanRpc.Server
+  // Expose serverURL so the class structurally satisfies rpc.Server
   // -------------------------------------------------------------------------
 
   /**
-   * Placeholder serverURL — not used in mock but required by the SorobanRpc.Server
+   * Placeholder serverURL — not used in mock but required by the rpc.Server
    * structural interface. Typed as `unknown` to avoid a dependency on `@types/urijs`.
    */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -171,7 +171,7 @@ export class MockProvider {
    * @param key   - The xdr.LedgerKey identifying the entry.
    * @param value - The full LedgerEntryResult to return.
    */
-  setLedgerEntry(key: xdr.LedgerKey, value: SorobanRpc.Api.LedgerEntryResult): void {
+  setLedgerEntry(key: xdr.LedgerKey, value: rpc.Api.LedgerEntryResult): void {
     this._ledgerEntries.set(ledgerKeyId(key), value);
   }
 
@@ -211,7 +211,7 @@ export class MockProvider {
   }
 
   // =========================================================================
-  // SorobanRpc.Server — core methods
+  // rpc.Server — core methods
   // =========================================================================
 
   /**
@@ -234,7 +234,7 @@ export class MockProvider {
    * Return health status.  Always reports healthy so tests exercising
    * CoralSwapClient.isHealthy() work out of the box.
    */
-  async getHealth(): Promise<SorobanRpc.Api.GetHealthResponse> {
+  async getHealth(): Promise<rpc.Api.GetHealthResponse> {
     return { status: 'healthy' };
   }
 
@@ -244,8 +244,8 @@ export class MockProvider {
    * Returns an empty entries array when no entries were staged (not an
    * error), matching real RPC behaviour.
    */
-  async getLedgerEntries(...keys: xdr.LedgerKey[]): Promise<SorobanRpc.Api.GetLedgerEntriesResponse> {
-    const entries: SorobanRpc.Api.LedgerEntryResult[] = [];
+  async getLedgerEntries(...keys: xdr.LedgerKey[]): Promise<rpc.Api.GetLedgerEntriesResponse> {
+    const entries: rpc.Api.LedgerEntryResult[] = [];
     for (const key of keys) {
       const entry = this._ledgerEntries.get(ledgerKeyId(key));
       if (entry) {
@@ -269,7 +269,7 @@ export class MockProvider {
    */
   async sendTransaction(
     _transaction: Transaction | FeeBumpTransaction,
-  ): Promise<SorobanRpc.Api.SendTransactionResponse> {
+  ): Promise<rpc.Api.SendTransactionResponse> {
     if (this._txQueue.length === 0) {
       throw new Error(
         'MockProvider: sendTransaction() called but the transaction queue is empty. ' +
@@ -290,7 +290,7 @@ export class MockProvider {
     if (queued.status === 'FAILED' && (queued as MockSendFailure).errorResult) {
       return {
         ...base,
-        status: 'ERROR' as SorobanRpc.Api.SendTransactionStatus,
+        status: 'ERROR' as rpc.Api.SendTransactionStatus,
         errorResult: undefined,
         diagnosticEvents: undefined,
       };
@@ -300,7 +300,7 @@ export class MockProvider {
     // perspective; the final state is surfaced via getTransaction().
     return {
       ...base,
-      status: 'PENDING' as SorobanRpc.Api.SendTransactionStatus,
+      status: 'PENDING' as rpc.Api.SendTransactionStatus,
     };
   }
 
@@ -311,7 +311,7 @@ export class MockProvider {
    * appropriate discriminated union shape so the SDK polling loop
    * works correctly.
    */
-  async getTransaction(hash: string): Promise<SorobanRpc.Api.GetTransactionResponse> {
+  async getTransaction(hash: string): Promise<rpc.Api.GetTransactionResponse> {
     const staged = this._txResults.get(hash);
 
     const baseAny = {
@@ -324,8 +324,8 @@ export class MockProvider {
     if (!staged || staged.status === 'NOT_FOUND') {
       return {
         ...baseAny,
-        status: SorobanRpc.Api.GetTransactionStatus.NOT_FOUND,
-      } as SorobanRpc.Api.GetMissingTransactionResponse;
+        status: rpc.Api.GetTransactionStatus.NOT_FOUND,
+      } as rpc.Api.GetMissingTransactionResponse;
     }
 
     const ledger = (staged as MockSendSuccess | MockSendFailure).ledger ?? this._latestLedgerSequence;
@@ -345,16 +345,16 @@ export class MockProvider {
     if (staged.status === 'SUCCESS') {
       return {
         ...baseFinished,
-        status: SorobanRpc.Api.GetTransactionStatus.SUCCESS,
+        status: rpc.Api.GetTransactionStatus.SUCCESS,
         returnValue: undefined,
-      } as SorobanRpc.Api.GetSuccessfulTransactionResponse;
+      } as rpc.Api.GetSuccessfulTransactionResponse;
     }
 
     // FAILED
     return {
       ...baseFinished,
-      status: SorobanRpc.Api.GetTransactionStatus.FAILED,
-    } as SorobanRpc.Api.GetFailedTransactionResponse;
+      status: rpc.Api.GetTransactionStatus.FAILED,
+    } as rpc.Api.GetFailedTransactionResponse;
   }
 
   /**
@@ -362,7 +362,7 @@ export class MockProvider {
    *
    * Defaults to sequence 1000; override with mock.setLatestLedger(n).
    */
-  async getLatestLedger(): Promise<SorobanRpc.Api.GetLatestLedgerResponse> {
+  async getLatestLedger(): Promise<rpc.Api.GetLatestLedgerResponse> {
     return {
       id: `mock-ledger-${this._latestLedgerSequence}`,
       sequence: this._latestLedgerSequence,
@@ -383,8 +383,8 @@ export class MockProvider {
    */
   async simulateTransaction(
     _tx: Transaction | FeeBumpTransaction,
-    _addlResources?: SorobanRpc.Server.ResourceLeeway,
-  ): Promise<SorobanRpc.Api.SimulateTransactionResponse> {
+    _addlResources?: rpc.Server.ResourceLeeway,
+  ): Promise<rpc.Api.SimulateTransactionResponse> {
     return {
       id: 'mock-sim-id',
       latestLedger: this._latestLedgerSequence,
@@ -393,11 +393,11 @@ export class MockProvider {
       minResourceFee: '100',
       cost: { cpuInsns: '100000', memBytes: '10000' },
       result: undefined,
-    } as unknown as SorobanRpc.Api.SimulateTransactionSuccessResponse;
+    } as unknown as rpc.Api.SimulateTransactionSuccessResponse;
   }
 
   // =========================================================================
-  // SorobanRpc.Server — stub methods (loud failures)
+  // rpc.Server — stub methods (loud failures)
   // =========================================================================
 
   /**
@@ -415,8 +415,8 @@ export class MockProvider {
   async getContractData(
     _contract: string | Address | Contract,
     _key: xdr.ScVal,
-    _durability?: SorobanRpc.Durability,
-  ): Promise<SorobanRpc.Api.LedgerEntryResult> {
+    _durability?: rpc.Durability,
+  ): Promise<rpc.Api.LedgerEntryResult> {
     return MockProvider._notImplemented('getContractData');
   }
 
@@ -433,42 +433,42 @@ export class MockProvider {
 
   async _getLedgerEntries(
     ..._keys: xdr.LedgerKey[]
-  ): Promise<SorobanRpc.Api.RawGetLedgerEntriesResponse> {
+  ): Promise<rpc.Api.RawGetLedgerEntriesResponse> {
     return MockProvider._notImplemented('_getLedgerEntries');
   }
 
   async _getTransaction(
     _hash: string,
-  ): Promise<SorobanRpc.Api.RawGetTransactionResponse> {
+  ): Promise<rpc.Api.RawGetTransactionResponse> {
     return MockProvider._notImplemented('_getTransaction');
   }
 
   async getTransactions(
-    _request: SorobanRpc.Api.GetTransactionsRequest,
-  ): Promise<SorobanRpc.Api.GetTransactionsResponse> {
+    _request: rpc.Api.GetTransactionsRequest,
+  ): Promise<rpc.Api.GetTransactionsResponse> {
     return MockProvider._notImplemented('getTransactions');
   }
 
   async getEvents(
-    _request: SorobanRpc.Server.GetEventsRequest,
-  ): Promise<SorobanRpc.Api.GetEventsResponse> {
+    _request: rpc.Server.GetEventsRequest,
+  ): Promise<rpc.Api.GetEventsResponse> {
     return MockProvider._notImplemented('getEvents');
   }
 
   async _getEvents(
-    _request: SorobanRpc.Server.GetEventsRequest,
-  ): Promise<SorobanRpc.Api.RawGetEventsResponse> {
+    _request: rpc.Server.GetEventsRequest,
+  ): Promise<rpc.Api.RawGetEventsResponse> {
     return MockProvider._notImplemented('_getEvents');
   }
 
-  async getNetwork(): Promise<SorobanRpc.Api.GetNetworkResponse> {
+  async getNetwork(): Promise<rpc.Api.GetNetworkResponse> {
     return MockProvider._notImplemented('getNetwork');
   }
 
   async _simulateTransaction(
     _transaction: Transaction | FeeBumpTransaction,
-    _addlResources?: SorobanRpc.Server.ResourceLeeway,
-  ): Promise<SorobanRpc.Api.RawSimulateTransactionResponse> {
+    _addlResources?: rpc.Server.ResourceLeeway,
+  ): Promise<rpc.Api.RawSimulateTransactionResponse> {
     return MockProvider._notImplemented('_simulateTransaction');
   }
 
@@ -480,7 +480,7 @@ export class MockProvider {
 
   async _sendTransaction(
     _transaction: Transaction | FeeBumpTransaction,
-  ): Promise<SorobanRpc.Api.RawSendTransactionResponse> {
+  ): Promise<rpc.Api.RawSendTransactionResponse> {
     return MockProvider._notImplemented('_sendTransaction');
   }
 
@@ -491,11 +491,11 @@ export class MockProvider {
     return MockProvider._notImplemented('requestAirdrop');
   }
 
-  async getFeeStats(): Promise<SorobanRpc.Api.GetFeeStatsResponse> {
+  async getFeeStats(): Promise<rpc.Api.GetFeeStatsResponse> {
     return MockProvider._notImplemented('getFeeStats');
   }
 
-  async getVersionInfo(): Promise<SorobanRpc.Api.GetVersionInfoResponse> {
+  async getVersionInfo(): Promise<rpc.Api.GetVersionInfoResponse> {
     return MockProvider._notImplemented('getVersionInfo');
   }
 }

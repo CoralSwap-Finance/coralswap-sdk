@@ -1,6 +1,6 @@
 import {
   Contract,
-  SorobanRpc,
+  rpc,
   TransactionBuilder,
   xdr,
   Address,
@@ -17,7 +17,7 @@ import { Logger } from "@/types/common";
  */
 export class LPTokenClient {
   private contract: Contract;
-  private server: SorobanRpc.Server;
+  private server: rpc.Server;
   private networkPassphrase: string;
   private retryOptions: RetryOptions;
   private logger?: Logger;
@@ -34,7 +34,7 @@ export class LPTokenClient {
    */
   constructor(
     contractAddress: string,
-    server: SorobanRpc.Server,
+    server: rpc.Server,
     networkPassphrase: string,
     retryOptions: RetryOptions,
     logger?: Logger,
@@ -204,7 +204,7 @@ export class LPTokenClient {
       this.logger,
       "LPTokenClient_simulateTransaction",
     );
-    if (SorobanRpc.Api.isSimulationSuccess(sim) && sim.result) {
+    if (rpc.Api.isSimulationSuccess(sim) && sim.result) {
       return sim.result.retval;
     }
     return null;

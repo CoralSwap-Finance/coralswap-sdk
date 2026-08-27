@@ -1,4 +1,4 @@
-import { SorobanRpc } from '@stellar/stellar-sdk';
+import { rpc } from '@stellar/stellar-sdk';
 import { Result, Logger } from '../types/common';
 
 /**
@@ -31,10 +31,10 @@ export interface PollingOptions {
  * Robust utility for polling Soroban transaction status with customizable strategies.
  */
 export class TransactionPoller {
-    private server: SorobanRpc.Server;
+    private server: rpc.Server;
     private logger?: Logger;
 
-    constructor(server: SorobanRpc.Server, logger?: Logger) {
+    constructor(server: rpc.Server, logger?: Logger) {
         this.server = server;
         this.logger = logger;
     }

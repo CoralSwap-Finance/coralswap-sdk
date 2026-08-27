@@ -11,7 +11,7 @@
  * protocol version the node is running -- all in one request.
  */
 
-import { SorobanRpc } from '@stellar/stellar-sdk';
+import { rpc } from '@stellar/stellar-sdk';
 import { TESTNET_NETWORK } from '@/config';
 import { RpcError } from '@/errors';
 
@@ -57,7 +57,7 @@ export async function checkRPCHealth(
   const start = Date.now();
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    const server = new SorobanRpc.Server(rpcUrl, { allowHttp: rpcUrl.startsWith('http://') });
+    const server = new rpc.Server(rpcUrl, { allowHttp: rpcUrl.startsWith('http://') });
 
     const ledger = await Promise.race([
       server.getLatestLedger(),

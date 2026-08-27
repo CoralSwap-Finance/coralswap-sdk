@@ -1,4 +1,4 @@
-import { xdr, Address, SorobanRpc } from "@stellar/stellar-sdk";
+import { xdr, Address, rpc } from "@stellar/stellar-sdk";
 import {
   CoralSwapEvent,
   ContractEvent,
@@ -13,7 +13,7 @@ import {
 import { ValidationError } from "@/errors";
 
 /** Response type that may include hash/id for transaction identifier. */
-type TxWithOptionalHash = SorobanRpc.Api.GetSuccessfulTransactionResponse & {
+type TxWithOptionalHash = rpc.Api.GetSuccessfulTransactionResponse & {
   hash?: string;
   id?: string;
 };
@@ -111,7 +111,7 @@ function extractContractId(evt: xdr.DiagnosticEvent): string {
   try {
     const ce = evt.event();
     if (ce.contractId()) {
-      return Address.contract(ce.contractId()!).toString();
+      return Address.contract(Buffer.from(ce.contractId()!)).toString();
     }
   } catch {
     // contractId may be absent for system events
@@ -233,7 +233,7 @@ export class EventParser {
    * @returns Array of typed CoralSwapEvent.
    */
   fromTransaction(
-    response: SorobanRpc.Api.GetSuccessfulTransactionResponse,
+    response: rpc.Api.GetSuccessfulTransactionResponse,
   ): CoralSwapEvent[] {
     const meta = response.resultMetaXdr;
     const v3 = meta.v3();
@@ -483,7 +483,7 @@ export interface DecodeEventsOptions {
  * ```
  */
 export function decodeEvents(
-  response: SorobanRpc.Api.GetSuccessfulTransactionResponse,
+  response: rpc.Api.GetSuccessfulTransactionResponse,
   options: DecodeEventsOptions = {},
 ): CoralSwapEvent[] {
   const contractIds = options.contractId ? [options.contractId] : [];

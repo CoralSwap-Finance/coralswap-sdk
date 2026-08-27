@@ -1,4 +1,4 @@
-import { SorobanRpc } from "@stellar/stellar-sdk";
+import { rpc } from "@stellar/stellar-sdk";
 import { CoralSwapClient } from "@/client";
 import { FeeEstimate } from "@/types/fee";
 import { FeeState } from "@/types/pool";
@@ -189,7 +189,7 @@ export class FeeModule {
     const toLedger = options.toLedger ?? currentLedger;
 
     // Query swap events directly from the RPC for fee revenue
-    const request: SorobanRpc.Server.GetEventsRequest = {
+    const request: rpc.Server.GetEventsRequest = {
       startLedger: fromLedger,
       filters: [
         {

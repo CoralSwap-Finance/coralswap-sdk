@@ -1,4 +1,4 @@
-import { xdr, SorobanRpc } from "@stellar/stellar-sdk";
+import { xdr, rpc } from "@stellar/stellar-sdk";
 
 /**
  * Lowest ledger sequence that can legally be passed as `startLedger`.
@@ -85,12 +85,12 @@ export interface EventCursorOptions {
  * ```
  */
 export class EventCursor {
-  private server: SorobanRpc.Server;
+  private server: rpc.Server;
   private cursor?: number;
   private readonly defaultWindow: number;
   private readonly defaultLimit: number;
 
-  constructor(server: SorobanRpc.Server, opts: EventCursorOptions = {}) {
+  constructor(server: rpc.Server, opts: EventCursorOptions = {}) {
     this.server = server;
     this.defaultWindow = opts.defaultWindow ?? 1000;
     this.defaultLimit = opts.defaultLimit ?? 200;
@@ -130,7 +130,7 @@ export class EventCursor {
     fromLedger?: number;
     toLedger?: number;
     limit?: number;
-  } = {}): Promise<SorobanRpc.Api.EventResponse[]> {
+  } = {}): Promise<rpc.Api.EventResponse[]> {
     await this.anchorIfNeeded();
 
     const limit = params.limit ?? this.defaultLimit;
@@ -140,10 +140,10 @@ export class EventCursor {
     const contractIds = params.contractIds ?? [];
     const topics = this.encodeTopics(params.topics);
 
-    const allEvents: SorobanRpc.Api.EventResponse[] = [];
+    const allEvents: rpc.Api.EventResponse[] = [];
 
     while (true) {
-      const request: SorobanRpc.Server.GetEventsRequest = {
+      const request: rpc.Server.GetEventsRequest = {
         startLedger,
         filters: [
           {
@@ -153,7 +153,7 @@ export class EventCursor {
           },
         ],
         limit,
-      } as unknown as SorobanRpc.Server.GetEventsRequest;
+      } as unknown as rpc.Server.GetEventsRequest;
 
       const res = await this.server.getEvents(request as any);
       const events = Array.isArray(res?.events) ? res.events : [];
@@ -163,7 +163,7 @@ export class EventCursor {
         break;
       }
 
-      allEvents.push(...events as SorobanRpc.Api.EventResponse[]);
+      allEvents.push(...events as rpc.Api.EventResponse[]);
 
       // Determine last seen ledger to advance the cursor and next startLedger
       const lastLedger = (events[events.length - 1] as any).ledger ??

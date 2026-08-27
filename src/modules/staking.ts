@@ -1,6 +1,6 @@
 import {
   Contract,
-  SorobanRpc,
+  rpc,
   TransactionBuilder,
   xdr,
   Address,
@@ -626,7 +626,7 @@ export class StakingModule {
       .build();
 
     const sim = await this.client.server.simulateTransaction(tx);
-    if (SorobanRpc.Api.isSimulationSuccess(sim) && sim.result) {
+    if (rpc.Api.isSimulationSuccess(sim) && sim.result) {
       return sim.result.retval;
     }
     return null;

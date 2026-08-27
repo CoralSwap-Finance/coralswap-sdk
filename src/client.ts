@@ -1,5 +1,5 @@
 import {
-  SorobanRpc,
+  rpc,
   TransactionBuilder,
   Transaction,
   xdr,
@@ -40,7 +40,7 @@ export class CoralSwapClient {
   network: Network;
   config: CoralSwapConfig;
   networkConfig: NetworkConfig;
-  private _server: SorobanRpc.Server;
+  private _server: rpc.Server;
   private _rpcUrls: string[] = [];
   private _activeRpcUrl: string;
   private _connectionPool: ConnectionPool;
@@ -64,7 +64,7 @@ export class CoralSwapClient {
    * @private
    */
   private async executeWithFallback<T>(
-    fn: (server: SorobanRpc.Server) => Promise<T>,
+    fn: (server: rpc.Server) => Promise<T>,
     label: string,
   ): Promise<T> {
     const options: RetryOptions = this.getRetryOptions();
@@ -119,7 +119,7 @@ export class CoralSwapClient {
   /**
    * Get the current Soroban RPC server instance.
    */
-  get server(): SorobanRpc.Server {
+  get server(): rpc.Server {
     return this._server;
   }
 
@@ -128,21 +128,21 @@ export class CoralSwapClient {
    *
    * Primarily used in tests to inject a mock server without a live network.
    */
-  set server(s: SorobanRpc.Server) {
+  set server(s: rpc.Server) {
     this._server = s;
     this._poller = null;
   }
 
   /**
-   * Create a new SorobanRpc.Server instance with custom options.
+   * Create a new rpc.Server instance with custom options.
    * @private
    */
-  private createRpcServer(url: string): SorobanRpc.Server {
+  private createRpcServer(url: string): rpc.Server {
     const options: Record<string, unknown> = {
       headers: this.config.rpcHeaders,
       ...this.config.fetchOptions,
     };
-    return new SorobanRpc.Server(url, options);
+    return new rpc.Server(url, options);
   }
 
   /**
@@ -448,9 +448,9 @@ export class CoralSwapClient {
           (server) => server.simulateTransaction(tx),
           "simulateTransaction",
       );
-      if (!SorobanRpc.Api.isSimulationSuccess(sim)) {
+      if (!rpc.Api.isSimulationSuccess(sim)) {
         const simSummary = {
-          error: SorobanRpc.Api.isSimulationError(sim) ? sim.error : 'restore required',
+          error: rpc.Api.isSimulationError(sim) ? sim.error : 'restore required',
           latestLedger: sim.latestLedger,
         };
         this.logger?.error("simulateTransaction: simulation failed", simSummary);
@@ -468,7 +468,7 @@ export class CoralSwapClient {
       }
       this.logger?.debug("simulateTransaction: success");
 
-      const preparedTx = SorobanRpc.assembleTransaction(tx, sim).build();
+      const preparedTx = rpc.assembleTransaction(tx, sim).build();
 
       if (!this.signer) {
         return {
@@ -554,7 +554,7 @@ export class CoralSwapClient {
   /**
    * Simulate a transaction without submitting (dry-run).
    *
-   * **Legacy form** — returns the raw `SorobanRpc.Api.SimulateTransactionResponse`
+   * **Legacy form** — returns the raw `rpc.Api.SimulateTransactionResponse`
    * for backward compatibility.
    *
    * @param operations - Array of operations to simulate
@@ -562,12 +562,12 @@ export class CoralSwapClient {
    * @returns Raw simulation response from the RPC
    * @example
    * const sim = await client.simulateTransaction([op]);
-   * if (SorobanRpc.Api.isSimulationSuccess(sim)) { ... }
+   * if (rpc.Api.isSimulationSuccess(sim)) { ... }
    */
   async simulateTransaction(
       operations: xdr.Operation[],
       source?: string,
-  ): Promise<SorobanRpc.Api.SimulateTransactionResponse>;
+  ): Promise<rpc.Api.SimulateTransactionResponse>;
 
   /**
    * Simulate a transaction without submitting (enhanced dry-run).
@@ -614,7 +614,7 @@ export class CoralSwapClient {
   async simulateTransaction(
       operations: xdr.Operation[],
       sourceOrOptions?: string | SimulateTransactionOptions,
-  ): Promise<SorobanRpc.Api.SimulateTransactionResponse | SimulateTransactionResult> {
+  ): Promise<rpc.Api.SimulateTransactionResponse | SimulateTransactionResult> {
     // Distinguish enhanced form (options object) from legacy form (string or undefined).
     const isEnhanced =
         sourceOrOptions !== undefined && typeof sourceOrOptions !== 'string';
@@ -665,7 +665,7 @@ export class CoralSwapClient {
         'simulateTransaction_simulate',
     );
     this.logger?.debug('simulateTransaction (dry-run): completed', {
-      success: SorobanRpc.Api.isSimulationSuccess(sim),
+      success: rpc.Api.isSimulationSuccess(sim),
       enhanced: isEnhanced,
     });
 
