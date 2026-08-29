@@ -1,5 +1,7 @@
 import { CoralSwapClient } from "@/client";
-import { EventCursor, decodeEventTopic, MIN_START_LEDGER } from "@/utils/event-cursor";
+import { decodeEventTopic, MIN_START_LEDGER } from "@/utils/event-cursor";
+import { getEventsPage } from "@/helpers/get-events-page";
+import { xdr } from "@stellar/stellar-sdk";
 import {
   TreasuryBalance,
   TokenBalance,
@@ -195,20 +197,31 @@ export class TreasuryModule {
     priceMap: Map<string, number>,
   ): Promise<{ revenueUSD: number; volumeUSD: number; firstHalf: number; secondHalf: number }> {
     try {
-      // Delegated to the shared EventCursor: it encodes the "swap" topic as a
-      // base64 XDR ScVal and paginates — no hand-rolled request building here.
-      // The window is passed explicitly, so the cursor never has to fall back
-      // to its own anchoring.
-      const cursor = new EventCursor(this.client.server);
-      const events = await cursor.scan({
-        contractIds: [pairAddress],
-        topics: ["swap"],
-        fromLedger,
-        toLedger,
-        limit: MAX_REVENUE_EVENTS,
-      });
+      // Use the shared getEventsPage helper: it encodes the "swap" topic as a
+      // base64 XDR ScVal and handles pagination transparently.
+      let allEvents: typeof page.events[] = [];
+      let cursor: string | undefined = undefined;
 
-      if (events.length === 0) {
+      do {
+        const page = await getEventsPage(this.client.server, {
+          contractIds: [pairAddress],
+          topics: ["swap"],
+          startLedger: fromLedger,
+          endLedger: toLedger,
+          cursor,
+          limit: MAX_REVENUE_EVENTS,
+        });
+
+        allEvents.push(...page.events);
+
+        if (page.pageInfo.hasNextPage && page.pageInfo.endCursor) {
+          cursor = page.pageInfo.endCursor;
+        } else {
+          cursor = undefined;
+        }
+      } while (cursor);
+
+      if (allEvents.length === 0) {
         return { revenueUSD: 0, volumeUSD: 0, firstHalf: 0, secondHalf: 0 };
       }
 
@@ -217,9 +230,18 @@ export class TreasuryModule {
       let firstHalf = 0;
       let secondHalf = 0;
 
-      for (const event of events) {
+      for (const event of allEvents) {
         if (event.ledger > toLedger) continue;
-        const parsed = this.parseSwapEventForRevenue(event);
+
+        // Decode the XDR value
+        let value: any;
+        try {
+          value = xdr.ScVal.fromXdr(event.value, 'base64');
+        } catch {
+          continue;
+        }
+
+        const parsed = this.parseSwapEventForRevenue(value, event.topics);
         if (!parsed) continue;
 
         const priceUSD = priceMap.get(parsed.tokenIn) ?? 0;
@@ -242,20 +264,15 @@ export class TreasuryModule {
     }
   }
 
-  private parseSwapEventForRevenue(rawEvent: unknown): {
+  private parseSwapEventForRevenue(value: unknown, topics: string[]): {
     amountIn: bigint;
     feeAmount: bigint;
     tokenIn: string;
   } | null {
     try {
-      if (!rawEvent || typeof rawEvent !== 'object') return null;
-      const eventObj = rawEvent as Record<string, unknown>;
-      // Topics come back as XDR ScVals (or base64 XDR on raw responses) —
-      // decode before comparing rather than matching a bare string.
-      const topics = (eventObj.topic as unknown[]) ?? [];
+      // Verify this is a swap event
       if (!topics.length || decodeEventTopic(topics[0]) !== 'swap') return null;
 
-      const value = eventObj.value;
       if (!value || typeof value !== 'object') return null;
       const valueObj = value as Record<string, unknown>;
 

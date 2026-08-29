@@ -1,8 +1,10 @@
-import { rpc } from "@stellar/stellar-sdk";
+import { rpc, xdr } from "@stellar/stellar-sdk";
 import { CoralSwapClient } from "@/client";
 import { FeeEstimate } from "@/types/fee";
 import { FeeState } from "@/types/pool";
 import { validateAddress, validatePositiveAmount } from "@/utils/validation";
+import { getEventsPage } from "@/helpers/get-events-page";
+import { MIN_START_LEDGER, decodeEventTopic } from "@/utils/event-cursor";
 
 /**
  * Fee module -- dynamic fee transparency and estimation.
@@ -185,23 +187,17 @@ export class FeeModule {
     validateAddress(pairAddress, "pairAddress");
 
     const currentLedger = await this.client.getCurrentLedger();
-    const fromLedger = options.fromLedger ?? Math.max(0, currentLedger - 518400);
-    const toLedger = options.toLedger ?? currentLedger;
+    const startLedger = options.fromLedger ?? Math.max(MIN_START_LEDGER, currentLedger - 518400);
+    const endLedger = options.toLedger ?? currentLedger;
 
-    // Query swap events directly from the RPC for fee revenue
-    const request: rpc.Server.GetEventsRequest = {
-      startLedger: fromLedger,
-      filters: [
-        {
-          type: "contract",
-          contractIds: [pairAddress],
-          topics: [["swap"]],
-        },
-      ],
+    // Use the shared getEventsPage helper for pagination and proper topic encoding
+    const page = await getEventsPage(this.client.server, {
+      contractIds: [pairAddress],
+      topics: ["swap"],
+      startLedger,
+      endLedger,
       limit: options.limit ?? 200,
-    };
-    const response = await this.client.server.getEvents(request);
-    const rawEvents = response?.events ?? [];
+    });
 
     let totalFeeXLM = 0;
     const history: Array<{
@@ -211,51 +207,34 @@ export class FeeModule {
       feeXLM: number;
     }> = [];
 
-    for (const event of rawEvents) {
-      if (event.ledger > toLedger) continue;
+    for (const event of page.events) {
+      if (event.ledger > endLedger) continue;
+
       try {
-        // Parse fee from the swap event value
-        const value = event.value as unknown as Record<string, unknown>;
-        if (!value) continue;
-
-        // Extract fee_bps from the ScVal payload
-        let feeBps = 0;
-        let amountIn = 0;
-        const map = typeof (value as any)._value !== 'undefined'
-          ? (value as any)._value
-          : value;
-
-        if (Array.isArray(map)) {
-          for (const entry of map) {
-            const key = entry?.key;
-            const val = entry?.val;
-            if (!key || !val) continue;
-            const keyStr = typeof key._value === 'string'
-              ? key._value
-              : key?.sym?.()?.toString?.() ?? key?.str?.()?.toString?.() ?? '';
-            if (keyStr === 'fee_bps') {
-              feeBps = val?.type === 'scvU32' ? val.u32 ?? 0 : 0;
-            }
-            if (keyStr === 'amount_in') {
-              if (val?.type === 'scvI128') {
-                const i128 = val.i128 as unknown;
-                amountIn = typeof i128 === 'bigint'
-                  ? Number(i128)
-                  : Number(((i128 as { hi: bigint; lo: bigint }).hi << 64n) + (i128 as { hi: bigint; lo: bigint }).lo);
-              } else {
-                amountIn = 0;
-              }
-            }
-          }
+        // Decode the XDR value (event.value is base64 XDR ScVal)
+        let value: any;
+        try {
+          value = xdr.ScVal.fromXdr(event.value, 'base64');
+        } catch {
+          continue;
         }
 
-        if (feeBps === 0) continue;
-        const feeAmount = amountIn * feeBps / 10000;
+        // Parse fee from the swap event value
+        const data = decodeMapEvent(value);
+        if (!data) continue;
+
+        // Extract fee_bps and amount_in from the map
+        const feeBps = readU32(data, "fee_bps");
+        const amountIn = readI128(data, "amount_in");
+
+        if (feeBps === undefined || amountIn === undefined) continue;
+
+        const feeAmount = Number(amountIn) * feeBps / 10000;
         const feeXLM = feeAmount / 1e7;
         totalFeeXLM += feeXLM;
         history.push({
           ledger: event.ledger,
-          timestamp: Number(event.ledgerClosedAt) || 0,
+          timestamp: Math.floor(new Date(event.ledgerClosedAt).getTime() / 1000),
           feeBps,
           feeXLM,
         });
@@ -338,9 +317,9 @@ export class FeeModule {
 
     // Annualize based on the actual ledger range queried
     const currentLedger = await this.client.getCurrentLedger();
-    const fromLedger = options.fromLedger ?? Math.max(0, currentLedger - 518400);
-    const toLedger = options.toLedger ?? currentLedger;
-    const ledgerSpan = toLedger - fromLedger;
+    const startLedger = options.fromLedger ?? Math.max(MIN_START_LEDGER, currentLedger - 518400);
+    const endLedger = options.toLedger ?? currentLedger;
+    const ledgerSpan = endLedger - startLedger;
     const daysInPeriod = (ledgerSpan * 5) / 86400; // 5s per ledger
     const aprPercent =
       daysInPeriod > 0 && lpValueXLM > 0
@@ -357,4 +336,49 @@ export class FeeModule {
       aprPercent,
     };
   }
+}
+
+// ---------------------------------------------------------------------------
+// Event Decoding Helpers
+// ---------------------------------------------------------------------------
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function decodeMapEvent(value: any): Map<string, any> | null {
+  const entries: unknown[] =
+    typeof value?.map === "function" ? value.map() : value?._value;
+  if (!Array.isArray(entries)) return null;
+
+  const map = new Map<string, unknown>();
+  for (const entry of entries as Array<{ key: unknown; val: unknown }>) {
+    const k = entry.key as Record<string, () => { toString(): string }>;
+    let key: string | undefined;
+    try {
+      key = k.sym?.().toString() ?? k.str?.().toString();
+    } catch { /* skip */ }
+    if (key) map.set(key, entry.val);
+  }
+  return map as Map<string, unknown>;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function readI128(map: Map<string, any>, key: string): bigint | undefined {
+  const val = map.get(key);
+  if (!val) return undefined;
+  try {
+    if (typeof val.i128 === "function") {
+      const parts = val.i128();
+      return (BigInt(parts.hi().toString()) << 64n) + BigInt(parts.lo().toString());
+    }
+  } catch { /* skip */ }
+  return undefined;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function readU32(map: Map<string, any>, key: string): number | undefined {
+  const val = map.get(key);
+  if (!val) return undefined;
+  try {
+    if (typeof val.u32 === "function") return val.u32();
+  } catch { /* skip */ }
+  return undefined;
 }
