@@ -39,3 +39,15 @@ jobs:
           cache: 'npm'
       - run: npm ci
       - run: npm run build
+
+  smoke-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - name: Strict type-check consumer fixture
+        run: npm run type-check:strict
