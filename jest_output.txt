@@ -1,0 +1,1204 @@
+
+> @coralswap/sdk@x.1.0 test
+> jest tests/read-smoke-suite.test.ts
+
+ts-jest[config] (WARN) 
+    The "ts-jest" config option "isolatedModules" is deprecated and will be removed in v30.0.0. Please use "isolatedModules: true" in /home/gift/coralswap-sdk/tsconfig.json instead, see https://www.typescriptlang.org/tsconfig/#isolatedModules
+  
+  console.log
+    SIMULATE TX KEYS: [
+      '_tx',
+      '_signatures',
+      '_fee',
+      '_networkPassphrase',
+      '_envelopeType',
+      '_source',
+      '_memo',
+      '_sequence',
+      '_operations',
+      '_timeBounds',
+      '_ledgerBounds',
+      '_minAccountSequence',
+      '_minAccountSequenceAge',
+      '_minAccountSequenceLedgerGap',
+      '_extraSigners'
+    ]
+
+      at MockProvider.<anonymous> (tests/read-smoke-suite.test.ts:42:17)
+
+  console.log
+    SIMULATE TX KEYS: [
+      '_tx',
+      '_signatures',
+      '_fee',
+      '_networkPassphrase',
+      '_envelopeType',
+      '_source',
+      '_memo',
+      '_sequence',
+      '_operations',
+      '_timeBounds',
+      '_ledgerBounds',
+      '_minAccountSequence',
+      '_minAccountSequenceAge',
+      '_minAccountSequenceLedgerGap',
+      '_extraSigners'
+    ]
+
+      at MockProvider.<anonymous> (tests/read-smoke-suite.test.ts:42:17)
+          at async Promise.all (index 0)
+
+  console.log
+    SIMULATE TX KEYS: [
+      '_tx',
+      '_signatures',
+      '_fee',
+      '_networkPassphrase',
+      '_envelopeType',
+      '_source',
+      '_memo',
+      '_sequence',
+      '_operations',
+      '_timeBounds',
+      '_ledgerBounds',
+      '_minAccountSequence',
+      '_minAccountSequenceAge',
+      '_minAccountSequenceLedgerGap',
+      '_extraSigners'
+    ]
+
+      at MockProvider.<anonymous> (tests/read-smoke-suite.test.ts:42:17)
+          at async Promise.all (index 1)
+
+  console.log
+    SIMULATE TX KEYS: [
+      '_tx',
+      '_signatures',
+      '_fee',
+      '_networkPassphrase',
+      '_envelopeType',
+      '_source',
+      '_memo',
+      '_sequence',
+      '_operations',
+      '_timeBounds',
+      '_ledgerBounds',
+      '_minAccountSequence',
+      '_minAccountSequenceAge',
+      '_minAccountSequenceLedgerGap',
+      '_extraSigners'
+    ]
+
+      at MockProvider.<anonymous> (tests/read-smoke-suite.test.ts:42:17)
+          at async Promise.all (index 0)
+
+  console.log
+    Unmocked function: token_0
+
+      at MockProvider.<anonymous> (tests/read-smoke-suite.test.ts:120:21)
+          at async Promise.all (index 0)
+
+  console.log
+    SIMULATE TX KEYS: [
+      '_tx',
+      '_signatures',
+      '_fee',
+      '_networkPassphrase',
+      '_envelopeType',
+      '_source',
+      '_memo',
+      '_sequence',
+      '_operations',
+      '_timeBounds',
+      '_ledgerBounds',
+      '_minAccountSequence',
+      '_minAccountSequenceAge',
+      '_minAccountSequenceLedgerGap',
+      '_extraSigners'
+    ]
+
+      at MockProvider.<anonymous> (tests/read-smoke-suite.test.ts:42:17)
+          at async Promise.all (index 1)
+
+  console.log
+    Unmocked function: token_1
+
+      at MockProvider.<anonymous> (tests/read-smoke-suite.test.ts:120:21)
+          at async Promise.all (index 1)
+
+  console.log
+    SIMULATE TX KEYS: [
+      '_tx',
+      '_signatures',
+      '_fee',
+      '_networkPassphrase',
+      '_envelopeType',
+      '_source',
+      '_memo',
+      '_sequence',
+      '_operations',
+      '_timeBounds',
+      '_ledgerBounds',
+      '_minAccountSequence',
+      '_minAccountSequenceAge',
+      '_minAccountSequenceLedgerGap',
+      '_extraSigners'
+    ]
+
+      at MockProvider.<anonymous> (tests/read-smoke-suite.test.ts:42:17)
+
+  console.log
+    SIMULATE TX KEYS: [
+      '_tx',
+      '_signatures',
+      '_fee',
+      '_networkPassphrase',
+      '_envelopeType',
+      '_source',
+      '_memo',
+      '_sequence',
+      '_operations',
+      '_timeBounds',
+      '_ledgerBounds',
+      '_minAccountSequence',
+      '_minAccountSequenceAge',
+      '_minAccountSequenceLedgerGap',
+      '_extraSigners'
+    ]
+
+      at MockProvider.<anonymous> (tests/read-smoke-suite.test.ts:42:17)
+
+  console.log
+    SIMULATE TX KEYS: [
+      '_tx',
+      '_signatures',
+      '_fee',
+      '_networkPassphrase',
+      '_envelopeType',
+      '_source',
+      '_memo',
+      '_sequence',
+      '_operations',
+      '_timeBounds',
+      '_ledgerBounds',
+      '_minAccountSequence',
+      '_minAccountSequenceAge',
+      '_minAccountSequenceLedgerGap',
+      '_extraSigners'
+    ]
+
+      at MockProvider.<anonymous> (tests/read-smoke-suite.test.ts:42:17)
+          at async Promise.all (index 0)
+
+  console.log
+    Unmocked function: token_0
+
+      at MockProvider.<anonymous> (tests/read-smoke-suite.test.ts:120:21)
+          at async Promise.all (index 0)
+
+  console.log
+    SIMULATE TX KEYS: [
+      '_tx',
+      '_signatures',
+      '_fee',
+      '_networkPassphrase',
+      '_envelopeType',
+      '_source',
+      '_memo',
+      '_sequence',
+      '_operations',
+      '_timeBounds',
+      '_ledgerBounds',
+      '_minAccountSequence',
+      '_minAccountSequenceAge',
+      '_minAccountSequenceLedgerGap',
+      '_extraSigners'
+    ]
+
+      at MockProvider.<anonymous> (tests/read-smoke-suite.test.ts:42:17)
+          at async Promise.all (index 1)
+
+  console.log
+    Unmocked function: token_1
+
+      at MockProvider.<anonymous> (tests/read-smoke-suite.test.ts:120:21)
+          at async Promise.all (index 1)
+
+  console.log
+    SIMULATE TX KEYS: [
+      '_tx',
+      '_signatures',
+      '_fee',
+      '_networkPassphrase',
+      '_envelopeType',
+      '_source',
+      '_memo',
+      '_sequence',
+      '_operations',
+      '_timeBounds',
+      '_ledgerBounds',
+      '_minAccountSequence',
+      '_minAccountSequenceAge',
+      '_minAccountSequenceLedgerGap',
+      '_extraSigners'
+    ]
+
+      at MockProvider.<anonymous> (tests/read-smoke-suite.test.ts:42:17)
+
+  console.log
+    SIMULATE TX KEYS: [
+      '_tx',
+      '_signatures',
+      '_fee',
+      '_networkPassphrase',
+      '_envelopeType',
+      '_source',
+      '_memo',
+      '_sequence',
+      '_operations',
+      '_timeBounds',
+      '_ledgerBounds',
+      '_minAccountSequence',
+      '_minAccountSequenceAge',
+      '_minAccountSequenceLedgerGap',
+      '_extraSigners'
+    ]
+
+      at MockProvider.<anonymous> (tests/read-smoke-suite.test.ts:42:17)
+
+  console.log
+    SIMULATE TX KEYS: [
+      '_tx',
+      '_signatures',
+      '_fee',
+      '_networkPassphrase',
+      '_envelopeType',
+      '_source',
+      '_memo',
+      '_sequence',
+      '_operations',
+      '_timeBounds',
+      '_ledgerBounds',
+      '_minAccountSequence',
+      '_minAccountSequenceAge',
+      '_minAccountSequenceLedgerGap',
+      '_extraSigners'
+    ]
+
+      at MockProvider.<anonymous> (tests/read-smoke-suite.test.ts:42:17)
+
+  console.log
+    SIMULATE TX KEYS: [
+      '_tx',
+      '_signatures',
+      '_fee',
+      '_networkPassphrase',
+      '_envelopeType',
+      '_source',
+      '_memo',
+      '_sequence',
+      '_operations',
+      '_timeBounds',
+      '_ledgerBounds',
+      '_minAccountSequence',
+      '_minAccountSequenceAge',
+      '_minAccountSequenceLedgerGap',
+      '_extraSigners'
+    ]
+
+      at MockProvider.<anonymous> (tests/read-smoke-suite.test.ts:42:17)
+
+  console.log
+    Unmocked function: all_pairs
+
+      at MockProvider.<anonymous> (tests/read-smoke-suite.test.ts:120:21)
+
+  console.log
+    SIMULATE TX KEYS: [
+      '_tx',
+      '_signatures',
+      '_fee',
+      '_networkPassphrase',
+      '_envelopeType',
+      '_source',
+      '_memo',
+      '_sequence',
+      '_operations',
+      '_timeBounds',
+      '_ledgerBounds',
+      '_minAccountSequence',
+      '_minAccountSequenceAge',
+      '_minAccountSequenceLedgerGap',
+      '_extraSigners'
+    ]
+
+      at MockProvider.<anonymous> (tests/read-smoke-suite.test.ts:42:17)
+
+  console.log
+    Unmocked function: all_pairs
+
+      at MockProvider.<anonymous> (tests/read-smoke-suite.test.ts:120:21)
+
+  console.log
+    SIMULATE TX KEYS: [
+      '_tx',
+      '_signatures',
+      '_fee',
+      '_networkPassphrase',
+      '_envelopeType',
+      '_source',
+      '_memo',
+      '_sequence',
+      '_operations',
+      '_timeBounds',
+      '_ledgerBounds',
+      '_minAccountSequence',
+      '_minAccountSequenceAge',
+      '_minAccountSequenceLedgerGap',
+      '_extraSigners'
+    ]
+
+      at MockProvider.<anonymous> (tests/read-smoke-suite.test.ts:42:17)
+
+  console.log
+    SIMULATE TX KEYS: [
+      '_tx',
+      '_signatures',
+      '_fee',
+      '_networkPassphrase',
+      '_envelopeType',
+      '_source',
+      '_memo',
+      '_sequence',
+      '_operations',
+      '_timeBounds',
+      '_ledgerBounds',
+      '_minAccountSequence',
+      '_minAccountSequenceAge',
+      '_minAccountSequenceLedgerGap',
+      '_extraSigners'
+    ]
+
+      at MockProvider.<anonymous> (tests/read-smoke-suite.test.ts:42:17)
+          at async Promise.all (index 0)
+
+  console.log
+    SIMULATE TX KEYS: [
+      '_tx',
+      '_signatures',
+      '_fee',
+      '_networkPassphrase',
+      '_envelopeType',
+      '_source',
+      '_memo',
+      '_sequence',
+      '_operations',
+      '_timeBounds',
+      '_ledgerBounds',
+      '_minAccountSequence',
+      '_minAccountSequenceAge',
+      '_minAccountSequenceLedgerGap',
+      '_extraSigners'
+    ]
+
+      at MockProvider.<anonymous> (tests/read-smoke-suite.test.ts:42:17)
+          at async Promise.all (index 1)
+
+  console.log
+    SIMULATE TX KEYS: [
+      '_tx',
+      '_signatures',
+      '_fee',
+      '_networkPassphrase',
+      '_envelopeType',
+      '_source',
+      '_memo',
+      '_sequence',
+      '_operations',
+      '_timeBounds',
+      '_ledgerBounds',
+      '_minAccountSequence',
+      '_minAccountSequenceAge',
+      '_minAccountSequenceLedgerGap',
+      '_extraSigners'
+    ]
+
+      at MockProvider.<anonymous> (tests/read-smoke-suite.test.ts:42:17)
+          at async Promise.all (index 2)
+
+  console.log
+    Unmocked function: lp_token
+
+      at MockProvider.<anonymous> (tests/read-smoke-suite.test.ts:120:21)
+          at async Promise.all (index 2)
+
+  console.log
+    SIMULATE TX KEYS: [
+      '_tx',
+      '_signatures',
+      '_fee',
+      '_networkPassphrase',
+      '_envelopeType',
+      '_source',
+      '_memo',
+      '_sequence',
+      '_operations',
+      '_timeBounds',
+      '_ledgerBounds',
+      '_minAccountSequence',
+      '_minAccountSequenceAge',
+      '_minAccountSequenceLedgerGap',
+      '_extraSigners'
+    ]
+
+      at MockProvider.<anonymous> (tests/read-smoke-suite.test.ts:42:17)
+
+  console.log
+    Unmocked function: all_pairs
+
+      at MockProvider.<anonymous> (tests/read-smoke-suite.test.ts:120:21)
+
+  console.log
+    SIMULATE TX KEYS: [
+      '_tx',
+      '_signatures',
+      '_fee',
+      '_networkPassphrase',
+      '_envelopeType',
+      '_source',
+      '_memo',
+      '_sequence',
+      '_operations',
+      '_timeBounds',
+      '_ledgerBounds',
+      '_minAccountSequence',
+      '_minAccountSequenceAge',
+      '_minAccountSequenceLedgerGap',
+      '_extraSigners'
+    ]
+
+      at MockProvider.<anonymous> (tests/read-smoke-suite.test.ts:42:17)
+
+  console.log
+    SIMULATE TX KEYS: [
+      '_tx',
+      '_signatures',
+      '_fee',
+      '_networkPassphrase',
+      '_envelopeType',
+      '_source',
+      '_memo',
+      '_sequence',
+      '_operations',
+      '_timeBounds',
+      '_ledgerBounds',
+      '_minAccountSequence',
+      '_minAccountSequenceAge',
+      '_minAccountSequenceLedgerGap',
+      '_extraSigners'
+    ]
+
+      at MockProvider.<anonymous> (tests/read-smoke-suite.test.ts:42:17)
+          at async Promise.all (index 0)
+
+  console.log
+    SIMULATE TX KEYS: [
+      '_tx',
+      '_signatures',
+      '_fee',
+      '_networkPassphrase',
+      '_envelopeType',
+      '_source',
+      '_memo',
+      '_sequence',
+      '_operations',
+      '_timeBounds',
+      '_ledgerBounds',
+      '_minAccountSequence',
+      '_minAccountSequenceAge',
+      '_minAccountSequenceLedgerGap',
+      '_extraSigners'
+    ]
+
+      at MockProvider.<anonymous> (tests/read-smoke-suite.test.ts:42:17)
+          at async Promise.all (index 1)
+
+  console.log
+    Unmocked function: all_pairs
+
+      at MockProvider.<anonymous> (tests/read-smoke-suite.test.ts:120:21)
+          at async Promise.all (index 1)
+
+  console.log
+    SIMULATE TX KEYS: [
+      '_tx',
+      '_signatures',
+      '_fee',
+      '_networkPassphrase',
+      '_envelopeType',
+      '_source',
+      '_memo',
+      '_sequence',
+      '_operations',
+      '_timeBounds',
+      '_ledgerBounds',
+      '_minAccountSequence',
+      '_minAccountSequenceAge',
+      '_minAccountSequenceLedgerGap',
+      '_extraSigners'
+    ]
+
+      at MockProvider.<anonymous> (tests/read-smoke-suite.test.ts:42:17)
+          at async Promise.all (index 0)
+
+  console.log
+    SIMULATE TX KEYS: [
+      '_tx',
+      '_signatures',
+      '_fee',
+      '_networkPassphrase',
+      '_envelopeType',
+      '_source',
+      '_memo',
+      '_sequence',
+      '_operations',
+      '_timeBounds',
+      '_ledgerBounds',
+      '_minAccountSequence',
+      '_minAccountSequenceAge',
+      '_minAccountSequenceLedgerGap',
+      '_extraSigners'
+    ]
+
+      at MockProvider.<anonymous> (tests/read-smoke-suite.test.ts:42:17)
+          at async Promise.all (index 1)
+
+  console.log
+    Unmocked function: all_pairs
+
+      at MockProvider.<anonymous> (tests/read-smoke-suite.test.ts:120:21)
+          at async Promise.all (index 1)
+
+  console.log
+    SIMULATE TX KEYS: [
+      '_tx',
+      '_signatures',
+      '_fee',
+      '_networkPassphrase',
+      '_envelopeType',
+      '_source',
+      '_memo',
+      '_sequence',
+      '_operations',
+      '_timeBounds',
+      '_ledgerBounds',
+      '_minAccountSequence',
+      '_minAccountSequenceAge',
+      '_minAccountSequenceLedgerGap',
+      '_extraSigners'
+    ]
+
+      at MockProvider.<anonymous> (tests/read-smoke-suite.test.ts:42:17)
+
+  console.log
+    Unmocked function: all_pairs
+
+      at MockProvider.<anonymous> (tests/read-smoke-suite.test.ts:120:21)
+
+  console.log
+    SIMULATE TX KEYS: [
+      '_tx',
+      '_signatures',
+      '_fee',
+      '_networkPassphrase',
+      '_envelopeType',
+      '_source',
+      '_memo',
+      '_sequence',
+      '_operations',
+      '_timeBounds',
+      '_ledgerBounds',
+      '_minAccountSequence',
+      '_minAccountSequenceAge',
+      '_minAccountSequenceLedgerGap',
+      '_extraSigners'
+    ]
+
+      at MockProvider.<anonymous> (tests/read-smoke-suite.test.ts:42:17)
+
+  console.log
+    Unmocked function: all_pairs
+
+      at MockProvider.<anonymous> (tests/read-smoke-suite.test.ts:120:21)
+
+  console.log
+    SIMULATE TX KEYS: [
+      '_tx',
+      '_signatures',
+      '_fee',
+      '_networkPassphrase',
+      '_envelopeType',
+      '_source',
+      '_memo',
+      '_sequence',
+      '_operations',
+      '_timeBounds',
+      '_ledgerBounds',
+      '_minAccountSequence',
+      '_minAccountSequenceAge',
+      '_minAccountSequenceLedgerGap',
+      '_extraSigners'
+    ]
+
+      at MockProvider.<anonymous> (tests/read-smoke-suite.test.ts:42:17)
+
+  console.log
+    Unmocked function: all_pairs
+
+      at MockProvider.<anonymous> (tests/read-smoke-suite.test.ts:120:21)
+
+  console.log
+    SIMULATE TX KEYS: [
+      '_tx',
+      '_signatures',
+      '_fee',
+      '_networkPassphrase',
+      '_envelopeType',
+      '_source',
+      '_memo',
+      '_sequence',
+      '_operations',
+      '_timeBounds',
+      '_ledgerBounds',
+      '_minAccountSequence',
+      '_minAccountSequenceAge',
+      '_minAccountSequenceLedgerGap',
+      '_extraSigners'
+    ]
+
+      at MockProvider.<anonymous> (tests/read-smoke-suite.test.ts:42:17)
+          at async Promise.all (index 0)
+          at async Promise.all (index 0)
+
+  console.log
+    Unmocked function: token_0
+
+      at MockProvider.<anonymous> (tests/read-smoke-suite.test.ts:120:21)
+          at async Promise.all (index 0)
+          at async Promise.all (index 0)
+
+  console.log
+    SIMULATE TX KEYS: [
+      '_tx',
+      '_signatures',
+      '_fee',
+      '_networkPassphrase',
+      '_envelopeType',
+      '_source',
+      '_memo',
+      '_sequence',
+      '_operations',
+      '_timeBounds',
+      '_ledgerBounds',
+      '_minAccountSequence',
+      '_minAccountSequenceAge',
+      '_minAccountSequenceLedgerGap',
+      '_extraSigners'
+    ]
+
+      at MockProvider.<anonymous> (tests/read-smoke-suite.test.ts:42:17)
+          at async Promise.all (index 1)
+          at async Promise.all (index 0)
+
+  console.log
+    Unmocked function: token_1
+
+      at MockProvider.<anonymous> (tests/read-smoke-suite.test.ts:120:21)
+          at async Promise.all (index 1)
+          at async Promise.all (index 0)
+
+  console.log
+    SIMULATE TX KEYS: [
+      '_tx',
+      '_signatures',
+      '_fee',
+      '_networkPassphrase',
+      '_envelopeType',
+      '_source',
+      '_memo',
+      '_sequence',
+      '_operations',
+      '_timeBounds',
+      '_ledgerBounds',
+      '_minAccountSequence',
+      '_minAccountSequenceAge',
+      '_minAccountSequenceLedgerGap',
+      '_extraSigners'
+    ]
+
+      at MockProvider.<anonymous> (tests/read-smoke-suite.test.ts:42:17)
+          at async Promise.all (index 1)
+
+  console.log
+    SIMULATE TX KEYS: [
+      '_tx',
+      '_signatures',
+      '_fee',
+      '_networkPassphrase',
+      '_envelopeType',
+      '_source',
+      '_memo',
+      '_sequence',
+      '_operations',
+      '_timeBounds',
+      '_ledgerBounds',
+      '_minAccountSequence',
+      '_minAccountSequenceAge',
+      '_minAccountSequenceLedgerGap',
+      '_extraSigners'
+    ]
+
+      at MockProvider.<anonymous> (tests/read-smoke-suite.test.ts:42:17)
+          at async Promise.all (index 2)
+
+  console.log
+    SIMULATE TX KEYS: [
+      '_tx',
+      '_signatures',
+      '_fee',
+      '_networkPassphrase',
+      '_envelopeType',
+      '_source',
+      '_memo',
+      '_sequence',
+      '_operations',
+      '_timeBounds',
+      '_ledgerBounds',
+      '_minAccountSequence',
+      '_minAccountSequenceAge',
+      '_minAccountSequenceLedgerGap',
+      '_extraSigners'
+    ]
+
+      at MockProvider.<anonymous> (tests/read-smoke-suite.test.ts:42:17)
+
+  console.log
+    SIMULATE TX KEYS: [
+      '_tx',
+      '_signatures',
+      '_fee',
+      '_networkPassphrase',
+      '_envelopeType',
+      '_source',
+      '_memo',
+      '_sequence',
+      '_operations',
+      '_timeBounds',
+      '_ledgerBounds',
+      '_minAccountSequence',
+      '_minAccountSequenceAge',
+      '_minAccountSequenceLedgerGap',
+      '_extraSigners'
+    ]
+
+      at MockProvider.<anonymous> (tests/read-smoke-suite.test.ts:42:17)
+
+  console.log
+    Unmocked function: get_proposal
+
+      at MockProvider.<anonymous> (tests/read-smoke-suite.test.ts:120:21)
+
+  console.log
+    SIMULATE TX KEYS: [
+      '_tx',
+      '_signatures',
+      '_fee',
+      '_networkPassphrase',
+      '_envelopeType',
+      '_source',
+      '_memo',
+      '_sequence',
+      '_operations',
+      '_timeBounds',
+      '_ledgerBounds',
+      '_minAccountSequence',
+      '_minAccountSequenceAge',
+      '_minAccountSequenceLedgerGap',
+      '_extraSigners'
+    ]
+
+      at MockProvider.<anonymous> (tests/read-smoke-suite.test.ts:42:17)
+
+  console.log
+    SIMULATE TX KEYS: [
+      '_tx',
+      '_signatures',
+      '_fee',
+      '_networkPassphrase',
+      '_envelopeType',
+      '_source',
+      '_memo',
+      '_sequence',
+      '_operations',
+      '_timeBounds',
+      '_ledgerBounds',
+      '_minAccountSequence',
+      '_minAccountSequenceAge',
+      '_minAccountSequenceLedgerGap',
+      '_extraSigners'
+    ]
+
+      at MockProvider.<anonymous> (tests/read-smoke-suite.test.ts:42:17)
+
+  console.log
+    Unmocked function: get_schedules
+
+      at MockProvider.<anonymous> (tests/read-smoke-suite.test.ts:120:21)
+
+  console.log
+    SIMULATE TX KEYS: [
+      '_tx',
+      '_signatures',
+      '_fee',
+      '_networkPassphrase',
+      '_envelopeType',
+      '_source',
+      '_memo',
+      '_sequence',
+      '_operations',
+      '_timeBounds',
+      '_ledgerBounds',
+      '_minAccountSequence',
+      '_minAccountSequenceAge',
+      '_minAccountSequenceLedgerGap',
+      '_extraSigners'
+    ]
+
+      at MockProvider.<anonymous> (tests/read-smoke-suite.test.ts:42:17)
+
+  console.log
+    Unmocked function: get_performance
+
+      at MockProvider.<anonymous> (tests/read-smoke-suite.test.ts:120:21)
+
+  console.log
+    SIMULATE TX KEYS: [
+      '_tx',
+      '_signatures',
+      '_fee',
+      '_networkPassphrase',
+      '_envelopeType',
+      '_source',
+      '_memo',
+      '_sequence',
+      '_operations',
+      '_timeBounds',
+      '_ledgerBounds',
+      '_minAccountSequence',
+      '_minAccountSequenceAge',
+      '_minAccountSequenceLedgerGap',
+      '_extraSigners'
+    ]
+
+      at MockProvider.<anonymous> (tests/read-smoke-suite.test.ts:42:17)
+
+  console.log
+    Unmocked function: orders_for_user
+
+      at MockProvider.<anonymous> (tests/read-smoke-suite.test.ts:120:21)
+
+  console.log
+    SIMULATE TX KEYS: [
+      '_tx',
+      '_signatures',
+      '_fee',
+      '_networkPassphrase',
+      '_envelopeType',
+      '_source',
+      '_memo',
+      '_sequence',
+      '_operations',
+      '_timeBounds',
+      '_ledgerBounds',
+      '_minAccountSequence',
+      '_minAccountSequenceAge',
+      '_minAccountSequenceLedgerGap',
+      '_extraSigners'
+    ]
+
+      at MockProvider.<anonymous> (tests/read-smoke-suite.test.ts:42:17)
+
+  console.log
+    Unmocked function: status
+
+      at MockProvider.<anonymous> (tests/read-smoke-suite.test.ts:120:21)
+
+  console.log
+    SIMULATE TX KEYS: [
+      '_tx',
+      '_signatures',
+      '_fee',
+      '_networkPassphrase',
+      '_envelopeType',
+      '_source',
+      '_memo',
+      '_sequence',
+      '_operations',
+      '_timeBounds',
+      '_ledgerBounds',
+      '_minAccountSequence',
+      '_minAccountSequenceAge',
+      '_minAccountSequenceLedgerGap',
+      '_extraSigners'
+    ]
+
+      at MockProvider.<anonymous> (tests/read-smoke-suite.test.ts:42:17)
+
+FAIL tests/read-smoke-suite.test.ts
+  Read Smoke Suite
+    ✕ SwapModule (180 ms)
+    ✕ LiquidityModule (21 ms)
+    ✕ FlashLoanModule (14 ms)
+    ✕ FeeModule (10 ms)
+    ✕ OracleModule (7 ms)
+    ✕ PortfolioModule (13 ms)
+    ✓ RiskMetricsModule (2 ms)
+    ✓ TokenListModule (5 ms)
+    ✕ FactoryModule (11 ms)
+    ✓ RouterModule (6 ms)
+    ✓ TreasuryModule (21 ms)
+    ✓ AlertsModule & AlertModule (1 ms)
+    ✕ MonitoringModule (37 ms)
+    ✕ StopLossModule (18 ms)
+    ✓ LeaderboardModule (3 ms)
+    ✓ HealthCheckModule (1 ms)
+    ✓ TaxReportingModule (4 ms)
+    ✕ GovernanceModule (13 ms)
+    ✕ DCAModule (17 ms)
+    ✓ LimitOrderModule (15 ms)
+    ✓ SquidModule (1 ms)
+
+  ● Read Smoke Suite › SwapModule
+
+    Method getQuote threw a non-SDK error: Error: Unsupported ScVal type: scvVoid
+
+      148 |     if (!r0 || !r1) throw new Error("Failed to read token addresses");
+      149 |     return {
+    > 150 |       token0: Address.fromScVal(r0).toString(),
+          |                       ^
+      151 |       token1: Address.fromScVal(r1).toString(),
+      152 |     };
+      153 |   }
+
+      at Address.fromScVal (node_modules/@stellar/stellar-sdk/lib/cjs/base/address.js:97:13)
+      at PairClient.getTokens (src/contracts/pair.ts:150:23)
+      at SwapModule.isToken0 (src/modules/swap.ts:729:20)
+      at SwapModule.getDirectQuote (src/modules/swap.ts:434:24)
+      at expectNoRawError (tests/read-smoke-suite.test.ts:176:7)
+      at Object.<anonymous> (tests/read-smoke-suite.test.ts:186:5)
+      at expectNoRawError (tests/read-smoke-suite.test.ts:179:15)
+      at Object.<anonymous> (tests/read-smoke-suite.test.ts:186:5)
+
+  ● Read Smoke Suite › LiquidityModule
+
+    Method getAddLiquidityQuote threw a non-SDK error: Error: Unsupported ScVal type: scvVoid
+
+      148 |     if (!r0 || !r1) throw new Error("Failed to read token addresses");
+      149 |     return {
+    > 150 |       token0: Address.fromScVal(r0).toString(),
+          |                       ^
+      151 |       token1: Address.fromScVal(r1).toString(),
+      152 |     };
+      153 |   }
+
+      at Address.fromScVal (node_modules/@stellar/stellar-sdk/lib/cjs/base/address.js:97:13)
+      at PairClient.getTokens (src/contracts/pair.ts:150:23)
+      at LiquidityModule.getAddLiquidityQuote (src/modules/liquidity.ts:165:20)
+      at expectNoRawError (tests/read-smoke-suite.test.ts:176:7)
+      at Object.<anonymous> (tests/read-smoke-suite.test.ts:194:5)
+      at expectNoRawError (tests/read-smoke-suite.test.ts:179:15)
+      at Object.<anonymous> (tests/read-smoke-suite.test.ts:194:5)
+
+  ● Read Smoke Suite › FlashLoanModule
+
+    Method estimateFee threw a non-SDK error: Error: Missing field
+
+      40 |  */
+      41 | function scValToU32(val: xdr.ScVal | undefined): number {
+    > 42 |   if (!val) throw new Error("Missing field");
+         |                   ^
+      43 |   if (val.type !== "scvU32") {
+      44 |     throw new Error(`Expected u32, got ${val.type}`);
+      45 |   }
+
+      at scValToU32 (src/contracts/pair.ts:42:19)
+      at PairClient.getFlashLoanConfig (src/contracts/pair.ts:227:20)
+      at FlashLoanModule.estimateFee (src/modules/flash-loan.ts:60:20)
+      at expectNoRawError (tests/read-smoke-suite.test.ts:176:7)
+      at Object.<anonymous> (tests/read-smoke-suite.test.ts:202:5)
+      at expectNoRawError (tests/read-smoke-suite.test.ts:179:15)
+      at Object.<anonymous> (tests/read-smoke-suite.test.ts:202:5)
+
+  ● Read Smoke Suite › FeeModule
+
+    Method getCurrentFee threw a non-SDK error: Error: Missing field
+
+      51 |  */
+      52 | function scValToI128(val: xdr.ScVal | undefined): bigint {
+    > 53 |   if (!val) throw new Error("Missing field");
+         |                   ^
+      54 |   if (val.type !== "scvI128") {
+      55 |     throw new Error(`Expected i128, got ${val.type}`);
+      56 |   }
+
+      at scValToI128 (src/contracts/pair.ts:53:19)
+      at PairClient.getFeeState (src/contracts/pair.ts:196:18)
+      at FeeModule.getCurrentFee (src/modules/fees.ts:33:22)
+      at expectNoRawError (tests/read-smoke-suite.test.ts:176:7)
+      at Object.<anonymous> (tests/read-smoke-suite.test.ts:209:5)
+      at expectNoRawError (tests/read-smoke-suite.test.ts:179:15)
+      at Object.<anonymous> (tests/read-smoke-suite.test.ts:209:5)
+
+  ● Read Smoke Suite › OracleModule
+
+    Method getTWAP threw a non-SDK error: Error: Missing field
+
+      51 |  */
+      52 | function scValToI128(val: xdr.ScVal | undefined): bigint {
+    > 53 |   if (!val) throw new Error("Missing field");
+         |                   ^
+      54 |   if (val.type !== "scvI128") {
+      55 |     throw new Error(`Expected i128, got ${val.type}`);
+      56 |   }
+
+      at scValToI128 (src/contracts/pair.ts:53:19)
+      at PairClient.getCumulativePrices (src/contracts/pair.ts:378:29)
+      at OracleModule.observe (src/modules/oracle.ts:84:20)
+      at OracleModule.getTWAP (src/modules/oracle.ts:182:5)
+      at expectNoRawError (tests/read-smoke-suite.test.ts:176:7)
+      at Object.<anonymous> (tests/read-smoke-suite.test.ts:219:5)
+      at expectNoRawError (tests/read-smoke-suite.test.ts:179:15)
+      at Object.<anonymous> (tests/read-smoke-suite.test.ts:219:5)
+
+  ● Read Smoke Suite › PortfolioModule
+
+    Method getPortfolioPnL threw a non-SDK error: TypeError: Cannot read properties of undefined (reading 'positions')
+
+      144 |     validateAddress(owner, "owner");
+      145 |
+    > 146 |     const pairAddresses = entry.positions.map((p) => p.pairAddress);
+          |                                 ^
+      147 |     const current = await this.getPortfolio(owner, { pairAddresses });
+      148 |
+      149 |     const pnlUSD = current.totalValueUSD - entry.totalValueUSD;
+
+      at PortfolioModule.getPortfolioPnL (src/modules/portfolio.ts:146:33)
+      at Object.<anonymous> (tests/read-smoke-suite.test.ts:234:30)
+      at expectNoRawError (tests/read-smoke-suite.test.ts:179:15)
+      at Object.<anonymous> (tests/read-smoke-suite.test.ts:234:5)
+
+  ● Read Smoke Suite › FactoryModule
+
+    Method getPairInfo threw a non-SDK error: Error: Unsupported ScVal type: scvVoid
+
+      163 |     const result = await this.simulateRead(op);
+      164 |     if (!result) throw new Error("Failed to read LP token address");
+    > 165 |     return Address.fromScVal(result).toString();
+          |                    ^
+      166 |   }
+      167 |
+      168 |   /**
+
+      at Address.fromScVal (node_modules/@stellar/stellar-sdk/lib/cjs/base/address.js:97:13)
+      at PairClient.getLPTokenAddress (src/contracts/pair.ts:165:20)
+          at async Promise.all (index 2)
+      at FactoryModule.getPairInfo (src/modules/factory.ts:154:52)
+      at expectNoRawError (tests/read-smoke-suite.test.ts:176:7)
+      at Object.<anonymous> (tests/read-smoke-suite.test.ts:250:5)
+      at expectNoRawError (tests/read-smoke-suite.test.ts:179:15)
+      at Object.<anonymous> (tests/read-smoke-suite.test.ts:250:5)
+
+  ● Read Smoke Suite › MonitoringModule
+
+    Method getPoolMetrics threw a non-SDK error: Error: Unsupported ScVal type: scvVoid
+
+      148 |     if (!r0 || !r1) throw new Error("Failed to read token addresses");
+      149 |     return {
+    > 150 |       token0: Address.fromScVal(r0).toString(),
+          |                       ^
+      151 |       token1: Address.fromScVal(r1).toString(),
+      152 |     };
+      153 |   }
+
+      at Address.fromScVal (node_modules/@stellar/stellar-sdk/lib/cjs/base/address.js:97:13)
+      at PairClient.getTokens (src/contracts/pair.ts:150:23)
+          at async Promise.all (index 0)
+      at MonitoringModule.getPoolMetrics (src/modules/monitoring.ts:289:66)
+      at expectNoRawError (tests/read-smoke-suite.test.ts:176:7)
+      at Object.<anonymous> (tests/read-smoke-suite.test.ts:279:5)
+      at expectNoRawError (tests/read-smoke-suite.test.ts:179:15)
+      at Object.<anonymous> (tests/read-smoke-suite.test.ts:279:5)
+
+  ● Read Smoke Suite › StopLossModule
+
+    Method getStopLoss threw a non-SDK error: Error: Invalid contract ID: undefined
+
+      441 |    */
+      442 |   private async getOraclePrice(asset: string): Promise<OraclePriceSnapshot> {
+    > 443 |     const oracle = new Contract(this.oracleAddress);
+          |                    ^
+      444 |     const op = oracle.call(
+      445 |       'get_price',
+      446 |       nativeToScVal(asset, { type: 'symbol' }),
+
+      at new Contract (node_modules/@stellar/stellar-sdk/lib/cjs/base/contract.js:22:13)
+      at StopLossModule.getOraclePrice (src/modules/stop-loss.ts:443:20)
+      at StopLossModule.enrichOrder (src/modules/stop-loss.ts:415:33)
+      at StopLossModule.getStopLoss (src/modules/stop-loss.ts:335:17)
+      at expectNoRawError (tests/read-smoke-suite.test.ts:176:7)
+      at Object.<anonymous> (tests/read-smoke-suite.test.ts:288:5)
+      at expectNoRawError (tests/read-smoke-suite.test.ts:179:15)
+      at Object.<anonymous> (tests/read-smoke-suite.test.ts:288:5)
+
+  ● Read Smoke Suite › GovernanceModule
+
+    Method getProposal threw a non-SDK error: TypeError: Cannot read properties of null (reading 'id')
+
+      659 |
+      660 |     return {
+    > 661 |       id: String(native["id"] ?? ""),
+          |                        ^
+      662 |       title: String(native["title"] ?? ""),
+      663 |       description: String(native["description"] ?? ""),
+      664 |       status: (native["status"] as Proposal["status"]) ?? "active",
+
+      at GovernanceModule.decodeProposal (src/modules/governance.ts:661:24)
+      at GovernanceModule.getProposal (src/modules/governance.ts:421:17)
+      at expectNoRawError (tests/read-smoke-suite.test.ts:176:7)
+      at Object.<anonymous> (tests/read-smoke-suite.test.ts:311:5)
+      at expectNoRawError (tests/read-smoke-suite.test.ts:179:15)
+      at Object.<anonymous> (tests/read-smoke-suite.test.ts:311:5)
+
+  ● Read Smoke Suite › DCAModule
+
+    Method getDCAPerformance threw a non-SDK error: TypeError: Cannot read properties of null (reading 'total_invested')
+
+      332 |     const native = scValToNative(sim.returnValue) as Record<string, unknown>;
+      333 |
+    > 334 |     const totalInvested = BigInt(String(native['total_invested'] ?? '0'));
+          |                                               ^
+      335 |     const totalReceived = BigInt(String(native['total_received'] ?? '0'));
+      336 |     const lumpSumReceived = BigInt(String(native['lump_sum_received'] ?? '0'));
+      337 |
+
+      at DCAModule.getDCAPerformance (src/modules/dca.ts:334:47)
+      at expectNoRawError (tests/read-smoke-suite.test.ts:176:7)
+      at Object.<anonymous> (tests/read-smoke-suite.test.ts:322:5)
+      at expectNoRawError (tests/read-smoke-suite.test.ts:179:15)
+      at Object.<anonymous> (tests/read-smoke-suite.test.ts:322:5)
+
+Test Suites: 1 failed, 1 total
+Tests:       11 failed, 10 passed, 21 total
+Snapshots:   0 total
+Time:        2.009 s
+Ran all test suites matching /tests\/read-smoke-suite.test.ts/i.
