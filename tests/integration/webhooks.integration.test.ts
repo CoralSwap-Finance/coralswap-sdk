@@ -19,7 +19,8 @@ import type { Logger } from '../../src/types/common';
  * Cleanup: unregisters every webhook created during the suite in afterAll.
  */
 
-const SKIP = process.env.STELLAR_TESTNET !== 'true';
+const SKIP =
+  process.env.STELLAR_TESTNET !== 'true' || !process.env.TEST_KEYPAIR;
 
 function requireEnv(name: string): string {
   const val = process.env[name];
