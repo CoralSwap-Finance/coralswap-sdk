@@ -4,6 +4,13 @@
  * Aggregated view of a user's open orders and trade history across the limit,
  * DCA and stop-loss modules.
  *
+ * ## Slippage policy
+ *
+ * Swap executions (DCA fills, stop-loss triggers) must specify an explicit
+ * `slippageToleranceBps` bound. If omitted, the SDK default defined by
+ * `DEFAULT_SLIPPAGE_TOLERANCE_BPS` applies. A value of `0` is rejected as
+ * "unlimited slippage" unless the caller explicitly confirms it.
+ *
  * ## RPC audit (#480)
  *
  * Audited for the raw-string `getEvents` topic-filter and zero-anchored
@@ -22,6 +29,8 @@ import { Trade, TradeFilter } from '../types/trade';
 import { UnifiedOrder, OrderSummary } from '../types/order-book';
 import { CoralSwapClient } from '@/client';
 import { validateWithSchema, OrderBookAddressSchema, TradeFilterSchema } from '@/schemas';
+
+const DEFAULT_SLIPPAGE_TOLERANCE_BPS = 100;
 
 // Mock data for open orders
 const MOCK_OPEN_LIMIT_ORDERS: UnifiedOrder[] = [
@@ -52,6 +61,7 @@ const MOCK_OPEN_DCA_ORDERS: UnifiedOrder[] = [
       executedAmount: 1000000000n,
       interval: 24 * 60 * 60, // 1 day
       nextExecution: new Date(Date.now() + 12 * 60 * 60 * 1000),
+      slippageToleranceBps: DEFAULT_SLIPPAGE_TOLERANCE_BPS,
     },
   },
 ];
@@ -67,6 +77,7 @@ const MOCK_OPEN_STOP_LOSS_ORDERS: UnifiedOrder[] = [
     details: {
       amountIn: 100000000n,
       triggerPrice: 40000,
+      slippageToleranceBps: DEFAULT_SLIPPAGE_TOLERANCE_BPS,
     },
   },
 ];
