@@ -1,7 +1,9 @@
 import { CoralSwapClient } from "@/client";
 import { fromSorobanAmount } from "@/utils/amounts";
 import { validateAddress } from "@/utils/validation";
-import { EventCursor, decodeEventTopic, MIN_START_LEDGER } from "@/utils/event-cursor";
+import { decodeEventTopic, MIN_START_LEDGER } from "@/utils/event-cursor";
+import { getEventsPage } from "@/helpers/get-events-page";
+import { xdr } from "@stellar/stellar-sdk";
 
 /**
  * Options for exporting trade history.
@@ -461,21 +463,55 @@ export class TaxReportingModule {
   }
 
   /**
-   * Fetch contract events for the given topics through the shared EventCursor.
+   * Fetch contract events for the given topics through the shared getEventsPage helper.
    *
-   * The cursor encodes topics as base64 XDR ScVals and keeps the ledger cursor
-   * anchored to the chain head — hand-rolling either here is what produced the
-   * raw-string filter bug this module was audited for.
+   * The helper encodes topics as base64 XDR ScVals and handles pagination
+   * transparently, ensuring consistent event retrieval across all modules.
    */
   private async fetchEvents(startLedger: number, topics: string[]): Promise<RawEvent[]> {
-    const cursor = new EventCursor(this.client.server);
-    const events = await cursor.scan({
-      topics,
-      fromLedger: startLedger,
-      limit: MAX_HISTORY_EVENTS,
-    });
+    // Fetch all pages of events for the given topics
+    const allEvents: RawEvent[] = [];
+    let cursor: string | undefined = undefined;
 
-    return events as unknown as RawEvent[];
+    do {
+      const page = await getEventsPage(this.client.server, {
+        topics,
+        startLedger,
+        cursor,
+        limit: MAX_HISTORY_EVENTS,
+      });
+
+      // Convert from EventsPage format to RawEvent format
+      for (const ev of page.events) {
+        allEvents.push({
+          value: (() => {
+            try {
+              return xdr.ScVal.fromXdr(ev.value, 'base64');
+            } catch {
+              return undefined;
+            }
+          })(),
+          topic: ev.topics.map(t => {
+            try {
+              return xdr.ScVal.fromXdr(t, 'base64');
+            } catch {
+              return t;
+            }
+          }),
+          txHash: ev.id,
+          ledgerClosedAt: ev.ledgerClosedAt,
+          ledger: ev.ledger,
+        });
+      }
+
+      if (page.pageInfo.hasNextPage && page.pageInfo.endCursor) {
+        cursor = page.pageInfo.endCursor;
+      } else {
+        cursor = undefined;
+      }
+    } while (cursor);
+
+    return allEvents;
   }
 }
 
