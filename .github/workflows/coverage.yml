@@ -1,0 +1,132 @@
+name: Coverage Gate
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+
+      - name: Run unit tests with coverage
+        run: npx jest --coverage --forceExit
+
+      - name: Check coverage thresholds
+        run: |
+          # The coverageThreshold in jest.config.js will cause Jest to exit with
+          # code 1 if any threshold is not met. The step above already enforces
+          # this. If we reach here, all thresholds passed.
+          echo "✅ All coverage thresholds met."
+
+      - name: Generate coverage summary
+        if: always()
+        id: coverage
+        run: |
+          # Read the JSON summary produced by the json-summary reporter
+          SUMMARY_FILE="coverage/coverage-summary.json"
+          if [ ! -f "$SUMMARY_FILE" ]; then
+            echo "summary=No coverage data found" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Extract key metrics
+          TOTAL_STATEMENTS=$(node -e "const s=require('./$SUMMARY_FILE'); console.log(s.total.statements.pct)")
+          TOTAL_BRANCHES=$(node -e "const s=require('./$SUMMARY_FILE'); console.log(s.total.branches.pct)")
+          TOTAL_FUNCTIONS=$(node -e "const s=require('./$SUMMARY_FILE'); console.log(s.total.functions.pct)")
+          TOTAL_LINES=$(node -e "const s=require('./$SUMMARY_FILE'); console.log(s.total.lines.pct)")
+
+          # Build per-file summary for core modules
+          MODULES="src/modules/monitoring.ts src/modules/webhooks.ts src/modules/alerts.ts src/modules/liquidity.ts src/errors.ts src/modules/tax-reporting.ts src/utils/events.ts"
+          MODULE_ROWS=""
+          for mod in $MODULES; do
+            if node -e "const s=require('./$SUMMARY_FILE'); if(s[$mod]) process.exit(0); else process.exit(1)" 2>/dev/null; then
+              S=$(node -e "const s=require('./$SUMMARY_FILE'); const m=s['$mod']; console.log(m.statements.pct)")
+              B=$(node -e "const s=require('./$SUMMARY_FILE'); const m=s['$mod']; console.log(m.branches.pct)")
+              F=$(node -e "const s=require('./$SUMMARY_FILE'); const m=s['$mod']; console.log(m.functions.pct)")
+              L=$(node -e "const s=require('./$SUMMARY_FILE'); const m=s['$mod']; console.log(m.lines.pct)")
+              MODULE_ROWS="${MODULE_ROWS}| \`${mod}\` | ${S}% | ${B}% | ${F}% | ${L}% |
+"
+            fi
+          done
+
+          # Write the summary as a multi-line output
+          {
+            echo "summary<<COVERAGE_EOF"
+            echo "## 📊 Coverage Report"
+            echo ""
+            echo "### Overall"
+            echo "| Metric | Coverage |"
+            echo "|--------|----------|"
+            echo "| Statements | ${TOTAL_STATEMENTS}% |"
+            echo "| Branches | ${TOTAL_BRANCHES}% |"
+            echo "| Functions | ${TOTAL_FUNCTIONS}% |"
+            echo "| Lines | ${TOTAL_LINES}% |"
+            echo ""
+            echo "### Core Module Coverage"
+            echo "| Module | Statements | Branches | Functions | Lines |"
+            echo "|--------|-----------|----------|-----------|-------|"
+            if [ -n "$MODULE_ROWS" ]; then
+              echo -n "$MODULE_ROWS"
+            else
+              echo "| No module data available | - | - | - | - |"
+            fi
+            echo ""
+            echo "<details><summary>📂 Full coverage report</summary>"
+            echo ""
+            echo "Coverage artifacts are uploaded for detailed inspection."
+            echo "</details>"
+            echo "COVERAGE_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Comment coverage on PR
+        if: always() && steps.coverage.outputs.summary != ''
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = `${{ steps.coverage.outputs.summary }}`;
+
+            // Find existing coverage comment
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const botComment = comments.find(
+              (c) => c.user.type === 'Bot' && c.body.includes('📊 Coverage Report')
+            );
+
+            if (botComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+
+      - name: Upload coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/
+          retention-days: 30
