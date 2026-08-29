@@ -331,6 +331,91 @@ try {
 }
 ```
 
+## Signer Authoring
+
+`CoralSwapClient` never touches a private key directly -- it delegates signing
+to anything implementing the `Signer` interface:
+
+```typescript
+interface Signer {
+  publicKey(): Promise<string>;
+  signTransaction(xdr: string): Promise<string>;
+}
+```
+
+Passing `secretKey` to the constructor is a convenience: internally it just
+builds the SDK's own reference implementation, `KeypairSigner`. To integrate a
+browser wallet (Freighter, Albedo, xBull, a hardware signer, etc.), implement
+`Signer` yourself and pass it as `config.signer` instead:
+
+```typescript
+import { CoralSwapClient, Network, Signer } from "@coralswap/sdk";
+
+class FreighterSigner implements Signer {
+  async publicKey(): Promise<string> {
+    return window.freighter.getPublicKey();
+  }
+
+  async signTransaction(xdr: string): Promise<string> {
+    // The wallet must sign against the same network passphrase the
+    // client is configured for -- see "Matching the network config" below.
+    return window.freighter.signTransaction(xdr, {
+      networkPassphrase: Network.TESTNET,
+    });
+  }
+}
+
+const client = new CoralSwapClient({
+  network: Network.TESTNET,
+  signer: new FreighterSigner(),
+});
+
+// client.submitTransaction(...) now calls FreighterSigner.signTransaction()
+// instead of signing with a locally-held secret key.
+```
+
+### Matching the network config
+
+A signer must sign against the exact network the client talks to. Read it
+from `client.networkConfig` rather than hardcoding it, so a single signer
+implementation works across testnet/mainnet/staging:
+
+```typescript
+const { networkPassphrase, rpcUrl } = client.networkConfig;
+```
+
+`TESTNET_NETWORK`, `MAINNET_NETWORK`, and `STAGING_NETWORK` (also exported
+from the package root) expose the same shape if you need it before a client
+instance exists.
+
+### Building a transaction envelope by hand
+
+Most callers should use `client.submitTransaction(operations)` or
+`client.simulateTransaction(operations, options)`, which already handle
+fetching the account, building, simulating, and (for `submitTransaction`)
+signing and sending. If you're authoring a signer that needs to construct
+and sign a raw envelope itself -- for example to show a wallet a human-
+readable preview before submission -- combine `client.getAccount()` (which
+returns the account's current sequence number, using the same RPC
+retry/fallback as the rest of the client) with the address utilities above:
+
+```typescript
+import { TransactionBuilder } from "@stellar/stellar-sdk";
+import { isValidAddress, toScAddress } from "@coralswap/sdk";
+
+const account = await client.getAccount(); // or client.getAccount(otherPublicKey)
+
+const tx = new TransactionBuilder(account, {
+  fee: "100",
+  networkPassphrase: client.networkConfig.networkPassphrase,
+})
+  .addOperation(op)
+  .setTimeout(client.networkConfig.sorobanTimeout)
+  .build();
+
+const signedXdr = await mySigner.signTransaction(tx.toXDR());
+```
+
 ## Error Handling
 
 ```typescript

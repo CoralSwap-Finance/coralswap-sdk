@@ -393,6 +393,56 @@ describe('CoralSwapClient', () => {
     });
   });
 
+  describe('getAccount()', () => {
+    const mockAccount = {
+      accountId: () => TEST_PUBLIC,
+      sequenceNumber: () => '1234567890',
+      incrementSequenceNumber: jest.fn(),
+    };
+
+    it('defaults to the client\'s own resolved public key', async () => {
+      const client = new CoralSwapClient({
+        network: Network.TESTNET,
+        secretKey: TEST_SECRET,
+      });
+
+      const mockGetAccount = jest.fn().mockResolvedValue(mockAccount);
+      client.server.getAccount = mockGetAccount;
+
+      const account = await client.getAccount();
+
+      expect(account).toBe(mockAccount);
+      expect(mockGetAccount).toHaveBeenCalledWith(TEST_PUBLIC);
+    });
+
+    it('looks up an explicit public key when provided', async () => {
+      const client = new CoralSwapClient({
+        network: Network.TESTNET,
+        secretKey: TEST_SECRET,
+      });
+
+      const otherPublicKey = Keypair.random().publicKey();
+      const mockGetAccount = jest.fn().mockResolvedValue(mockAccount);
+      client.server.getAccount = mockGetAccount;
+
+      await client.getAccount(otherPublicKey);
+
+      expect(mockGetAccount).toHaveBeenCalledWith(otherPublicKey);
+    });
+
+    it('propagates the RPC error when the account cannot be fetched', async () => {
+      const client = new CoralSwapClient({
+        network: Network.TESTNET,
+        secretKey: TEST_SECRET,
+      });
+
+      const mockGetAccount = jest.fn().mockRejectedValue(new Error('account not found'));
+      client.server.getAccount = mockGetAccount;
+
+      await expect(client.getAccount()).rejects.toThrow('account not found');
+    });
+  });
+
   describe('pollTransaction()', () => {
     const mockAccount = {
       accountId: () => TEST_PUBLIC,

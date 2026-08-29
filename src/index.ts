@@ -45,7 +45,7 @@ export {
 
 // Type exports
 export * from "@/types";
-export type { Logger } from "@/types/common";
+export type { Logger, Signer } from "@/types/common";
 
 // Contract clients
 export {
