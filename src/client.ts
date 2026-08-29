@@ -2,6 +2,7 @@ import {
   rpc,
   TransactionBuilder,
   Transaction,
+  Account,
   xdr,
 } from '@stellar/stellar-sdk';
 import { CoralSwapConfig, NetworkConfig, NETWORK_CONFIGS, DEFAULTS } from '@/config';
@@ -708,6 +709,39 @@ export class CoralSwapClient {
         "getLatestLedger",
     );
     return info.sequence;
+  }
+
+  /**
+   * Fetch the current on-chain account state for a public key, including
+   * its sequence number, using this client's configured RPC endpoints
+   * with the same retry/fallback behavior as {@link submitTransaction}.
+   *
+   * Third-party signer authors building a raw `TransactionBuilder`
+   * envelope by hand (rather than calling {@link submitTransaction} or
+   * {@link simulateTransaction}) can use this to fetch the current
+   * sequence number for the account they are signing with, against the
+   * exact network this client is configured for -- without standing up
+   * a second `rpc.Server` themselves.
+   *
+   * @param publicKey - Account to look up. Defaults to this client's own
+   *   resolved public key (see {@link resolvePublicKey}).
+   * @example
+   * const account = await client.getAccount();
+   * const tx = new TransactionBuilder(account, {
+   *   fee: '100',
+   *   networkPassphrase: client.networkConfig.networkPassphrase,
+   * })
+   *   .addOperation(op)
+   *   .setTimeout(30)
+   *   .build();
+   * tx.sign(Keypair.fromSecret(mySecretKey));
+   */
+  async getAccount(publicKey?: string): Promise<Account> {
+    const sourceKey = publicKey ?? (await this.resolvePublicKey());
+    return this.executeWithFallback(
+        (server) => server.getAccount(sourceKey),
+        "getAccount",
+    );
   }
 
   /**
