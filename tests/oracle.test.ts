@@ -137,7 +137,7 @@ describe('OracleModule', () => {
 
   describe('observe', () => {
     it('caches observations from simulated pair responses', async () => {
-      const pairAddress = 'CBQHNAXSI555GX2GS764XZHGMNO5XSARACTBP44JIPYZRVQ73NPFV';
+      const pairAddress = 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC';
 
       let callCount = 0;
       const cumulativeResponses = [
@@ -175,7 +175,7 @@ describe('OracleModule', () => {
 
   describe('getTWAP', () => {
     it('returns null when only one observation exists', async () => {
-      const pairAddress = 'CBQHNAXSI555GX2GS764XZHGMNO5XSARACTBP44JIPYZRVQ73NPFV';
+      const pairAddress = 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC';
 
       const client = mockClient({
         getCumulativePrices: jest.fn().mockResolvedValue({
@@ -192,7 +192,7 @@ describe('OracleModule', () => {
     });
 
     it('returns correct TWAP result after multiple observations', async () => {
-      const pairAddress = 'CBQHNAXSI555GX2GS764XZHGMNO5XSARACTBP44JIPYZRVQ73NPFV';
+      const pairAddress = 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC';
 
       let callCount = 0;
       const responses = [
@@ -231,7 +231,7 @@ describe('OracleModule', () => {
     });
 
     it('returns null when timestamps have not advanced (stale data)', async () => {
-      const pairAddress = 'CBQHNAXSI555GX2GS764XZHGMNO5XSARACTBP44JIPYZRVQ73NPFV';
+      const pairAddress = 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC';
 
       const staleResponse = {
         price0CumulativeLast: 100000000n,
@@ -252,7 +252,7 @@ describe('OracleModule', () => {
     });
 
     it('returns null when time window is below minimum', async () => {
-      const pairAddress = 'CBQHNAXSI555GX2GS764XZHGMNO5XSARACTBP44JIPYZRVQ73NPFV';
+      const pairAddress = 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC';
 
       let callCount = 0;
       const responses = [
@@ -283,7 +283,7 @@ describe('OracleModule', () => {
     });
 
     it('returns TWAP when time window meets minimum threshold', async () => {
-      const pairAddress = 'CBQHNAXSI555GX2GS764XZHGMNO5XSARACTBP44JIPYZRVQ73NPFV';
+      const pairAddress = 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC';
 
       let callCount = 0;
       const responses = [
@@ -315,7 +315,7 @@ describe('OracleModule', () => {
     });
 
     it('allows short window when enforceMinWindow is false', async () => {
-      const pairAddress = 'CBQHNAXSI555GX2GS764XZHGMNO5XSARACTBP44JIPYZRVQ73NPFV';
+      const pairAddress = 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC';
 
       let callCount = 0;
       const responses = [
@@ -349,7 +349,7 @@ describe('OracleModule', () => {
 
   describe('getSpotPrice', () => {
     it('computes spot price from reserves', async () => {
-      const pairAddress = 'CBQHNAXSI555GX2GS764XZHGMNO5XSARACTBP44JIPYZRVQ73NPFV';
+      const pairAddress = 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC';
       const reserve0 = 5000000000n;
       const reserve1 = 10000000000n;
 
@@ -369,7 +369,7 @@ describe('OracleModule', () => {
     });
 
     it('throws when pool has no liquidity', async () => {
-      const pairAddress = 'CBQHNAXSI555GX2GS764XZHGMNO5XSARACTBP44JIPYZRVQ73NPFV';
+      const pairAddress = 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC';
 
       const client = mockClient({
         getReserves: jest.fn().mockResolvedValue({
@@ -387,7 +387,7 @@ describe('OracleModule', () => {
 
   describe('clearCache', () => {
     it('clears observations for a specific pair', async () => {
-      const pairAddress = 'CBQHNAXSI555GX2GS764XZHGMNO5XSARACTBP44JIPYZRVQ73NPFV';
+      const pairAddress = 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC';
 
       const client = mockClient({
         getCumulativePrices: jest.fn().mockResolvedValue({
@@ -408,7 +408,7 @@ describe('OracleModule', () => {
 
   describe('getPriceDeviation', () => {
     it('returns null when TWAP is not yet available', async () => {
-      const pairAddress = 'CBQHNAXSI555GX2GS764XZHGMNO5XSARACTBP44JIPYZRVQ73NPFV';
+      const pairAddress = 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC';
 
       const client = mockClient({
         getCumulativePrices: jest.fn().mockResolvedValue({
@@ -425,7 +425,7 @@ describe('OracleModule', () => {
     });
 
     it('computes price deviation between TWAP and spot price', async () => {
-      const pairAddress = 'CBQHNAXSI555GX2GS764XZHGMNO5XSARACTBP44JIPYZRVQ73NPFV';
+      const pairAddress = 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC';
 
       // Set up spot reserves: reserve0=5000, reserve1=10000
       // Spot price0Per1 = (5000 * PRICE_SCALE) / 10000 = PRICE_SCALE / 2
@@ -469,7 +469,7 @@ describe('OracleModule', () => {
     });
 
     it('computes correct deviation in basis points when prices disagree', async () => {
-      const pairAddress = 'CBQHNAXSI555GX2GS764XZHGMNO5XSARACTBP44JIPYZRVQ73NPFV';
+      const pairAddress = 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC';
 
       const reserve0 = 1000000000n;
       const reserve1 = 1000000000n;
@@ -511,7 +511,7 @@ describe('OracleModule', () => {
     });
 
     it('returns zero deviation when TWAP and spot prices match', async () => {
-      const pairAddress = 'CBQHNAXSI555GX2GS764XZHGMNO5XSARACTBP44JIPYZRVQ73NPFV';
+      const pairAddress = 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC';
 
       const reserve0 = 1000000000n;
       const reserve1 = 2000000000n;
@@ -551,7 +551,7 @@ describe('OracleModule', () => {
     });
 
     it('handles large deviation correctly (flash loan attack scenario)', async () => {
-      const pairAddress = 'CBQHNAXSI555GX2GS764XZHGMNO5XSARACTBP44JIPYZRVQ73NPFV';
+      const pairAddress = 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC';
 
       // Spot price is heavily manipulated (2x the TWAP)
       const reserve0 = 1000000000n;

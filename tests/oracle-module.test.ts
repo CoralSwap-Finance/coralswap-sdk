@@ -52,7 +52,7 @@ function makeObs(
 // ---------------------------------------------------------------------------
 
 describe('OracleModule', () => {
-    const PAIR = 'PAIR_CONTRACT';
+    const PAIR = 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC';
 
     // -----------------------------------------------------------------------
     // computeTWAP() — pure function
@@ -170,36 +170,42 @@ describe('OracleModule', () => {
             const client = createMockClient();
             const oracle = new OracleModule(client);
 
-            await oracle.observe('PAIR_A');
-            await oracle.observe('PAIR_B');
-            expect(oracle.getObservationCount('PAIR_A')).toBe(1);
-            expect(oracle.getObservationCount('PAIR_B')).toBe(1);
+            const PAIR_A = 'CCVAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA463';
+            const PAIR_B = 'CC5QAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB4CG';
+            await oracle.observe(PAIR_A);
+            await oracle.observe(PAIR_B);
+            expect(oracle.getObservationCount(PAIR_A)).toBe(1);
+            expect(oracle.getObservationCount(PAIR_B)).toBe(1);
 
-            oracle.clearCache('PAIR_A');
+            oracle.clearCache(PAIR_A);
 
-            expect(oracle.getObservationCount('PAIR_A')).toBe(0);
-            expect(oracle.getObservationCount('PAIR_B')).toBe(1);
+            expect(oracle.getObservationCount(PAIR_A)).toBe(0);
+            expect(oracle.getObservationCount(PAIR_B)).toBe(1);
         });
 
         it('clearCache() without args removes all observations', async () => {
             const client = createMockClient();
             const oracle = new OracleModule(client);
 
-            await oracle.observe('PAIR_A');
-            await oracle.observe('PAIR_B');
-            await oracle.observe('PAIR_C');
+            const PAIR_A = 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC';
+            const PAIR_B = 'CCVAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA463';
+            const PAIR_C = 'CC5QAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB4CG';
+            await oracle.observe(PAIR_A);
+            await oracle.observe(PAIR_B);
+            await oracle.observe(PAIR_C);
 
             oracle.clearCache();
 
-            expect(oracle.getObservationCount('PAIR_A')).toBe(0);
-            expect(oracle.getObservationCount('PAIR_B')).toBe(0);
-            expect(oracle.getObservationCount('PAIR_C')).toBe(0);
+            expect(oracle.getObservationCount(PAIR_A)).toBe(0);
+            expect(oracle.getObservationCount(PAIR_B)).toBe(0);
+            expect(oracle.getObservationCount(PAIR_C)).toBe(0);
         });
 
         it('getObservationCount() returns 0 for unknown pairs', () => {
             const oracle = new OracleModule(createMockClient());
 
-            expect(oracle.getObservationCount('UNKNOWN_PAIR')).toBe(0);
+            const UNKNOWN = 'CDGAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGVG';
+            expect(oracle.getObservationCount(UNKNOWN)).toBe(0);
         });
     });
 

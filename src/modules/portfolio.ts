@@ -142,6 +142,15 @@ export class PortfolioModule extends TreasuryModule {
     entry: PortfolioEntrySnapshot,
   ): Promise<PortfolioPnL> {
     validateAddress(owner, "owner");
+    if (!entry || typeof entry !== 'object') {
+      throw new PortfolioCalculationError('unknown', 'entry must be a valid PortfolioEntrySnapshot');
+    }
+    if (!entry.positions || !Array.isArray(entry.positions)) {
+      throw new PortfolioCalculationError('unknown', 'entry.positions must be an array');
+    }
+    if (typeof entry.totalValueUSD !== 'number') {
+      throw new PortfolioCalculationError('unknown', 'entry.totalValueUSD must be a number');
+    }
 
     const pairAddresses = entry.positions.map((p) => p.pairAddress);
     const current = await this.getPortfolio(owner, { pairAddresses });
