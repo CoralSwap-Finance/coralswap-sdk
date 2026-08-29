@@ -99,6 +99,83 @@ describe('CoralSwapClient', () => {
       expect(client.networkConfig.rpcUrl).toBe(customRpcUrl);
     });
 
+    it('rejects cleartext http RPC URL on mainnet', () => {
+      expect(
+        () => new CoralSwapClient({
+          network: Network.MAINNET,
+          secretKey: TEST_SECRET,
+          rpcUrl: 'http://localhost:8000',
+        }),
+      ).toThrow(/cleartext/i);
+    });
+
+    it('rejects cleartext ws RPC URL on mainnet', () => {
+      expect(
+        () => new CoralSwapClient({
+          network: Network.MAINNET,
+          secretKey: TEST_SECRET,
+          rpcUrl: 'ws://localhost:8000',
+        }),
+      ).toThrow(/cleartext/i);
+    });
+
+    it('rejects cleartext in any fallback URL on mainnet', () => {
+      expect(
+        () => new CoralSwapClient({
+          network: Network.MAINNET,
+          secretKey: TEST_SECRET,
+          rpcUrl: ['https://rpc.example.com', 'http://rpc.example.com'],
+        }),
+      ).toThrow(/cleartext/i);
+    });
+
+    it('rejects a malformed RPC URL', () => {
+      expect(
+        () => new CoralSwapClient({
+          network: Network.TESTNET,
+          secretKey: TEST_SECRET,
+          rpcUrl: 'not-a-url',
+        }),
+      ).toThrow(/not a valid URL/);
+    });
+
+    it('allows cleartext http RPC URL on testnet (dev/test network)', () => {
+      const client = new CoralSwapClient({
+        network: Network.TESTNET,
+        secretKey: TEST_SECRET,
+        rpcUrl: 'http://localhost:8000',
+      });
+
+      expect(client.networkConfig.rpcUrl).toBe('http://localhost:8000');
+    });
+
+    it('allows cleartext http RPC URL on staging network', () => {
+      const client = new CoralSwapClient({
+        network: Network.STAGING,
+        secretKey: TEST_SECRET,
+        rpcUrl: 'http://localhost:8000',
+      });
+
+      expect(client.networkConfig.rpcUrl).toBe('http://localhost:8000');
+    });
+
+    it('allows https and wss RPC URLs on mainnet', () => {
+      expect(
+        () => new CoralSwapClient({
+          network: Network.MAINNET,
+          secretKey: TEST_SECRET,
+          rpcUrl: 'https://soroban.stellar.org',
+        }),
+      ).not.toThrow();
+      expect(
+        () => new CoralSwapClient({
+          network: Network.MAINNET,
+          secretKey: TEST_SECRET,
+          rpcUrl: 'wss://soroban.stellar.org',
+        }),
+      ).not.toThrow();
+    });
+
     it('exports ConnectionPool from the package root', () => {
       expect(ConnectionPool).toBeDefined();
     });
