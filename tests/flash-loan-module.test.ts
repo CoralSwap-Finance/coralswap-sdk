@@ -4,7 +4,7 @@ import { PairClient } from "../src/contracts/pair";
 import { FlashLoanError, TransactionError, FlashLoanFailedError, ValidationError } from "../src/errors";
 import { Network } from "../src/types/common";
 import { FlashLoanConfig } from "../src/types/pool";
-import { xdr, Address, nativeToScVal, SorobanRpc } from "@stellar/stellar-sdk";
+import { xdr, Address, nativeToScVal, rpc as SorobanRpc } from "@stellar/stellar-sdk";
 import { EventParser, EVENT_TOPICS } from "../src/utils/events";
 
 /**
@@ -45,6 +45,14 @@ describe("FlashLoanModule", () => {
 
     // Mock the client.pair() method to return our mock
     jest.spyOn(client, "pair").mockReturnValue(mockPairClient);
+
+    // execute()'s success path fetches the full transaction to decode events;
+    // default to a non-SUCCESS status so tests that don't care about event
+    // parsing skip it cleanly instead of hitting the real (unmocked) testnet
+    // RPC with a fake tx hash.
+    jest
+      .spyOn(client.server, "getTransaction")
+      .mockResolvedValue({ status: "NOT_FOUND" } as any);
   });
 
   afterEach(() => {
@@ -622,14 +630,12 @@ function makeDiagnosticEvent(
   const contractBuf = Address.fromString(contractAddr).toBuffer();
   const topics = [symbolVal(topic)];
   const bodyV0 = new xdr.ContractEventV0({ topics, data });
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const body = new (xdr.ContractEventBody as any)(0, bodyV0) as xdr.ContractEventBody;
+  const body = xdr.ContractEventBody.v0(bodyV0) as xdr.ContractEventBody;
 
   const contractEvent = new xdr.ContractEvent({
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ext: new (xdr.ExtensionPoint as any)(0) as xdr.ExtensionPoint,
+    ext: xdr.ExtensionPoint.v0() as xdr.ExtensionPoint,
     contractId: contractBuf,
-    type: xdr.ContractEventType.contract(),
+    type: xdr.ContractEventType.contract,
     body,
   });
 
@@ -637,6 +643,27 @@ function makeDiagnosticEvent(
     inSuccessfulContractCall: true,
     event: contractEvent,
   });
+}
+
+function makeTransactionMeta(
+  diagnosticEvents: xdr.DiagnosticEvent[],
+): xdr.TransactionMeta {
+  const sorobanMeta = new xdr.SorobanTransactionMeta({
+    ext: xdr.SorobanTransactionMetaExt.v0() as xdr.SorobanTransactionMetaExt,
+    events: [],
+    returnValue: xdr.ScVal.scvVoid(),
+    diagnosticEvents,
+  });
+
+  const metaV3 = new xdr.TransactionMetaV3({
+    ext: xdr.ExtensionPoint.v0() as xdr.ExtensionPoint,
+    txChangesBefore: [],
+    operations: [],
+    txChangesAfter: [],
+    sorobanMeta,
+  });
+
+  return xdr.TransactionMeta.v3(metaV3) as xdr.TransactionMeta;
 }
 
 describe("FlashLoanModule - Event Parsing", () => {
@@ -726,13 +753,7 @@ describe("FlashLoanModule - Event Parsing", () => {
       const mockTxResponse = {
         status: "SUCCESS",
         ledger,
-        resultMetaXdr: {
-          v3: () => ({
-            sorobanMeta: () => ({
-              diagnosticEvents: () => [diagnosticEvent],
-            }),
-          }),
-        },
+        resultMetaXdr: makeTransactionMeta([diagnosticEvent]),
       } as unknown as SorobanRpc.Api.GetTransactionResponse;
 
       jest
@@ -834,13 +855,7 @@ describe("FlashLoanModule - Event Parsing", () => {
       const mockTxResponse = {
         status: "SUCCESS",
         ledger,
-        resultMetaXdr: {
-          v3: () => ({
-            sorobanMeta: () => ({
-              diagnosticEvents: () => [diagnosticEvent],
-            }),
-          }),
-        },
+        resultMetaXdr: makeTransactionMeta([diagnosticEvent]),
       } as unknown as SorobanRpc.Api.GetTransactionResponse;
 
       jest
@@ -895,13 +910,7 @@ describe("FlashLoanModule - Event Parsing", () => {
       const mockTxResponse = {
         status: "SUCCESS",
         ledger,
-        resultMetaXdr: {
-          v3: () => ({
-            sorobanMeta: () => ({
-              diagnosticEvents: () => [diagnosticEvent],
-            }),
-          }),
-        },
+        resultMetaXdr: makeTransactionMeta([diagnosticEvent]),
       } as unknown as SorobanRpc.Api.GetTransactionResponse;
 
       jest
@@ -968,13 +977,7 @@ describe("FlashLoanModule - Event Parsing", () => {
       const mockTxResponse = {
         status: "SUCCESS",
         ledger,
-        resultMetaXdr: {
-          v3: () => ({
-            sorobanMeta: () => ({
-              diagnosticEvents: () => [syncEvent, flashLoanEvent],
-            }),
-          }),
-        },
+        resultMetaXdr: makeTransactionMeta([syncEvent, flashLoanEvent]),
       } as unknown as SorobanRpc.Api.GetTransactionResponse;
 
       jest
@@ -1029,13 +1032,7 @@ describe("FlashLoanModule - Event Parsing", () => {
       const mockTxResponse = {
         status: "SUCCESS",
         ledger,
-        resultMetaXdr: {
-          v3: () => ({
-            sorobanMeta: () => ({
-              diagnosticEvents: () => [diagnosticEvent],
-            }),
-          }),
-        },
+        resultMetaXdr: makeTransactionMeta([diagnosticEvent]),
       } as unknown as SorobanRpc.Api.GetTransactionResponse;
 
       jest

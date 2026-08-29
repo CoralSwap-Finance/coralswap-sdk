@@ -1,5 +1,6 @@
 import { Network, Logger, Signer } from '@/types/common';
 import { PollingStrategy } from '@/utils/polling';
+import { RateLimiter } from '@/utils/rate-limiter';
 
 /**
  * Contract addresses per network deployment.
@@ -43,19 +44,70 @@ export interface CoralSwapConfig {
   retryDelayMs?: number;
   /** Maximum delay in milliseconds between retry attempts */
   maxRetryDelayMs?: number;
+  /**
+   * Maximum total time in milliseconds allowed for a single RPC call,
+   * including every retry attempt. Once the deadline is exceeded, retries
+   * stop and a `DeadlineError` is thrown instead.
+   *
+   * The deadline is measured per call — each RPC call gets a fresh window
+   * starting when the call begins.
+   *
+   * If omitted (the default), RPC calls retry up to `maxRetries` with no
+   * overall time bound, identical to previous SDK versions.
+   *
+   * @example
+   * ```ts
+   * import { CoralSwapClient, Network } from '@coralswap/sdk';
+   *
+   * const client = new CoralSwapClient({
+   *   network: Network.TESTNET,
+   *   secretKey: 'S...',
+   *   // Bound the total time spent on any single RPC call (including
+   *   // retries) to 5 seconds.
+   *   deadlineMs: 5000,
+   * });
+   *
+   * // Retries stop and a DeadlineError is thrown once 5s elapse.
+   * const healthy = await client.isHealthy();
+   * ```
+   */
+  deadlineMs?: number;
   pollingStrategy?: PollingStrategy;
   pollingIntervalMs?: number;
   maxPollingAttempts?: number;
   pollingBackoffFactor?: number;
   maxPollingIntervalMs?: number;
+  /**
+   * Optional rate limiter to throttle outbound RPC requests.
+   *
+   * When provided, every RPC call made by `CoralSwapClient` will call
+   * `rateLimiter.acquire()` before dispatching the request. This is useful
+   * when targeting public Soroban RPC endpoints that enforce request-rate
+   * limits.
+   *
+   * If omitted (the default), no throttling is applied and behaviour is
+   * identical to previous SDK versions.
+   *
+   * @example
+   * ```ts
+   * import { CoralSwapClient, Network, RateLimiter } from '@coralswap/sdk';
+   *
+   * const client = new CoralSwapClient({
+   *   network: Network.TESTNET,
+   *   secretKey: 'S...',
+   *   rateLimiter: new RateLimiter({ maxRequestsPerSecond: 5, maxBurst: 10 }),
+   * });
+   * ```
+   */
+  rateLimiter?: RateLimiter;
 }
 
 /** Network configuration for the Stellar testnet. */
 export const TESTNET_NETWORK: NetworkConfig = {
   rpcUrl: "https://soroban-testnet.stellar.org",
   networkPassphrase: "Test SDF Network ; September 2015",
-  factoryAddress: "",
-  routerAddress: "",
+  factoryAddress: "CBLBMYODT37R3GJZLEFCGCYWOOVEUZ3MMTVR2QCOKOK2UPKSI3CXZBNB",
+  routerAddress: "CCDQYZKX5AUI7KSWXIFI7AFRQMWCZMOOUJXIDWEJ4IYX7XE7PHCMCBAF",
   sorobanTimeout: 30,
 };
 
@@ -72,8 +124,8 @@ export const MAINNET_NETWORK: NetworkConfig = {
 export const STAGING_NETWORK: NetworkConfig = {
   rpcUrl: "https://soroban-testnet.stellar.org",
   networkPassphrase: "Test SDF Network ; September 2015",
-  factoryAddress: "",
-  routerAddress: "",
+  factoryAddress: "CBLBMYODT37R3GJZLEFCGCYWOOVEUZ3MMTVR2QCOKOK2UPKSI3CXZBNB",
+  routerAddress: "CCDQYZKX5AUI7KSWXIFI7AFRQMWCZMOOUJXIDWEJ4IYX7XE7PHCMCBAF",
   sorobanTimeout: 30,
 };
 

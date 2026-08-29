@@ -1,7 +1,7 @@
 import { CoralSwapClient } from "@/client";
 import { fromSorobanAmount } from "@/utils/amounts";
 import { validateAddress } from "@/utils/validation";
-import { SorobanRpc } from "@stellar/stellar-sdk";
+import { EventCursor, decodeEventTopic, MIN_START_LEDGER } from "@/utils/event-cursor";
 
 /**
  * Options for exporting trade history.
@@ -95,6 +95,9 @@ const TOKEN_DECIMALS = 7;
 /** Default ledger history window when no date range is provided. */
 const DEFAULT_HISTORY_WINDOW = 17280; // ~1 day of ledgers
 
+/** Upper bound on events pulled per topic for a single report. */
+const MAX_HISTORY_EVENTS = 200;
+
 /**
  * Tax reporting module for CoralSwap.
  *
@@ -132,7 +135,9 @@ export class TaxReportingModule {
     const { format = "csv", fromDate, toDate, timezone = "UTC" } = options;
 
     const currentLedger = await this.client.getCurrentLedger();
-    const startLedger = Math.max(0, currentLedger - DEFAULT_HISTORY_WINDOW);
+    // Anchored against the chain head rather than clamped to ledger 0, which
+    // is not a cursor the RPC accepts.
+    const startLedger = Math.max(MIN_START_LEDGER, currentLedger - DEFAULT_HISTORY_WINDOW);
 
     const [swapEvents, liquidityEvents] = await Promise.all([
       this.fetchSwapEvents(address, startLedger),
@@ -213,7 +218,9 @@ export class TaxReportingModule {
     const rows: TaxReportRow[] = [];
 
     for (const ev of [...addEvents, ...removeEvents]) {
-      const isAdd = (ev.topic?.[0] ?? "") === "add_liquidity";
+      // Event topics are XDR ScVals: comparing them to a bare string always
+      // failed, which silently reported every add_liquidity as a removal.
+      const isAdd = decodeEventTopic(ev.topic?.[0]) === "add_liquidity";
       const data = decodeMapEvent(ev.value);
       if (!data) continue;
 
@@ -300,11 +307,6 @@ export class TaxReportingModule {
         const disposalQty = BigInt(
           Math.floor(parseFloat(row.amountIn) * 10_000_000)
         );
-        const salePrice = (
-          BigInt(Math.floor(parseFloat(row.amountOut) * 10_000_000)) /
-          disposalQty
-        ).toString();
-
         const orderedPurchases = method === "FIFO" ? purchases : [...purchases].reverse();
         let remainingDisposal = disposalQty;
         let disposalCostBasis = 0n;
@@ -458,19 +460,22 @@ export class TaxReportingModule {
     };
   }
 
-  private async fetchEvents(
-    startLedger: number,
-    topics: string[],
-  ): Promise<RawEvent[]> {
-    const request: SorobanRpc.Server.GetEventsRequest = {
-      startLedger,
-      filters: [{ type: "contract", contractIds: [], topics: [topics] }],
-      limit: 200,
-    };
+  /**
+   * Fetch contract events for the given topics through the shared EventCursor.
+   *
+   * The cursor encodes topics as base64 XDR ScVals and keeps the ledger cursor
+   * anchored to the chain head — hand-rolling either here is what produced the
+   * raw-string filter bug this module was audited for.
+   */
+  private async fetchEvents(startLedger: number, topics: string[]): Promise<RawEvent[]> {
+    const cursor = new EventCursor(this.client.server);
+    const events = await cursor.scan({
+      topics,
+      fromLedger: startLedger,
+      limit: MAX_HISTORY_EVENTS,
+    });
 
-    const response = await this.client.server.getEvents(request);
-    if (!response || !Array.isArray(response.events)) return [];
-    return response.events as unknown as RawEvent[];
+    return events as unknown as RawEvent[];
   }
 }
 
@@ -480,7 +485,8 @@ export class TaxReportingModule {
 
 interface RawEvent {
   value: unknown;
-  topic?: string[];
+  /** Topic entries are XDR ScVals (or base64 XDR on raw responses). */
+  topic?: unknown[];
   txHash?: string;
   ledgerClosedAt?: string | number;
   ledger?: number;

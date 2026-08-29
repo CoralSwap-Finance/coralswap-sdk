@@ -21,7 +21,12 @@ import { toSorobanAmount } from '../../src/utils/amounts';
  * is already sufficient. Removes all LP added during the suite in afterAll.
  */
 
-const SKIP = process.env.STELLAR_TESTNET !== 'true';
+// Skip unless the full set of testnet fixtures is configured, so the suite
+// degrades to a clean skip on forks/PRs without secrets.
+const SKIP =
+  process.env.STELLAR_TESTNET !== 'true' ||
+  !process.env.TEST_KEYPAIR ||
+  !process.env.TEST_TOKEN_C;
 
 function requireEnv(name: string): string {
   const val = process.env[name];

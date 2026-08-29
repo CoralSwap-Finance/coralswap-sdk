@@ -9,6 +9,12 @@ import {
 import { TreasuryModule, TreasuryModuleOptions } from "@/modules/treasury";
 import { PositionsModule } from "@/modules/positions";
 import { validateAddress } from "@/utils/validation";
+import {
+  MissingPriceFeedError,
+  AddressNotFoundError,
+  PortfolioCalculationError,
+  CoralSwapSDKError,
+} from "@/errors";
 
 const STROOP = 1e7;
 
@@ -48,36 +54,59 @@ export class PortfolioModule extends TreasuryModule {
   ): Promise<Portfolio> {
     validateAddress(owner, "owner");
 
-    const summary = await this.positions.getPositions(owner, {
-      pairAddresses: options.pairAddresses,
-      includeEmpty: false,
-    });
+    let summary;
+    try {
+      summary = await this.positions.getPositions(owner, {
+        pairAddresses: options.pairAddresses,
+        includeEmpty: false,
+      });
+    } catch (err) {
+      if (err instanceof CoralSwapSDKError) throw err;
+      throw new AddressNotFoundError(owner, this.portfolioClient.network);
+    }
 
     const allPairs =
       options.pairAddresses && options.pairAddresses.length > 0
         ? options.pairAddresses
         : await this.portfolioClient.factory.getAllPairs();
 
-    const priceMap = await this.buildPriceMap(allPairs);
+    const { priceMap } = await this.buildPriceMapTracked(allPairs);
 
-    const positions: PortfolioPosition[] = summary.positions.map((pos) => {
+    const positions: PortfolioPosition[] = [];
+    for (const pos of summary.positions) {
       const price0 = priceMap.get(pos.token0) ?? 0;
       const price1 = priceMap.get(pos.token1) ?? 0;
-      const valueUSD =
-        (Number(pos.token0Amount) / STROOP) * price0 +
-        (Number(pos.token1Amount) / STROOP) * price1;
 
-      return {
-        pairAddress: pos.pairAddress,
-        lpTokenAddress: pos.lpTokenAddress,
-        token0: pos.token0,
-        token1: pos.token1,
-        lpBalance: pos.balance,
-        token0Amount: pos.token0Amount,
-        token1Amount: pos.token1Amount,
-        valueUSD,
-      };
-    });
+      if (!priceMap.has(pos.token0)) {
+        throw new MissingPriceFeedError(pos.token0, false);
+      }
+      if (!priceMap.has(pos.token1)) {
+        throw new MissingPriceFeedError(pos.token1, false);
+      }
+
+      try {
+        const valueUSD =
+          (Number(pos.token0Amount) / STROOP) * price0 +
+          (Number(pos.token1Amount) / STROOP) * price1;
+
+        positions.push({
+          pairAddress: pos.pairAddress,
+          lpTokenAddress: pos.lpTokenAddress,
+          token0: pos.token0,
+          token1: pos.token1,
+          lpBalance: pos.balance,
+          token0Amount: pos.token0Amount,
+          token1Amount: pos.token1Amount,
+          valueUSD,
+        });
+      } catch (err) {
+        if (err instanceof CoralSwapSDKError) throw err;
+        throw new PortfolioCalculationError(
+          pos.pairAddress,
+          err instanceof Error ? err.message : String(err),
+        );
+      }
+    }
 
     const totalValueUSD = positions.reduce((sum, p) => sum + p.valueUSD, 0);
 
@@ -127,6 +156,66 @@ export class PortfolioModule extends TreasuryModule {
       pnlUSD,
       pnlPercent,
     };
+  }
+
+  /**
+   * Build a price map and track which tokens had no price feed.
+   *
+   * Unlike the inherited {@link TreasuryModule.buildPriceMap}, this version
+   * reports missing tokens so callers can decide whether to warn or fail.
+   */
+  private async buildPriceMapTracked(
+    allPairs: string[],
+  ): Promise<{ priceMap: Map<string, number>; missingTokens: string[] }> {
+    const prices = new Map<string, number>();
+    const missingTokens: string[] = [];
+
+    for (const addr of this.stableAddresses) {
+      prices.set(addr, 1.0);
+    }
+
+    if (this.stableAddresses.size > 0) {
+      for (const pairAddress of allPairs) {
+        try {
+          const pair = this.portfolioClient.pair(pairAddress);
+          const [{ token0, token1 }, { reserve0, reserve1 }] = await Promise.all([
+            pair.getTokens(),
+            pair.getReserves(),
+          ]);
+
+          if (reserve0 === 0n || reserve1 === 0n) continue;
+
+          if (this.stableAddresses.has(token0) && !prices.has(token1)) {
+            prices.set(token1, Number(reserve0) / Number(reserve1));
+          } else if (this.stableAddresses.has(token1) && !prices.has(token0)) {
+            prices.set(token0, Number(reserve1) / Number(reserve0));
+          }
+        } catch {
+          continue;
+        }
+      }
+    }
+
+    // Collect tokens that appear in pairs but have no price
+    const allTokens = new Set<string>();
+    for (const pairAddress of allPairs) {
+      try {
+        const pair = this.portfolioClient.pair(pairAddress);
+        const { token0, token1 } = await pair.getTokens();
+        allTokens.add(token0);
+        allTokens.add(token1);
+      } catch {
+        continue;
+      }
+    }
+
+    for (const token of allTokens) {
+      if (!prices.has(token)) {
+        missingTokens.push(token);
+      }
+    }
+
+    return { priceMap: prices, missingTokens };
   }
 }
 

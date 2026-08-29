@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { CoralSwapClient } from '@/client';
 import {
   StopLossParams,
@@ -6,6 +7,7 @@ import {
   StopLossStatus,
 } from '@/types/stop-loss';
 import { Signer } from '@/types/common';
+import { SwapRequest } from '@/types/swap';
 import { GasEstimate } from '@/types/gas';
 import {
   ValidationError,
@@ -13,12 +15,10 @@ import {
   StaleOracleError,
   DecodeError,
 } from '@/errors';
-import {
-  validateAddress,
-  validatePositiveAmount,
-  validateDistinctTokens,
-} from '@/utils/validation';
+import { isValidAddress } from '@/utils/addresses';
+import { validateAddress } from '@/utils/validation';
 import { estimateGas } from '@/utils/gas';
+import type { SwapModule } from '@/modules/swap';
 import {
   Contract,
   nativeToScVal,
@@ -26,6 +26,13 @@ import {
   scValToNative,
   xdr,
 } from '@stellar/stellar-sdk';
+
+/**
+ * Default maximum age for oracle prices (in milliseconds).
+ * Prices older than this are considered stale and will trigger a StaleOracleError.
+ * Set to 5 minutes to align with TWAP minimum window.
+ */
+export const DEFAULT_STALE_AFTER_MS = 5 * 60 * 1000; // 5 minutes
 
 type DecodedStopLossOrder = Omit<StopLossOrder, 'currentPrice' | 'triggered' | 'distancePercent'>;
 
@@ -37,6 +44,29 @@ interface OraclePriceSnapshot {
 interface TriggerEvaluationOptions {
   staleAfterMs?: number;
 }
+
+const StopLossParamsSchema = z.object({
+  tokenIn: z
+    .string()
+    .min(1, 'tokenIn must not be empty')
+    .refine((v) => isValidAddress(v), 'tokenIn is not a valid Stellar address'),
+  tokenOut: z
+    .string()
+    .min(1, 'tokenOut must not be empty')
+    .refine((v) => isValidAddress(v), 'tokenOut is not a valid Stellar address'),
+  amount: z.bigint().positive('amount must be greater than 0'),
+  triggerPrice: z.bigint().positive('triggerPrice must be greater than 0'),
+  pairAddress: z
+    .string()
+    .min(1, 'pairAddress must not be empty')
+    .refine((v) => isValidAddress(v), 'pairAddress is not a valid Stellar address'),
+  oracleAsset: z
+    .string()
+    .refine((v) => v.trim().length > 0, 'oracleAsset must not be empty'),
+}).refine(
+  (data) => data.tokenIn !== data.tokenOut,
+  { message: 'tokenIn and tokenOut must be different addresses', path: ['tokenIn'] },
+);
 
 /**
  * Stop-Loss module — automated stop-loss orders with RedStone trigger detection.
@@ -79,43 +109,30 @@ export class StopLossModule {
    *
    * The current market price is read from the RedStone feed and the trigger
    * price is required to be strictly below it — a stop-loss above market would
-   * fire immediately and is rejected.
+   * fire immediately and is rejected. The same price read is also subject to
+   * the oracle-freshness guard used elsewhere in this module (see
+   * {@link enrichOrder}), so an order can never be configured against a
+   * stale price. The threshold defaults to {@link DEFAULT_STALE_AFTER_MS}.
    *
    * @param params - Order parameters (tokens, amount, trigger, pair, feed)
    * @param signer - Wallet signer that owns and authorises the order
+   * @param options - Optional freshness guard for the oracle read used to
+   *   configure the order
    * @returns The unique order ID assigned by the contract
    * @throws {ValidationError} If addresses are invalid, tokens are identical,
    *   the amount or trigger price is non-positive, the oracle asset is empty,
    *   or the trigger price is not below the current market price
+   * @throws {StaleOracleError} If the oracle price used to configure the
+   *   order is older than `options.staleAfterMs` (or {@link DEFAULT_STALE_AFTER_MS})
    * @throws {TransactionError} If the transaction is rejected on-chain
    */
-  async createStopLoss(params: StopLossParams, signer: Signer): Promise<string> {
-    this.validateStopLossParams(params);
-
-    const currentPrice = await this.getOraclePrice(params.oracleAsset);
-    if (params.triggerPrice >= currentPrice.price) {
-      throw new ValidationError(
-        'triggerPrice must be below the current market price',
-        {
-          triggerPrice: params.triggerPrice.toString(),
-          currentPrice: currentPrice.price.toString(),
-        },
-      );
-    }
-
+  async createStopLoss(
+    params: StopLossParams,
+    signer: Signer,
+    options: TriggerEvaluationOptions = {},
+  ): Promise<string> {
     const signerPublicKey = await signer.publicKey();
-    const contract = new Contract(this.contractAddress);
-
-    const op = contract.call(
-      'create_stop_loss',
-      new Address(params.tokenIn).toScVal(),
-      new Address(params.tokenOut).toScVal(),
-      nativeToScVal(params.amount, { type: 'i128' }),
-      nativeToScVal(params.triggerPrice, { type: 'i128' }),
-      new Address(params.pairAddress).toScVal(),
-      nativeToScVal(params.oracleAsset, { type: 'symbol' }),
-      new Address(signerPublicKey).toScVal(),
-    );
+    const op = await this.buildCreateStopLossOperation(params, signerPublicKey, options);
 
     const result = await this.client.submitTransaction([op], signerPublicKey);
 
@@ -127,6 +144,114 @@ export class StopLossModule {
     }
 
     return result.txHash!;
+  }
+
+  /**
+   * Execute a swap and create a protective stop-loss on the resulting
+   * position as a single atomic transaction.
+   *
+   * Swapping into a position and then placing a stop-loss are normally two
+   * sequential transactions, leaving the new position unprotected if the
+   * second call fails. This composes both operations with a
+   * {@link TransactionComposer} so either both land or neither does — there
+   * is no window where the swap succeeded but the stop-loss did not.
+   *
+   * @param swapModule - The client's {@link SwapModule}, used to price and
+   *   build the swap leg
+   * @param swapRequest - The swap to execute before placing the stop-loss
+   * @param stopLossParams - Parameters for the protective stop-loss order
+   * @param signer - Wallet signer that owns and authorises both operations
+   * @param options - Optional freshness guard for the oracle read used to
+   *   configure the stop-loss
+   * @returns The transaction hash and ledger of the single atomic transaction
+   * @throws {ValidationError} If either leg's parameters are invalid, or the
+   *   trigger price is not below the current market price
+   * @throws {StaleOracleError} If the oracle price is stale
+   * @throws {TransactionError} If the composed transaction is rejected —
+   *   in that case neither the swap nor the stop-loss took effect
+   *
+   * @example
+   * ```ts
+   * const { txHash } = await stopLoss.swapAndCreateStopLoss(
+   *   client.swap,
+   *   { tokenIn: 'CAAA...', tokenOut: 'CBBB...', amount: 1_000_0000000n, tradeType: TradeType.EXACT_IN },
+   *   { tokenIn: 'CBBB...', tokenOut: 'CAAA...', amount: 950_0000000n, triggerPrice: 9_000_000n, pairAddress: 'CPPP...', oracleAsset: 'XLM' },
+   *   mySigner,
+   * );
+   * ```
+   */
+  async swapAndCreateStopLoss(
+    swapModule: SwapModule,
+    swapRequest: SwapRequest,
+    stopLossParams: StopLossParams,
+    signer: Signer,
+    options: TriggerEvaluationOptions = {},
+  ): Promise<{ txHash: string; ledger: number }> {
+    const signerPublicKey = await signer.publicKey();
+
+    const quote = await swapModule.getQuote(swapRequest);
+    const swapOp = swapModule.buildSwapOperation(swapRequest, quote);
+    const stopLossOp = await this.buildCreateStopLossOperation(
+      stopLossParams,
+      signerPublicKey,
+      options,
+    );
+
+    const composer = this.client.transactionComposer();
+    composer.addOperation(swapOp).addOperation(stopLossOp);
+
+    const result = await composer.submit();
+
+    if (!result.success || !result.data) {
+      throw new TransactionError(
+        `swapAndCreateStopLoss failed: ${result.error?.message ?? 'Unknown error'}`,
+        result.txHash,
+      );
+    }
+
+    return result.data;
+  }
+
+  /**
+   * Validate order parameters, read the current oracle price (rejecting it
+   * if stale), and build the `create_stop_loss` operation without submitting.
+   *
+   * Shared by {@link createStopLoss} and {@link swapAndCreateStopLoss} so both
+   * paths apply the same freshness guard to the price used at creation time.
+   */
+  private async buildCreateStopLossOperation(
+    params: StopLossParams,
+    signerPublicKey: string,
+    options: TriggerEvaluationOptions,
+  ): Promise<xdr.Operation> {
+    this.validateStopLossParams(params);
+
+    const currentPrice = await this.getOraclePrice(params.oracleAsset);
+    const staleAfterMs = options.staleAfterMs ?? DEFAULT_STALE_AFTER_MS;
+    this.assertOracleFresh(currentPrice, params.oracleAsset, staleAfterMs);
+
+    if (params.triggerPrice >= currentPrice.price) {
+      throw new ValidationError(
+        'triggerPrice must be below the current market price',
+        {
+          triggerPrice: params.triggerPrice.toString(),
+          currentPrice: currentPrice.price.toString(),
+        },
+      );
+    }
+
+    const contract = new Contract(this.contractAddress);
+
+    return contract.call(
+      'create_stop_loss',
+      new Address(params.tokenIn).toScVal(),
+      new Address(params.tokenOut).toScVal(),
+      nativeToScVal(params.amount, { type: 'i128' }),
+      nativeToScVal(params.triggerPrice, { type: 'i128' }),
+      new Address(params.pairAddress).toScVal(),
+      nativeToScVal(params.oracleAsset, { type: 'symbol' }),
+      new Address(signerPublicKey).toScVal(),
+    );
   }
 
   /**
@@ -187,7 +312,10 @@ export class StopLossModule {
    * @returns The order state plus the live `currentPrice` and `triggered` flag
    * @throws {ValidationError} If `orderId` is empty or no order exists
    */
-  async getStopLoss(orderId: string): Promise<StopLossOrder> {
+  async getStopLoss(
+    orderId: string,
+    options: TriggerEvaluationOptions = {},
+  ): Promise<StopLossOrder> {
     if (!orderId || orderId.trim().length === 0) {
       throw new ValidationError('orderId must not be empty');
     }
@@ -205,7 +333,7 @@ export class StopLossModule {
     }
 
     const order = this.decodeOrder(sim.returnValue);
-    return this.enrichOrder(order);
+    return this.enrichOrder(order, options);
   }
 
   /**
@@ -215,6 +343,7 @@ export class StopLossModule {
   async getStopLossOrders(
     address: string,
     query: StopLossOrderQuery = {},
+    options: TriggerEvaluationOptions = {},
   ): Promise<StopLossOrder[]> {
     validateAddress(address, 'address');
 
@@ -304,7 +433,8 @@ export class StopLossModule {
     options: TriggerEvaluationOptions = {},
   ): Promise<boolean> {
     const snapshot = await this.getOraclePrice(order.oracleAsset);
-    this.assertOracleFresh(snapshot, order.oracleAsset, options.staleAfterMs);
+    const staleAfterMs = options.staleAfterMs ?? DEFAULT_STALE_AFTER_MS;
+    this.assertOracleFresh(snapshot, order.oracleAsset, staleAfterMs);
     return snapshot.price <= order.triggerPrice;
   }
 
@@ -313,15 +443,14 @@ export class StopLossModule {
   // ---------------------------------------------------------------------------
 
   private validateStopLossParams(params: StopLossParams): void {
-    validateAddress(params.tokenIn, 'tokenIn');
-    validateAddress(params.tokenOut, 'tokenOut');
-    validateAddress(params.pairAddress, 'pairAddress');
-    validateDistinctTokens(params.tokenIn, params.tokenOut);
-    validatePositiveAmount(params.amount, 'amount');
-    validatePositiveAmount(params.triggerPrice, 'triggerPrice');
-
-    if (!params.oracleAsset || params.oracleAsset.trim().length === 0) {
-      throw new ValidationError('oracleAsset must not be empty');
+    const result = StopLossParamsSchema.safeParse(params);
+    if (!result.success) {
+      const issues = result.error.issues
+        .map((i: z.ZodIssue) => `${i.path.join('.')}: ${i.message}`)
+        .join('; ');
+      throw new ValidationError(`Invalid stop-loss params: ${issues}`, {
+        zodErrors: result.error.issues,
+      });
     }
   }
 
@@ -335,13 +464,21 @@ export class StopLossModule {
     }
   }
 
-  private async enrichOrder(order: DecodedStopLossOrder): Promise<StopLossOrder> {
+  private async enrichOrder(
+    order: DecodedStopLossOrder,
+    options: TriggerEvaluationOptions = {},
+  ): Promise<StopLossOrder> {
     const snapshot = await this.getOraclePrice(order.oracleAsset);
+    
+    // Enforce oracle freshness by default to prevent stale price usage
+    const staleAfterMs = options.staleAfterMs ?? DEFAULT_STALE_AFTER_MS;
+    this.assertOracleFresh(snapshot, order.oracleAsset, staleAfterMs);
+    
     const distancePercent =
       order.triggerPrice > 0n
         ? Number(
-            ((snapshot.price - order.triggerPrice) * 100n) / order.triggerPrice
-          )
+            ((snapshot.price - order.triggerPrice) * 10000n) / order.triggerPrice
+          ) / 100
         : 0;
     return {
       ...order,
@@ -398,9 +535,11 @@ export class StopLossModule {
   private assertOracleFresh(
     snapshot: OraclePriceSnapshot,
     asset: string,
-    staleAfterMs?: number,
+    staleAfterMs: number,
   ): void {
-    if (staleAfterMs === undefined || snapshot.timestamp === undefined) {
+    if (snapshot.timestamp === undefined) {
+      // No timestamp available - cannot verify freshness
+      // This could happen with certain oracle implementations
       return;
     }
 

@@ -32,7 +32,6 @@ export class CoralSwapSDKError extends Error {
       code: this.code,
       message: this.message,
       details: this.details,
-      stack: this.stack,
     };
   }
 }
@@ -77,8 +76,9 @@ export class TransactionError extends CoralSwapSDKError {
     message: string,
     txHash?: string,
     details?: Record<string, unknown>,
+    code: string = "TRANSACTION_ERROR",
   ) {
-    super("TRANSACTION_ERROR", message, details);
+    super(code, message, details);
     this.name = "TransactionError";
     this.txHash = txHash;
   }
@@ -137,19 +137,6 @@ export class InsufficientLiquidityError extends CoralSwapSDKError {
   }
 }
 
-/**
- * Threshold value is invalid.
- */
-export class InvalidThresholdError extends CoralSwapSDKError {
-  constructor(alertType: string, value: number, min: number, max: number) {
-    super(
-      "INVALID_THRESHOLD",
-      `${alertType} threshold ${value} is out of range (${min}-${max})`,
-      { alertType, value, min, max },
-    );
-    this.name = "InvalidThresholdError";
-  }
-}
 
 /**
  * Pool not found for a token pair.
@@ -207,10 +194,13 @@ export class DecodeError extends CoralSwapSDKError {
  * attached as `event` so callers can inspect borrowedAmount and reason without
  * manually parsing XDR.
  */
-export class FlashLoanError extends CoralSwapSDKError {
-  constructor(message: string, details?: Record<string, unknown>) {
-    super("FLASH_LOAN_ERROR", message, details);
+export class FlashLoanError extends TransactionError {
+  constructor(message: string, details?: Record<string, unknown>, txHash?: string) {
+    super(message, txHash, details, "FLASH_LOAN_ERROR");
     this.name = "FlashLoanError";
+    if (details) {
+      Object.assign(this, details);
+    }
   }
 }
 
@@ -235,6 +225,16 @@ export class FlashLoanFailedError extends FlashLoanError {
     this.name = "FlashLoanFailedError";
     this.txHash = txHash;
     this.event = event;
+  }
+}
+
+/**
+ * Cross-chain routing or bridge execution errors (Squid Router integration).
+ */
+export class CrossChainError extends TransactionError {
+  constructor(message: string, details?: Record<string, unknown>, txHash?: string) {
+    super(message, txHash, details, "CROSS_CHAIN_ERROR");
+    this.name = "CrossChainError";
   }
 }
 
@@ -329,9 +329,36 @@ export class StakingError extends CoralSwapSDKError {
  * Cooldown period has not elapsed.
  */
 export class CooldownError extends CoralSwapSDKError {
-  constructor(cooldownEnd: bigint) {
-    super("COOLDOWN_ERROR", `Cooldown period active until block ${cooldownEnd}`, { cooldownEnd });
+  readonly cooldownEnd: number;
+  readonly canWithdrawAt: Date;
+
+  constructor(cooldownEnd: bigint | number) {
+    const end = typeof cooldownEnd === "bigint" ? Number(cooldownEnd) : cooldownEnd;
+    super("COOLDOWN_ERROR", `Cooldown period active until block ${end}`, { cooldownEnd });
     this.name = "CooldownError";
+    this.cooldownEnd = end;
+    this.canWithdrawAt = new Date(end * 1000);
+  }
+}
+
+/**
+ * Price feed unavailable for a token.
+ *
+ * Thrown when a token's USD price cannot be derived from on-chain reserves
+ * because no stablecoin-paired pool exists or the pool has zero reserves.
+ */
+export class MissingPriceFeedError extends CoralSwapSDKError {
+  readonly tokenAddress: string;
+  readonly fallbackUsed: boolean;
+
+  constructor(tokenAddress: string, fallbackUsed = false) {
+    const message = fallbackUsed
+      ? `Price feed missing for token ${tokenAddress}; using zero-value fallback`
+      : `Price feed missing for token ${tokenAddress}; no stablecoin pair found`;
+    super("MISSING_PRICE_FEED", message, { tokenAddress, fallbackUsed });
+    this.name = "MissingPriceFeedError";
+    this.tokenAddress = tokenAddress;
+    this.fallbackUsed = fallbackUsed;
   }
 }
 
@@ -348,6 +375,50 @@ export class WebhookError extends CoralSwapSDKError {
   constructor(message: string, details?: Record<string, unknown>) {
     super("WEBHOOK_ERROR", message, details);
     this.name = "WebhookError";
+  }
+}
+
+/**
+ * Address not found on the network.
+ *
+ * Thrown when a queried address has no on-chain state (no positions, no
+ * contract code) or the RPC cannot resolve it.
+ */
+export class AddressNotFoundError extends CoralSwapSDKError {
+  readonly address: string;
+  readonly network: string;
+
+  constructor(address: string, network: string) {
+    super(
+      "ADDRESS_NOT_FOUND",
+      `Address ${address} not found on ${network}`,
+      { address, network },
+    );
+    this.name = "AddressNotFoundError";
+    this.address = address;
+    this.network = network;
+  }
+}
+
+/**
+ * Portfolio calculation failed for a specific pool.
+ *
+ * Thrown when an error occurs while computing position value, reserves,
+ * or token balances for a particular pool during portfolio aggregation.
+ */
+export class PortfolioCalculationError extends CoralSwapSDKError {
+  readonly failedPool: string;
+  readonly reason: string;
+
+  constructor(failedPool: string, reason: string) {
+    super(
+      "PORTFOLIO_CALCULATION_ERROR",
+      `Portfolio calculation failed for pool ${failedPool}: ${reason}`,
+      { failedPool, reason },
+    );
+    this.name = "PortfolioCalculationError";
+    this.failedPool = failedPool;
+    this.reason = reason;
   }
 }
 
@@ -407,6 +478,12 @@ function extractPairAddress(err: unknown): string {
  *
  * Contract error codes are returned in the format: Error(Contract, #XXX)
  * where XXX is the error code defined in the contract.
+ *
+ * Code ownership is defined once in `src/errors/parser.ts`
+ * (`CONTRACT_ERROR_RANGES`): Pair owns 100-119, Router owns 200-219 and
+ * Factory owns 300-319. The cases below must stay inside those ranges so a
+ * code resolves to the same contract here and in
+ * {@link ErrorParser.parseContractError}.
  */
 function mapContractError(
   code: number,
@@ -471,31 +548,57 @@ function mapContractError(
         contractErrorCode: code,
       });
 
-    // Router contract errors (300-306)
-    case 300: // Pair not found
-      return new PairNotFoundError("unknown", "unknown");
-    case 301: // Invalid path
+    // Router contract errors (200-207)
+    case 200: // Router already initialized
+      return new InvalidOperationError(message || "Router already initialized", {
+        contractErrorCode: code,
+      });
+    case 201: // Invalid swap path
       return new ValidationError(message || "Invalid swap path", {
         contractErrorCode: code,
       });
-    case 302: // Slippage exceeded
+    case 202: // Insufficient output amount (slippage)
       return new SlippageError(0n, 0n, 0, {
         contractErrorCode: code,
         message,
       });
-    case 303: // Deadline exceeded
+    case 203: // Excessive input amount
+      return new ValidationError(message || "Excessive input amount", {
+        contractErrorCode: code,
+      });
+    case 204: // Expired deadline
       return new DeadlineError(0);
-    case 304: // Insufficient liquidity
+    case 205: // Insufficient liquidity
       return new InsufficientLiquidityError(extractPairAddress(err), {
         contractErrorCode: code,
         message,
       });
-    case 305: // Excessive input amount
-      return new ValidationError(message || "Excessive input amount", {
+    case 206: // Pair not found
+      return new PairNotFoundError("unknown", "unknown");
+    case 207: // Identical tokens
+      return new ValidationError(message || "Identical tokens", {
         contractErrorCode: code,
       });
-    case 306: // Invalid token
-      return new ValidationError(message || "Invalid token", {
+
+    // Factory contract errors (300-304)
+    case 300: // Factory already initialized
+      return new InvalidOperationError(message || "Factory already initialized", {
+        contractErrorCode: code,
+      });
+    case 301: // Unauthorized caller
+      return new ValidationError(message || "Unauthorized caller", {
+        contractErrorCode: code,
+      });
+    case 302: // Pair already exists
+      return new InvalidOperationError(message || "Pair already exists", {
+        contractErrorCode: code,
+      });
+    case 303: // Zero address provided
+      return new ValidationError(message || "Zero address provided", {
+        contractErrorCode: code,
+      });
+    case 304: // Invalid fee configuration
+      return new ValidationError(message || "Invalid fee configuration", {
         contractErrorCode: code,
       });
 
@@ -655,6 +758,9 @@ export function mapError(err: unknown): CoralSwapSDKError {
   }
 
   return new CoralSwapSDKError("UNKNOWN_ERROR", message, {
-    originalError: err,
+    originalError: {
+      name: err instanceof Error ? err.name : typeof err,
+      message: err instanceof Error ? err.message : String(err),
+    },
   });
 }

@@ -13,7 +13,7 @@
  *  - Integration test: MockProvider wired into CoralSwapClient
  */
 
-import { xdr, SorobanRpc, Keypair, TransactionBuilder, Transaction } from '@stellar/stellar-sdk';
+import { xdr, rpc as SorobanRpc, Keypair, TransactionBuilder, Transaction } from '@stellar/stellar-sdk';
 import { MockProvider } from '../src/test/mocks/MockProvider';
 import { CoralSwapClient } from '../src/client';
 import { Network } from '../src/types/common';
@@ -28,6 +28,7 @@ const TEST_PUBLIC = Keypair.fromSecret(TEST_SECRET).publicKey();
 // Mock TransactionBuilder so the integration test doesn't need real Stellar
 // network access just to build a tx envelope.
 const mockBuiltTx = {
+  toXdr: jest.fn().mockReturnValue('mock-tx-xdr'),
   toXDR: jest.fn().mockReturnValue('mock-tx-xdr'),
   sign: jest.fn(),
 } as unknown as Transaction;
@@ -46,13 +47,13 @@ jest.mock('@stellar/stellar-sdk', () => {
       ...mockBuiltTx,
       toXDR: jest.fn().mockReturnValue(txXdr),
     })),
-    SorobanRpc: {
-      ...actual.SorobanRpc,
+    rpc: {
+      ...actual.rpc,
       assembleTransaction: jest.fn((_tx: unknown) => ({
         build: () => mockBuiltTx,
       })),
       Api: {
-        ...actual.SorobanRpc.Api,
+        ...actual.rpc.Api,
         isSimulationSuccess: jest.fn((sim: unknown) => !(sim as { error?: string }).error),
       },
     },
@@ -127,7 +128,7 @@ describe('MockProvider', () => {
     it('returns an empty entries array when no entries are staged', async () => {
       // Build a minimal ledger key stub.
       const stubKey = {} as xdr.LedgerKey;
-      (stubKey as unknown as { toXDR: (f: string) => string }).toXDR = () => 'stub-key';
+      (stubKey as unknown as { toXdr: (f: string) => string }).toXdr = () => 'stub-key';
 
       const response = await mock.getLedgerEntries(stubKey);
 
@@ -138,7 +139,7 @@ describe('MockProvider', () => {
     it('returns staged entries for registered keys', async () => {
       // Create a real-ish LedgerKey stub with a deterministic toXDR output.
       const stubKey = {
-        toXDR: (format: string) => (format === 'base64' ? 'bW9ja0tleQ==' : Buffer.from('mockKey')),
+        toXdr: (format: string) => (format === 'base64' ? 'bW9ja0tleQ==' : Buffer.from('mockKey')),
       } as unknown as xdr.LedgerKey;
 
       const stubEntry: SorobanRpc.Api.LedgerEntryResult = {
@@ -158,11 +159,11 @@ describe('MockProvider', () => {
 
     it('returns only entries matching the queried keys', async () => {
       const key1 = {
-        toXDR: (format: string) => (format === 'base64' ? 'a2V5MQ==' : Buffer.from('key1')),
+        toXdr: (format: string) => (format === 'base64' ? 'a2V5MQ==' : Buffer.from('key1')),
       } as unknown as xdr.LedgerKey;
 
       const key2 = {
-        toXDR: (format: string) => (format === 'base64' ? 'a2V5Mg==' : Buffer.from('key2')),
+        toXdr: (format: string) => (format === 'base64' ? 'a2V5Mg==' : Buffer.from('key2')),
       } as unknown as xdr.LedgerKey;
 
       const entry1: SorobanRpc.Api.LedgerEntryResult = {

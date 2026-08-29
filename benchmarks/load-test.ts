@@ -14,9 +14,8 @@ const CONFIG = {
   durationMs: 60_000,
   rpcLatencyMs: 10,
   thinkTimeMs: { min: 20, max: 100 },
-  rateLimitCapacity: 100,
-  rateLimitRefillMs: 1_000,
-  rateLimitRefillRate: 10,
+  rateLimitMaxBurst: 100,
+  rateLimitMaxPerSec: 10,
 };
 
 const OPERATION_WEIGHTS = {
@@ -196,7 +195,7 @@ async function runPhase(
   const ctx = createModuleContext(config.rpcLatencyMs);
   const alerts = new AlertModule(ctx.client);
   const rateLimiter = useRateLimiter
-    ? new RateLimiter({ capacity: config.rateLimitCapacity, refillRate: config.rateLimitRefillRate, refillIntervalMs: config.rateLimitRefillMs })
+    ? new RateLimiter({ maxRequestsPerSecond: config.rateLimitMaxPerSec, maxBurst: config.rateLimitMaxBurst })
     : null;
 
   const results: OperationResult[] = [];

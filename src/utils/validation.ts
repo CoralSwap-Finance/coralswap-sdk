@@ -89,6 +89,46 @@ export function validateDistinctTokens(tokenIn: string, tokenOut: string): void 
 }
 
 /**
+ * Validate that a string length is within a given range.
+ */
+export function validateStringLength(
+  value: string,
+  name: string,
+  min: number,
+  max: number,
+): void {
+  const trimmed = value.trim();
+  if (trimmed.length < min) {
+    throw new ValidationError(
+      `${name} must be at least ${min} character(s), got ${trimmed.length}`,
+      { [name]: value, constraint: `length >= ${min}`, actual: trimmed.length },
+    );
+  }
+  if (trimmed.length > max) {
+    throw new ValidationError(
+      `${name} must be at most ${max} character(s), got ${trimmed.length}`,
+      { [name]: value, constraint: `length <= ${max}`, actual: trimmed.length },
+    );
+  }
+}
+
+/**
+ * Validate that a value is one of the allowed enum values.
+ */
+export function validateEnumValue<T extends string>(
+  value: T,
+  name: string,
+  allowed: readonly T[],
+): void {
+  if (!allowed.includes(value)) {
+    throw new ValidationError(
+      `${name} must be one of: ${allowed.join(', ')}, got: ${value}`,
+      { [name]: value, constraint: `one of [${allowed.join(', ')}]` },
+    );
+  }
+}
+
+/**
  * Check whether a swap path is structurally valid.
  *
  * A valid path:
