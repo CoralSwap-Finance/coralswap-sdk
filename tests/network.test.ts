@@ -201,3 +201,41 @@ describe("Staging Network Configuration", () => {
     );
   });
 });
+
+describe("RPC URL scheme validation on setNetwork", () => {
+  const TEST_SECRET =
+    "SB6K2AINTGNYBFX4M7TRPGSKQ5RKNOXXWB7UZUHRYOVTM7REDUGECKZU";
+
+  it("rejects cleartext http when switching to mainnet", () => {
+    const client = new CoralSwapClient({
+      network: Network.TESTNET,
+      secretKey: TEST_SECRET,
+    });
+
+    expect(() => client.setNetwork(Network.MAINNET, "http://localhost:8000")).toThrow(
+      /cleartext/i,
+    );
+  });
+
+  it("allows cleartext http when switching to testnet", () => {
+    const client = new CoralSwapClient({
+      network: Network.MAINNET,
+      secretKey: TEST_SECRET,
+    });
+
+    client.setNetwork(Network.TESTNET, "http://localhost:8000");
+
+    expect(client.networkConfig.rpcUrl).toBe("http://localhost:8000");
+  });
+
+  it("allows https when switching to mainnet", () => {
+    const client = new CoralSwapClient({
+      network: Network.TESTNET,
+      secretKey: TEST_SECRET,
+    });
+
+    client.setNetwork(Network.MAINNET, "https://soroban.stellar.org");
+
+    expect(client.networkConfig.rpcUrl).toBe("https://soroban.stellar.org");
+  });
+});
