@@ -5,6 +5,14 @@ export { FeeModule } from './fees';
 export { OracleModule, TWAPObservation, TWAPResult, MIN_TWAP_WINDOW_SECONDS } from './oracle';
 export { PortfolioModule } from './portfolio';
 export { RiskMetricsModule } from './risk-metrics';
+export {
+  RiskScoringModule,
+  RiskLabel,
+} from './risk-scoring';
+export type {
+  ConcentrationRiskReport,
+  PortfolioRiskReport,
+} from './risk-scoring';
 export { TokenListModule } from './tokens';
 export { FactoryModule } from './factory';
 export {
