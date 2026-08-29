@@ -46,6 +46,11 @@ export class CoralSwapClient {
   private _connectionPool: ConnectionPool;
   private signer: Signer | null = null;
   private _publicKeyCache: string | null = null;
+  /**
+   * Serializes transaction lifecycles so concurrent submissions cannot build
+   * transactions from the same account sequence number (nonce).
+   */
+  private _submissionQueue: Promise<void> = Promise.resolve();
   private _factory: FactoryClient | null = null;
   private _router: RouterClient | null = null;
   private _factoryModule: FactoryModule | null = null;
@@ -416,6 +421,26 @@ export class CoralSwapClient {
    * const result = await client.submitTransaction([op]);
    */
   async submitTransaction(
+      operations: xdr.Operation[],
+      source?: string,
+  ): Promise<Result<{ txHash: string; ledger: number }>> {
+    // Soroban account sequences are nonces. Queue the complete
+    // getAccount -> build -> simulate -> sign -> send -> poll lifecycle,
+    // rather than only the final send, so two callers cannot use the same
+    // sequence number. The queue is settled on both success and failure so a
+    // failed submission never permanently blocks later submissions.
+    const submission = this._submissionQueue.then(() =>
+      this.submitTransactionUnlocked(operations, source),
+    );
+    this._submissionQueue = submission.then(
+      () => undefined,
+      () => undefined,
+    );
+    return submission;
+  }
+
+  /** Execute one transaction lifecycle. Calls are serialized by submitTransaction. */
+  private async submitTransactionUnlocked(
       operations: xdr.Operation[],
       source?: string,
   ): Promise<Result<{ txHash: string; ledger: number }>> {

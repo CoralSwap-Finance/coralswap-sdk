@@ -34,6 +34,7 @@
     "prepare": "npm run build",
     "prepublishOnly": "npm test && npm run lint",
     "examples:simple-swap": "ts-node examples/simple-swap.ts",
+    "examples:signer": "ts-node examples/signer.ts",
     "examples:provide-liquidity": "ts-node examples/provide-liquidity.ts",
     "examples:read-reserves": "ts-node examples/read-reserves.ts",
     "examples:alert-setup": "ts-node --transpile-only --require tsconfig-paths/register examples/alert-setup.ts",
