@@ -334,6 +334,7 @@ export class MonitoringModule {
   // -----------------------------------------------------------------------
 
   async getPoolHealth(pairAddress: string): Promise<PoolHealth> {
+    validateAddress(pairAddress, 'pairAddress');
     try {
       const pair = this.client.pair(pairAddress);
       const [reserves] = await Promise.all([
@@ -371,7 +372,7 @@ export class MonitoringModule {
   async getAllPoolHealth(): Promise<PoolHealth[]> {
     try {
       const pairs = await this.client.factory.getAllPairs();
-      return Promise.all(pairs.map((p) => this.getPoolHealth(p)));
+      return await Promise.all(pairs.map((p) => this.getPoolHealth(p)));
     } catch {
       return [];
     }
