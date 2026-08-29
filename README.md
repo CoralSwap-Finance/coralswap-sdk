@@ -407,7 +407,7 @@ The tests are idempotent — if the pair already exists it is reused, so you can
 
 ### CI
 
-Integration tests run automatically on pull requests to `main` via `.github/workflows/integration.yml`. The job is marked `continue-on-error` for fork PRs (which cannot access repository secrets), so they will not block merges from external contributors.
+Integration tests run automatically on a nightly schedule via `.github/workflows/integration.yml`. They can also be triggered manually using `workflow_dispatch`. The job is marked `continue-on-error` for fork PRs (if run manually), so they will not block merges from external contributors.
 
 Add the following secrets to your repository (Settings → Secrets → Actions):
 
