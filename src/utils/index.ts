@@ -138,3 +138,8 @@ export {
   shouldRetrySubmission,
 } from './idempotent-resubmission';
 export type { TransactionStatus, RetryDecision } from './idempotent-resubmission';
+
+export {
+  TokenDecimalsResolver,
+  defaultDecimalsResolver,
+} from './decimals';
