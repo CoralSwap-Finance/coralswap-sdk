@@ -57,6 +57,12 @@ export {
   decodeFlashLoanData,
   calculateRepayment,
   validateFeeFloor,
+  verifyReserveConservation,
+} from "@/contracts";
+export type {
+  PairReserves,
+  ReserveConservationOptions,
+  ReserveConservationResult,
 } from "@/contracts";
 
 // Feature modules
