@@ -15,8 +15,7 @@ import {
   PortfolioCalculationError,
   CoralSwapSDKError,
 } from "@/errors";
-
-const STROOP = 1e7;
+import { defaultDecimalsResolver } from "@/utils/index";
 
 /**
  * Portfolio module — aggregates LP positions with USD valuations and PnL.
@@ -85,9 +84,14 @@ export class PortfolioModule extends TreasuryModule {
       }
 
       try {
+        const [dec0, dec1] = await Promise.all([
+          defaultDecimalsResolver.resolveDecimals(this.portfolioClient, pos.token0),
+          defaultDecimalsResolver.resolveDecimals(this.portfolioClient, pos.token1)
+        ]);
+
         const valueUSD =
-          (Number(pos.token0Amount) / STROOP) * price0 +
-          (Number(pos.token1Amount) / STROOP) * price1;
+          (Number(pos.token0Amount) / (10 ** dec0)) * price0 +
+          (Number(pos.token1Amount) / (10 ** dec1)) * price1;
 
         positions.push({
           pairAddress: pos.pairAddress,

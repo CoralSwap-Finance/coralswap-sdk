@@ -3,6 +3,7 @@ import { validateAddress } from "@/utils/validation";
 import { ValidationError } from "@/errors";
 import { EventCursor, decodeEventTopic, MIN_START_LEDGER } from "@/utils/event-cursor";
 import { TreasuryModule, TreasuryModuleOptions } from "./treasury";
+import { defaultDecimalsResolver } from "@/utils/index";
 import { SwapModule } from "./swap";
 
 export interface LeaderboardEntry {
@@ -57,21 +58,6 @@ export interface GetTopTradersOptions {
 
 /** Upper bound on events aggregated per leaderboard query. */
 const MAX_LEADERBOARD_EVENTS = 1000;
-
-const decimalsCache = new Map<string, number>();
-
-async function getTokenDecimals(client: CoralSwapClient, address: string): Promise<number> {
-  if (decimalsCache.has(address)) {
-    return decimalsCache.get(address)!;
-  }
-  try {
-    const meta = await client.lpToken(address).metadata();
-    decimalsCache.set(address, meta.decimals);
-    return meta.decimals;
-  } catch {
-    return 7; // standard fallback for Soroban
-  }
-}
 
 /**
  * Leaderboard module — ranks top LPs and traders by yield/volume.
@@ -250,12 +236,9 @@ export class LeaderboardModule extends TreasuryModule {
     }
 
     // Fetch decimals for all tokens concurrently
-    const decimalsMap = new Map<string, number>();
-    await Promise.all(
-      Array.from(uniqueTokens).map(async (token) => {
-        const dec = await getTokenDecimals(this.leaderboardClient, token);
-        decimalsMap.set(token, dec);
-      })
+    const decimalsMap = await defaultDecimalsResolver.resolveMultiple(
+      this.leaderboardClient,
+      Array.from(uniqueTokens)
     );
 
     // Get all pairs and prices

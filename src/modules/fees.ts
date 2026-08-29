@@ -2,6 +2,7 @@ import { rpc } from "@stellar/stellar-sdk";
 import { CoralSwapClient } from "@/client";
 import { FeeEstimate } from "@/types/fee";
 import { FeeState } from "@/types/pool";
+import { defaultDecimalsResolver } from "@/utils/index";
 import { validateAddress, validatePositiveAmount } from "@/utils/validation";
 
 /**
@@ -221,6 +222,7 @@ export class FeeModule {
         // Extract fee_bps from the ScVal payload
         let feeBps = 0;
         let amountIn = 0;
+        let tokenIn = "";
         const map = typeof (value as any)._value !== 'undefined'
           ? (value as any)._value
           : value;
@@ -236,6 +238,13 @@ export class FeeModule {
             if (keyStr === 'fee_bps') {
               feeBps = val?.type === 'scvU32' ? val.u32 ?? 0 : 0;
             }
+            if (keyStr === 'token_in') {
+              if (val?.address) {
+                tokenIn = typeof val.address === 'function' ? val.address().toString() : val.address.toString();
+              } else if (val?._value) {
+                tokenIn = val._value.toString();
+              }
+            }
             if (keyStr === 'amount_in') {
               if (val?.type === 'scvI128') {
                 const i128 = val.i128 as unknown;
@@ -249,15 +258,18 @@ export class FeeModule {
           }
         }
 
-        if (feeBps === 0) continue;
-        const feeAmount = amountIn * feeBps / 10000;
-        const feeXLM = feeAmount / 1e7;
-        totalFeeXLM += feeXLM;
+        if (feeBps === 0 || !tokenIn) continue;
+        const feeAmount = (amountIn * feeBps) / 10000;
+        
+        const decimals = await defaultDecimalsResolver.resolveDecimals(this.client, tokenIn);
+        const feeBase = feeAmount / (10 ** decimals);
+        
+        totalFeeXLM += feeBase;
         history.push({
           ledger: event.ledger,
           timestamp: Number(event.ledgerClosedAt) || 0,
           feeBps,
-          feeXLM,
+          feeXLM: feeBase,
         });
       } catch {
         continue;
@@ -309,11 +321,12 @@ export class FeeModule {
     const lpTokenAddr = await pair.getLPTokenAddress();
     const lpToken = this.client.lpToken(lpTokenAddr);
 
-    const [lpBalance, totalSupply, { reserve0, reserve1 }] =
+    const [lpBalance, totalSupply, { reserve0, reserve1 }, { token0, token1 }] =
       await Promise.all([
         lpToken.balance(lpAddress),
         lpToken.totalSupply(),
         pair.getReserves(),
+        pair.getTokens(),
       ]);
 
     const feeRevenue = await this.getFeeRevenue(pairAddress, options);
@@ -332,8 +345,14 @@ export class FeeModule {
 
     const lpSharePercent = (Number(lpBalance) / Number(totalSupply)) * 100;
     const lpFeeShareXLM = feeRevenue.totalFeeXLM * (lpSharePercent / 100);
+
+    const [dec0, dec1] = await Promise.all([
+      defaultDecimalsResolver.resolveDecimals(this.client, token0),
+      defaultDecimalsResolver.resolveDecimals(this.client, token1),
+    ]);
+
     const lpValueXLM =
-      (Number(reserve0) / 1e7 + Number(reserve1) / 1e7) *
+      (Number(reserve0) / (10 ** dec0) + Number(reserve1) / (10 ** dec1)) *
       (Number(lpBalance) / Number(totalSupply));
 
     // Annualize based on the actual ledger range queried
