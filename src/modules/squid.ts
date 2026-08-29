@@ -19,6 +19,13 @@ import {
 const DEFAULT_SQUID_API_BASE_URL = "https://apiplus.squidrouter.com/v2";
 const STELLAR_CHAIN_ID = "stellar";
 
+/**
+ * Estimated AMM swap fee in basis points for native Stellar swaps.
+ * Used when the pool's dynamic fee is not available at quote time.
+ * 30 bps = 0.3% is a typical default for AMM pools.
+ */
+const NATIVE_SWAP_FEE_ESTIMATE_BPS = 30;
+
 interface SquidRouteApiResponse {
   routeId?: string;
   toToken?: string;
@@ -81,7 +88,9 @@ export class SquidModule {
    * @throws {ValidationError} If required parameters are missing/invalid.
    * @throws {CrossChainError} If the Squid API request fails.
    */
-  async getCrossChainQuote(params: CrossChainQuoteParams): Promise<CrossChainQuote> {
+  async getCrossChainQuote(
+    params: CrossChainQuoteParams,
+  ): Promise<CrossChainQuote> {
     validateAddress(params.toAsset, "toAsset");
     validatePositiveAmount(params.amount, "amount");
     if (!params.fromAsset || params.fromAsset.trim().length === 0) {
@@ -95,6 +104,12 @@ export class SquidModule {
     const slippageBps = params.slippageBps ?? DEFAULTS.slippageBps;
 
     if (this.isStellarNative(params.fromChain)) {
+      // Apply estimated AMM swap fee to the output. Even native Stellar swaps
+      // incur pool fees, so the quote must never be 1:1.
+      const swapFee =
+        (params.amount * BigInt(NATIVE_SWAP_FEE_ESTIMATE_BPS)) / 10_000n;
+      const estimatedAmountOut = params.amount - swapFee;
+
       const steps: CrossChainRouteStep[] = [
         {
           type: "swap",
@@ -112,10 +127,12 @@ export class SquidModule {
         toAsset: params.toAsset,
         amountIn: params.amount,
         bridgedAmount: params.amount,
-        estimatedAmountOut: params.amount,
-        amountOutMin: params.amount - (params.amount * BigInt(slippageBps)) / 10_000n,
+        estimatedAmountOut,
+        amountOutMin:
+          estimatedAmountOut -
+          (estimatedAmountOut * BigInt(slippageBps)) / 10_000n,
         bridgeFee: 0n,
-        swapFee: 0n,
+        swapFee,
         totalSlippageBps: slippageBps,
         estimatedTimeSeconds: 0,
         deadline: this.client.getDeadline(),
@@ -162,12 +179,18 @@ export class SquidModule {
   // Bridge leg (Squid API) -- idempotent via Squid's tracked route status
   // ---------------------------------------------------------------------
 
-  private async submitBridgeLegIdempotent(quote: CrossChainQuote): Promise<string> {
+  private async submitBridgeLegIdempotent(
+    quote: CrossChainQuote,
+  ): Promise<string> {
     try {
       return await this.postRoute(quote);
     } catch (err) {
       if (err instanceof CrossChainError || !isRetryable(err)) {
-        throw this.toCrossChainError("Bridge submission failed", err, quote.routeId);
+        throw this.toCrossChainError(
+          "Bridge submission failed",
+          err,
+          quote.routeId,
+        );
       }
 
       // Retryable failure (timeout, connection reset, 429/503): check Squid's
@@ -186,16 +209,34 @@ export class SquidModule {
       }
 
       if (status.status === "failed") {
-        throw new CrossChainError("Bridge execution failed on the source chain", {
-          routeId: quote.routeId,
-        });
+        throw new CrossChainError(
+          "Bridge execution failed on the source chain",
+          {
+            routeId: quote.routeId,
+          },
+        );
       }
 
-      // "not_found" / "unknown" -- Squid never saw it land; safe to resubmit once.
+      if (status.status === "unknown") {
+        // Cannot confirm whether the bridge landed or not. Resubmitting
+        // risks duplicating a real bridge transfer, so block rather than
+        // guess. The caller should investigate manually.
+        throw new CrossChainError(
+          "Bridge status is unknown and cannot be safely resubmitted",
+          { routeId: quote.routeId, status: status.status },
+        );
+      }
+
+      // "not_found" -- Squid explicitly confirms it never saw the route
+      // land, so it is safe to resubmit exactly once.
       try {
         return await this.postRoute(quote);
       } catch (retryErr) {
-        throw this.toCrossChainError("Bridge submission failed after retry", retryErr, quote.routeId);
+        throw this.toCrossChainError(
+          "Bridge submission failed after retry",
+          retryErr,
+          quote.routeId,
+        );
       }
     }
   }
@@ -220,14 +261,19 @@ export class SquidModule {
 
     const body = (await res.json()) as { transactionHash?: string };
     if (!body.transactionHash) {
-      throw new CrossChainError("Squid route execution response is missing a transaction hash", {
-        routeId: quote.routeId,
-      });
+      throw new CrossChainError(
+        "Squid route execution response is missing a transaction hash",
+        {
+          routeId: quote.routeId,
+        },
+      );
     }
     return body.transactionHash;
   }
 
-  private async getSquidRouteStatus(routeId: string): Promise<SquidRouteStatusResult> {
+  private async getSquidRouteStatus(
+    routeId: string,
+  ): Promise<SquidRouteStatusResult> {
     try {
       const res = await this.fetchFn(
         `${this.apiBaseUrl}/status?routeId=${encodeURIComponent(routeId)}`,
@@ -277,20 +323,26 @@ export class SquidModule {
     });
 
     if (!res.ok) {
-      throw new CrossChainError(`Squid quote request failed with status ${res.status}`, {
-        fromChain: params.fromChain,
-        fromAsset: params.fromAsset,
-        toAsset: params.toAsset,
-      });
+      throw new CrossChainError(
+        `Squid quote request failed with status ${res.status}`,
+        {
+          fromChain: params.fromChain,
+          fromAsset: params.fromAsset,
+          toAsset: params.toAsset,
+        },
+      );
     }
 
     const body = (await res.json()) as SquidRouteApiResponse;
     if (!body.routeId || !body.toAmount) {
-      throw new CrossChainError("Squid quote response is missing required fields", {
-        fromChain: params.fromChain,
-        fromAsset: params.fromAsset,
-        toAsset: params.toAsset,
-      });
+      throw new CrossChainError(
+        "Squid quote response is missing required fields",
+        {
+          fromChain: params.fromChain,
+          fromAsset: params.fromAsset,
+          toAsset: params.toAsset,
+        },
+      );
     }
 
     const bridgedAsset = body.toToken ?? params.toAsset;
@@ -302,7 +354,10 @@ export class SquidModule {
       .filter((f) => f.name === "swapFee")
       .reduce((acc, f) => acc + BigInt(f.amount ?? "0"), 0n);
 
-    const estimatedAmountOut = bridgedAmount;
+    // Apply swap fee to the estimated output when known. The bridged amount
+    // is what arrives on Stellar after the bridge; the swap fee is deducted
+    // when converting to the final output token.
+    const estimatedAmountOut = bridgedAmount - swapFee;
     const amountOutMin =
       estimatedAmountOut - (estimatedAmountOut * BigInt(slippageBps)) / 10_000n;
 
@@ -336,24 +391,31 @@ export class SquidModule {
       estimatedTimeSeconds: body.estimatedRouteDuration ?? 0,
       deadline: this.client.getDeadline(),
       steps,
-      bridgeCalldata: body.calldata?.target && body.calldata?.data
-        ? {
-            target: body.calldata.target,
-            data: body.calldata.data,
-            value: body.calldata.value,
-          }
-        : undefined,
+      bridgeCalldata:
+        body.calldata?.target && body.calldata?.data
+          ? {
+              target: body.calldata.target,
+              data: body.calldata.data,
+              value: body.calldata.value,
+            }
+          : undefined,
     };
   }
 
   private buildHeaders(): Record<string, string> {
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
     if (this.integratorId) headers["x-integrator-id"] = this.integratorId;
     if (this.apiKey) headers["x-api-key"] = this.apiKey;
     return headers;
   }
 
-  private toCrossChainError(prefix: string, err: unknown, routeId: string): CrossChainError {
+  private toCrossChainError(
+    prefix: string,
+    err: unknown,
+    routeId: string,
+  ): CrossChainError {
     if (err instanceof CrossChainError) return err;
     const message = err instanceof Error ? err.message : String(err);
     return new CrossChainError(`${prefix}: ${message}`, { routeId });
@@ -375,7 +437,10 @@ export class SquidModule {
     }
 
     if (result.txHash) {
-      const txStatus = await getTransactionStatus(this.client.server, result.txHash);
+      const txStatus = await getTransactionStatus(
+        this.client.server,
+        result.txHash,
+      );
       const decision = shouldRetrySubmission(txStatus);
 
       if (!decision.shouldRetry) {
@@ -394,7 +459,10 @@ export class SquidModule {
       // Genuinely never landed -- safe to rebuild (fresh sequence number via
       // client.submitTransaction) and resubmit exactly once.
       const retryOp = this.buildSwapOperation(quote);
-      const retryResult = await this.client.submitTransaction([retryOp], source);
+      const retryResult = await this.client.submitTransaction(
+        [retryOp],
+        source,
+      );
       if (!retryResult.success) {
         throw new CrossChainError(
           `Cross-chain swap leg failed after retry: ${retryResult.error?.message ?? "Unknown error"}`,
