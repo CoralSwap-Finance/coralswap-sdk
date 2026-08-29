@@ -189,6 +189,18 @@ export class ValidationError extends CoralSwapSDKError {
 }
 
 /**
+ * Raised when decoding contract storage or XDR for a specific slot fails.
+ * Carries the offending slot identifier in `details.slot` so callers can
+ * distinguish decode failures from empty/missing slots.
+ */
+export class DecodeError extends CoralSwapSDKError {
+  constructor(slot: string | number, message?: string, details?: Record<string, unknown>) {
+    super("DECODE_ERROR", message ?? `Failed to decode slot ${slot}`, { slot, ...details });
+    this.name = "DecodeError";
+  }
+}
+
+/**
  * Flash loan specific errors.
  *
  * When the contract emits a FlashLoanFailed event, the decoded details are

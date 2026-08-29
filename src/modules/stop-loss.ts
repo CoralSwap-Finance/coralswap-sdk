@@ -11,6 +11,7 @@ import {
   ValidationError,
   TransactionError,
   StaleOracleError,
+  DecodeError,
 } from '@/errors';
 import {
   validateAddress,
@@ -228,15 +229,70 @@ export class StopLossModule {
       return [];
     }
 
-    const native = scValToNative(sim.returnValue);
-    const rawOrders = Array.isArray(native) ? native : [];
+    // Convert top-level return value to native JS — handle decode failure explicitly
+    let nativeArr: unknown[];
+    try {
+      const native = scValToNative(sim.returnValue);
+      nativeArr = Array.isArray(native) ? native : [];
+    } catch (e) {
+      // Couldn't decode the top-level return value: surface a DecodeError with context
+      throw new DecodeError('orders_for_user', 'Failed to decode orders_for_user return value', {
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+
+    // Decode each slot: empty slots -> order: null; decode failures -> DecodeError(slot)
+    const decodedSlots: Array<{ slot: number; order: DecodedStopLossOrder | null }> = [];
+
+    for (const [idx, item] of nativeArr.entries()) {
+      const slot = idx;
+      if (item === null || item === undefined) {
+        decodedSlots.push({ slot, order: null });
+        continue;
+      }
+
+      try {
+        let scval: xdr.ScVal;
+
+        if (typeof item === 'string') {
+          // Legacy: base64-encoded XDR for the slot
+          try {
+            scval = xdr.ScVal.fromXDR(item, 'base64');
+          } catch (err) {
+            throw new DecodeError(slot, 'Failed to parse base64 XDR for slot', {
+              xdr: item,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+        } else {
+          // Native JS object — convert to ScVal for reuse of decodeOrder
+          try {
+            scval = nativeToScVal(item);
+          } catch (err) {
+            throw new DecodeError(slot, 'Failed to convert native value to ScVal', {
+              item,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+        }
+
+        const decoded = this.decodeOrder(scval);
+        decodedSlots.push({ slot, order: decoded });
+      } catch (err) {
+        if (err instanceof DecodeError) throw err;
+        throw new DecodeError(slot, 'Failed to decode order slot', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    // Enrich only the non-empty decoded orders, preserving successful decoding semantics
     const enriched = await Promise.all(
-      rawOrders.map((item) =>
-        this.enrichOrder(this.decodeOrder(nativeToScVal(item))),
-      ),
+      decodedSlots.map(async (s) => (s.order ? await this.enrichOrder(s.order) : null)),
     );
 
-    return this.applyOrderQuery(enriched, query);
+    const filtered = enriched.filter((o): o is StopLossOrder => o !== null);
+    return this.applyOrderQuery(filtered, query);
   }
 
   /**
