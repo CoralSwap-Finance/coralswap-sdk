@@ -197,6 +197,13 @@ export class InvalidThresholdError extends ValidationError {
  * manually parsing XDR.
  */
 export class FlashLoanError extends TransactionError {
+  /** The amount that was attempted to be borrowed. */
+  readonly borrowedAmount?: bigint;
+  /** Address of the borrowed token. */
+  readonly token?: string;
+  /** Human-readable reason the flash loan failed. */
+  readonly reason?: string;
+
   constructor(message: string, details?: Record<string, unknown>, txHash?: string) {
     super(message, txHash, details, "FLASH_LOAN_ERROR");
     this.name = "FlashLoanError";
