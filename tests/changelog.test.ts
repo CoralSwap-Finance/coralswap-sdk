@@ -91,4 +91,40 @@ describe('Changelog Parser', () => {
 
     expect(() => parseChangelog(invalidChangelog)).toThrow('missing bullet description');
   });
+
+  it('parses an [Unreleased] entry without a date', () => {
+    const content = `# Changelog
+
+## [Unreleased]
+
+### Added
+- CI check requiring a changelog entry for src/ changes
+
+## [1.0.0] - 2026-01-01
+
+### Changed
+- First release
+`;
+
+    const entries = parseChangelog(content);
+    const unreleased = entries.find((entry) => entry.version === 'Unreleased');
+
+    expect(unreleased).toBeDefined();
+    expect(unreleased?.date).toBeUndefined();
+    expect(unreleased?.changes).toEqual([
+      { type: 'added', description: 'CI check requiring a changelog entry for src/ changes' },
+    ]);
+  });
+
+  it('throws when an unreleased header is malformed (missing brackets)', () => {
+    const invalidChangelog = `# Changelog
+
+## Unreleased
+
+### Added
+- Some change
+`;
+
+    expect(() => parseChangelog(invalidChangelog)).toThrow('invalid version header');
+  });
 });

@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- CI check requiring a CHANGELOG entry under `[Unreleased]` for PRs that change `src/`
+
 ## [1.1.0] - 2026-02-17
 
 ### Added

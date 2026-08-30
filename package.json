@@ -28,6 +28,7 @@
     "test:integration:tokens": "jest --config jest.integration.config.js --testPathPattern=tokens.integration",
     "test:integration:treasury": "jest --config jest.integration.config.js --testPathPattern=treasury.integration",
     "test:integration:squid": "jest --config jest.integration.config.js --testPathPattern=squid.integration",
+    "check:changelog": "ts-node --transpile-only scripts/check-changelog.ts",
     "lint": "eslint src/**/*.ts",
     "lint:fix": "eslint src/**/*.ts --fix",
     "clean": "rimraf dist",
