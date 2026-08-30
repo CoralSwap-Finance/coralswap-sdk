@@ -15,7 +15,7 @@ Each operation reports:
 | `stddev_ms` | Standard deviation (used to verify ±10 % variance) |
 | `memory` | `heap_used_bytes`, `rss_bytes`, `external_bytes` after run |
 
-## Benchmarked operations (15)
+## Benchmarked operations (16)
 
 | Group | Operation |
 |-------|-----------|
@@ -23,9 +23,20 @@ Each operation reports:
 | `swap` | `swap.getQuote`, `swap.getMultiHopQuote`, `swap.computeHops` |
 | `portfolio` | `positions.getPositions`, `positions.getPosition` |
 | `routing` | `router.findOptimalPath` |
-| `analytics` | `fees.getCurrentFee`, `fees.estimateSwapFee`, `oracle.getSpotPrice`, `oracle.observe`, `pair.getReserves` |
+| `analytics` | `fees.getCurrentFee`, `fees.estimateSwapFee`, `oracle.getSpotPrice`, `oracle.observe`, `pair.getReserves`, `treasury.getSpotPriceMap` |
 | `liquidity` | `liquidity.getAddLiquidityQuote` |
 | `factory` | `factory.getPairAddress` |
+
+## Performance budget
+
+| Operation | Input size | Budget (ms) | Notes |
+|-----------|-----------|-------------|-------|
+| `treasury.getSpotPriceMap` | 10 pairs | 120 | Batch token-price fetch with simulated 5 ms RPC latency. Measures `Promise.all` per-pair concurrency. |
+| `swap.getQuote` | 1 pair | 25 | Single-hop quote. |
+| `swap.getMultiHopQuote` | 2 hops | 35 | Multi-hop quote. |
+| `router.findOptimalPath` | 3 hops | 40 | Pathfinding + fee estimation. |
+
+Budgets are measured with `BENCHMARK_RPC_LATENCY_MS=5` and `BENCHMARK_ITERATIONS=50`. Adjust budgets proportionally when changing simulated latency.
 
 ## Prerequisites
 
