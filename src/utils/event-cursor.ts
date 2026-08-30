@@ -1,4 +1,8 @@
-import { xdr, rpc } from "@stellar/stellar-sdk";
+import { xdr, rpc as SorobanRpc } from "@stellar/stellar-sdk";
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
 /**
  * Lowest ledger sequence that can legally be passed as `startLedger`.
@@ -49,7 +53,48 @@ export function decodeEventTopic(topic: unknown): string {
   }
 }
 
+/**
+ * Encode a plain string value into a base64-encoded ScVal symbol for use as
+ * a Soroban RPC getEvents topic filter.
+ *
+ * On-chain CoralSwap events use `scvSymbol` for topic names (e.g. "swap",
+ * "add_liquidity"), so the topic filter MUST be encoded as an ScVal symbol
+ * to match correctly. Hand-rolled raw-string topic filters (e.g. `["swap"]`)
+ * silently produce no matches against a real network.
+ */
+export function encodeTopicForFilter(value: string): string {
+  return xdr.ScVal.scvSymbol(value).toXdr("base64").toString();
+}
+
+// ---------------------------------------------------------------------------
+// EventCursor
+// ---------------------------------------------------------------------------
+
+/**
+ * Options for constructing an EventCursor instance.
+ */
 export interface EventCursorOptions {
+  /** The Soroban RPC server instance. */
+  server?: SorobanRpc.Server;
+  /** Optional contract IDs to filter events by. */
+  contractIds?: string[];
+  /**
+   * Topic filter values (one per filter slot).
+   *
+   * Each entry is a string topic value (e.g. "swap") that will be properly
+   * encoded as an ScVal symbol before being sent to the RPC.
+   *
+   * When multiple entries are provided they are OR'd together — an event
+   * matching ANY topic in the array will be returned (subject to other
+   * filters).
+   */
+  topics?: string[];
+  /** Inclusive start ledger. */
+  startLedger?: number;
+  /** Cursor for pagination (returned by a previous response). */
+  cursor?: string;
+  /** Maximum number of events per page. */
+  limit?: number;
   /** How many ledgers to look back when anchoring the initial cursor. */
   defaultWindow?: number;
   /** Default per-request limit passed to getEvents. */
@@ -57,54 +102,114 @@ export interface EventCursorOptions {
 }
 
 /**
- * EventCursor — shared utility to scan Soroban `getEvents` safely and
- * consistently across modules.
+ * Result of a single EventCursor.fetchNext() call.
+ */
+export interface EventCursorPage {
+  /** Events returned in this page, as raw SDK EventResponse objects. */
+  events: SorobanRpc.Api.EventResponse[];
+  /** Paging token for the next page. */
+  pagingToken?: string;
+  /** Whether there are potentially more events. */
+  hasMore: boolean;
+  /** The latest ledger known to the RPC at query time. */
+  latestLedger: number;
+}
+
+/**
+ * Cursor-based paginator for Soroban RPC `getEvents`.
  *
- * Behaviour highlights:
- * - Anchors an initial cursor by calling `server.getLatestLedger()` and
- *   using `latestLedger - defaultWindow` (clamped to 0). This guarantees
- *   we never default to ledger 0/1 arbitrarily.
- * - Encodes topic filters as base64 XDR `ScVal` via
- *   `xdr.ScVal.scvSymbol(...).toXdr('base64')` so callers must not pass
- *   raw strings directly to RPC filters.
- * - Persists a cursor in-memory per-instance and advances it as scans
- *   progress.
- * - Handles pagination by looping while RPC responses are full (== limit)
- *   and advancing the start ledger to `lastEvent.ledger + 1`.
+ * Automatically encodes topic filters as proper ScVal symbols, handles
+ * cursor-based pagination, and returns raw SDK {@link Api.EventResponse}
+ * objects for downstream parsing.
  *
- * Usage example:
- *
+ * @example
  * ```ts
- * const cursor = new EventCursor(server);
- * // scan for "swap" topic from a pair contract
- * const events = await cursor.scan({
+ * const cursor = new EventCursor({
+ *   server: client.server,
  *   contractIds: [pairAddress],
  *   topics: ["swap"],
- *   limit: 500,
+ *   startLedger: 1000,
+ *   limit: 100,
  * });
+ *
+ * const page = await cursor.fetchNext();
+ * for (const ev of page.events) {
+ *   console.log(ev.ledger, ev.txHash);
+ * }
  * ```
  */
 export class EventCursor {
-  private server: rpc.Server;
+  private server: SorobanRpc.Server;
+  private contractIds: string[];
+  private topics: string[];
+  private startLedger: number;
+  private limit: number;
+  private _cursor: string | undefined;
+  private _hasMore: boolean;
   private cursor?: number;
   private readonly defaultWindow: number;
   private readonly defaultLimit: number;
 
-  constructor(server: rpc.Server, opts: EventCursorOptions = {}) {
-    this.server = server;
-    this.defaultWindow = opts.defaultWindow ?? 1000;
-    this.defaultLimit = opts.defaultLimit ?? 200;
+  constructor(options: EventCursorOptions);
+  constructor(
+    server: SorobanRpc.Server,
+    options?: Omit<EventCursorOptions, "server">,
+  );
+  constructor(
+    serverOrOptions: SorobanRpc.Server | EventCursorOptions,
+    options: Omit<EventCursorOptions, "server"> = {},
+  ) {
+    if (typeof (serverOrOptions as SorobanRpc.Server).getLatestLedger === "function") {
+      const server = serverOrOptions as SorobanRpc.Server;
+      this.server = server;
+      this.contractIds = options.contractIds ?? [];
+      this.topics = options.topics ?? [];
+      this.startLedger = options.startLedger ?? 0;
+      this._cursor = options.cursor;
+      this._hasMore = true;
+      this.defaultWindow = options.defaultWindow ?? 1000;
+      this.defaultLimit = options.defaultLimit ?? 200;
+      this.limit = options.limit ?? this.defaultLimit;
+      this.cursor = undefined;
+    } else {
+      const opts = serverOrOptions as EventCursorOptions;
+      if (!opts.server) {
+        throw new Error("EventCursor requires a server");
+      }
+      this.server = opts.server;
+      this.contractIds = opts.contractIds ?? [];
+      this.topics = opts.topics ?? [];
+      this.startLedger = opts.startLedger ?? 0;
+      this.limit = opts.limit ?? 100;
+      this._cursor = opts.cursor;
+      this._hasMore = true;
+      this.defaultWindow = opts.defaultWindow ?? 1000;
+      this.defaultLimit = opts.defaultLimit ?? 200;
+      this.cursor = undefined;
+    }
+  }
+
+  /**
+   * Whether more pages may be available.
+   */
+  get hasMore(): boolean {
+    return this._hasMore;
   }
 
   /** Reset the stored cursor. Useful for tests. */
   reset(): void {
     this.cursor = undefined;
+    this._cursor = undefined;
+    this._hasMore = true;
   }
 
   private async anchorIfNeeded(): Promise<void> {
     if (this.cursor !== undefined) return;
     const latest = await this.server.getLatestLedger();
-    const seq = typeof latest.sequence === 'number' ? latest.sequence : Number(latest.sequence);
+    const seq =
+      typeof latest.sequence === "number"
+        ? latest.sequence
+        : Number(latest.sequence);
     // Clamp to MIN_START_LEDGER, not 0: ledger 0 does not exist, and RPC
     // rejects `startLedger: 0`. On a young network (or a large defaultWindow)
     // `seq - defaultWindow` goes non-positive, which is the zero-anchored
@@ -114,10 +219,105 @@ export class EventCursor {
 
   private encodeTopics(topics?: string[]): string[][] | undefined {
     if (!topics || topics.length === 0) return undefined;
-    // RPC expects an array-of-arrays for topic positions (preserve simple
-    // callers by placing all symbols in the first position array).
-    const encoded = topics.map((t) => xdr.ScVal.scvSymbol(t).toXdr('base64'));
-    return [encoded];
+    return topics.map((topic) => [encodeTopicForFilter(topic)]);
+  }
+
+  /**
+   * Fetch the next page of events from the Soroban RPC.
+   *
+   * Automatically advances the internal cursor so subsequent calls return
+   * subsequent pages. Returns an empty page when no more events are
+   * available.
+   */
+  async fetchNext(): Promise<EventCursorPage> {
+    if (!this._hasMore) {
+      return { events: [], hasMore: false, latestLedger: 0 };
+    }
+
+    const topicsEncoded = this.encodeTopics(this.topics);
+
+    const filters = [
+      {
+        type: "contract" as const,
+        contractIds:
+          this.contractIds.length > 0 ? this.contractIds : undefined,
+        topics:
+          topicsEncoded && topicsEncoded.length > 0
+            ? topicsEncoded
+            : undefined,
+      },
+    ];
+
+    const request: SorobanRpc.Api.GetEventsRequest = this._cursor
+      ? {
+          cursor: this._cursor,
+          filters,
+          limit: this.limit,
+        }
+      : {
+          startLedger: this.startLedger,
+          filters,
+          limit: this.limit,
+        };
+
+    const response = await this.server.getEvents(request);
+    if (!response || !Array.isArray(response.events)) {
+      this._hasMore = false;
+      return {
+        events: [],
+        hasMore: false,
+        latestLedger: response?.latestLedger ?? 0,
+      };
+    }
+
+    const events = response.events;
+
+    // v17 RPC responses expose the next cursor on the response. Keep the
+    // event-level fallback for older mocks/SDK response shapes.
+    if (events.length > 0) {
+      const lastEvent = events[events.length - 1];
+      this._cursor =
+        response.cursor ??
+        (lastEvent as SorobanRpc.Api.EventResponse & { pagingToken?: string }).pagingToken;
+    }
+
+    // If fewer events returned than requested, no more pages
+    if (events.length < this.limit) {
+      this._hasMore = false;
+    }
+
+    return {
+      events,
+      pagingToken: this._cursor,
+      hasMore: this._hasMore,
+      latestLedger: response.latestLedger,
+    };
+  }
+
+  /**
+   * Fetch ALL remaining events up to an optional maximum.
+   *
+   * Iterates through all pages until exhaustion. Use with caution on large
+   * result sets.
+   *
+   * @param maxEvents - Optional cap on total events to fetch.
+   */
+  async fetchAll(maxEvents?: number): Promise<SorobanRpc.Api.EventResponse[]> {
+    const allEvents: SorobanRpc.Api.EventResponse[] = [];
+
+    while (this._hasMore) {
+      const page = await this.fetchNext();
+      allEvents.push(...page.events);
+      if (maxEvents !== undefined && allEvents.length >= maxEvents) {
+        break;
+      }
+    }
+
+    if (maxEvents !== undefined) {
+      return allEvents.slice(0, maxEvents);
+    }
+
+    return allEvents;
   }
 
   /**
@@ -130,7 +330,7 @@ export class EventCursor {
     fromLedger?: number;
     toLedger?: number;
     limit?: number;
-  } = {}): Promise<rpc.Api.EventResponse[]> {
+  } = {}): Promise<SorobanRpc.Api.EventResponse[]> {
     await this.anchorIfNeeded();
 
     const limit = params.limit ?? this.defaultLimit;
@@ -140,34 +340,35 @@ export class EventCursor {
     const contractIds = params.contractIds ?? [];
     const topics = this.encodeTopics(params.topics);
 
-    const allEvents: rpc.Api.EventResponse[] = [];
+    const allEvents: SorobanRpc.Api.EventResponse[] = [];
 
     while (true) {
-      const request: rpc.Server.GetEventsRequest = {
+      const request: SorobanRpc.Api.GetEventsRequest = {
         startLedger,
         filters: [
           {
-            type: 'contract',
+            type: "contract",
             contractIds,
             topics: topics ?? [],
           },
         ],
         limit,
-      } as unknown as rpc.Server.GetEventsRequest;
+      };
 
-      const res = await this.server.getEvents(request as any);
+      const res = await this.server.getEvents(request);
       const events = Array.isArray(res?.events) ? res.events : [];
       if (events.length === 0) {
         // Update cursor to latest inspected ledger (if RPC returns latestLedger)
-        if (typeof res?.latestLedger === 'number') this.cursor = res.latestLedger;
+        if (typeof res?.latestLedger === "number") this.cursor = res.latestLedger;
         break;
       }
 
-      allEvents.push(...events as rpc.Api.EventResponse[]);
+      allEvents.push(...(events as SorobanRpc.Api.EventResponse[]));
 
       // Determine last seen ledger to advance the cursor and next startLedger
-      const lastLedger = (events[events.length - 1] as any).ledger ??
-        (typeof res.latestLedger === 'number' ? res.latestLedger : undefined);
+      const lastLedger =
+        (events[events.length - 1] as any).ledger ??
+        (typeof res.latestLedger === "number" ? res.latestLedger : undefined);
 
       if (lastLedger === undefined) break;
 

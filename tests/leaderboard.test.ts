@@ -209,16 +209,24 @@ describe("LeaderboardModule.getLeaderboard()", () => {
         pairAddress: PAIR_A,
       });
 
-      // Verification that pairAddress is passed to getEvents query filter
+      // Verification that pairAddress is passed via EventCursor to getEvents
       expect(spy).toHaveBeenCalledWith(
         expect.objectContaining({
           filters: [
             expect.objectContaining({
               contractIds: [PAIR_A],
+              // Topics must be ScVal-symbol encoded (not raw strings)
+              topics: [[expect.any(String)]],
             }),
           ],
         }),
       );
+
+      // Raw-string topic filter would be ["swap"]; encoded value must differ
+      const callArg = spy.mock.calls[0][0] as {
+        filters: Array<{ topics?: string[][] }>;
+      };
+      expect(callArg.filters[0].topics?.[0]?.[0]).not.toBe("swap");
 
       // Only USER_1 (Pair A swap) should be aggregated
       expect(result).toHaveLength(1);
