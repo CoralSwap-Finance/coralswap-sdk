@@ -3,7 +3,7 @@ import { EventParser, EVENT_TOPICS, decodeEventsFromXdr } from '../src/utils/eve
 import {
   SwapEvent,
   LiquidityEvent,
-  FlashLoanEvent,
+  FlashLoanContractEvent,
   MintEvent,
   BurnEvent,
   SyncEvent,
@@ -54,7 +54,7 @@ function makeDiagnosticEvent(
   topic: string,
   data: xdr.ScVal,
   inSuccess = true,
-  contractBuf: Buffer = CONTRACT_BUF,
+  contractBuf: Buffer | Uint8Array = CONTRACT_BUF,
 ): xdr.DiagnosticEvent {
   const topics = [symbolVal(topic)];
   const bodyV0 = new xdr.ContractEventV0({ topics, data });
@@ -63,7 +63,7 @@ function makeDiagnosticEvent(
 
   const contractEvent = new xdr.ContractEvent({
     ext: xdr.ExtensionPoint.v0() as xdr.ExtensionPoint,
-    contractId: contractBuf,
+    contractId: contractBuf ? new xdr.ContractId(contractBuf) : null,
     type: xdr.ContractEventType.contract,
     body,
   });
@@ -167,7 +167,7 @@ describe('EventParser', () => {
       const result = parser.parse([diag]);
 
       expect(result).toHaveLength(1);
-      const fl = result[0] as FlashLoanEvent;
+      const fl = result[0] as FlashLoanContractEvent;
       expect(fl.type).toBe('flash_loan');
       expect(fl.borrower).toBe(ADDR_SENDER);
       expect(fl.amount).toBe(2000000n);

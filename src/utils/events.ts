@@ -125,7 +125,11 @@ function extractContractId(evt: xdr.DiagnosticEvent): string {
   try {
     const contractId = evt.event.contractId;
     if (contractId) {
-      return Address.contract(contractId as unknown as Uint8Array).toString();
+      const rawBytes =
+        'value' in contractId && contractId.value instanceof Uint8Array
+          ? contractId.value
+          : (contractId as unknown as Uint8Array);
+      return Address.contract(rawBytes).toString();
     }
   } catch {
     // contractId may be absent for system events
