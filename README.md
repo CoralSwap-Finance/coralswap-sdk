@@ -367,6 +367,23 @@ try {
 
 High-throughput integrations (trading bots, aggregators, dashboards) should tune caching, RPC failover, and connection pooling. See **[docs/PERFORMANCE.md](docs/PERFORMANCE.md)** for use-case profiles, TTL guidance, benchmark numbers, and copy-paste configuration examples.
 
+## Bundle Size
+
+The public surface exported from `src/index.ts` is bundled with [esbuild](https://esbuild.github.io/)
+in tree-shaking mode, minified, and checked against a **200 KiB** budget.
+Runtime dependencies (`@stellar/stellar-sdk`, `zod`) are treated as external
+and are not counted toward this budget — it measures the SDK's own code only.
+
+This runs automatically in CI on every pull request that touches `src/`
+(see `.github/workflows/bundle-size.yml`). A dead export that gets
+reintroduced during a refactor only inflates the bundle if it drags
+genuinely unused code back in with it — tree-shaking still removes pure
+re-exports of code that's already reachable elsewhere. If a change
+legitimately needs more room, update `BUDGET_KIB` in
+`scripts/check-bundle-size.mjs` and the value above, and explain why in the
+PR description.
+
+
 ## Design Principles
 
 | Principle      | Implementation                                 |
