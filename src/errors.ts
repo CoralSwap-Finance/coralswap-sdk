@@ -687,6 +687,43 @@ export function mapError(err: unknown): CoralSwapSDKError {
     return new RpcError(message);
   }
 
+  // Soroban auth / signing failures are distinct from generic validation errors.
+  if (
+    normalizedMessage.includes("auth") ||
+    normalizedMessage.includes("authorization") ||
+    normalizedMessage.includes("require_auth") ||
+    normalizedMessage.includes("missing auth") ||
+    normalizedMessage.includes("missing authorization")
+  ) {
+    return new SignerError();
+  }
+
+  // Budget / resource exhaustion during simulation or execution.
+  if (
+    normalizedMessage.includes("out of budget") ||
+    normalizedMessage.includes("budget exceeded") ||
+    normalizedMessage.includes("budget exhausted") ||
+    normalizedMessage.includes("resource limit") ||
+    normalizedMessage.includes("instruction limit") ||
+    normalizedMessage.includes("insufficient budget") ||
+    normalizedMessage.includes("max instructions")
+  ) {
+    return new SimulationError(message, { reason: 'budget_exceeded' });
+  }
+
+  // Sequence mismatch / stale account sequence numbers on submission.
+  if (
+    normalizedMessage.includes("bad seq") ||
+    normalizedMessage.includes("bad_seq") ||
+    normalizedMessage.includes("bad sequence") ||
+    normalizedMessage.includes("sequence number") ||
+    normalizedMessage.includes("sequence is too low") ||
+    message.includes("TX_BAD_SEQ") ||
+    message.includes("BAD_SEQ")
+  ) {
+    return new TransactionError(message);
+  }
+
   // Signer errors
   if (
     normalizedMessage.includes("signing") ||
