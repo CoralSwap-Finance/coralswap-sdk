@@ -1,0 +1,36 @@
+name: Bundle Size
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "scripts/check-bundle-size.mjs"
+      - "package.json"
+      - "tsconfig.json"
+      - ".github/workflows/bundle-size.yml"
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "scripts/check-bundle-size.mjs"
+
+jobs:
+  bundle-size:
+    name: Check bundle-size budget
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check bundle size against budget
+        run: node scripts/check-bundle-size.mjs
