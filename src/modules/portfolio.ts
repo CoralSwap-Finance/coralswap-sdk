@@ -19,15 +19,78 @@ import {
 const STROOP = 1e7;
 
 /**
- * Portfolio module — aggregates LP positions with USD valuations and PnL.
+ * Aggregates an owner's LP positions across CoralSwap pools into a
+ * USD-denominated portfolio view with profit-and-loss tracking.
  *
- * Builds on {@link PositionsModule} for on-chain position data and reuses
- * treasury-style spot pricing anchored to caller-supplied stablecoins.
+ * ## Financial model
+ *
+ * Each LP position is valued using **spot prices** derived from on-chain
+ * pair reserves anchored to caller-supplied stablecoins (e.g. USDC).
+ * The formula for a single position is:
+ *
+ * ```
+ * valueUSD = (token0Amount / STROOP) × price0
+ *          + (token1Amount / STROOP) × price1
+ * ```
+ *
+ * where `STROOP = 1e7` (Stellar's fixed-point scalar) and `price0` /
+ * `price1` are derived as:
+ *
+ * ```
+ * priceN = reserveStable / reserveToken   (if the stable is the other side)
+ * ```
+ *
+ * ## Impermanent loss
+ *
+ * Because prices are recomputed live from reserves on every call, the
+ * difference between `getPortfolioPnL` entry and current values already
+ * embeds any impermanent loss: if the price ratio of the pair has moved
+ * since the snapshot was captured, the implied token amounts will differ
+ * from the amounts deposited, and the USD delta will reflect that
+ * divergence.
+ *
+ * ## Stablecoin requirement
+ *
+ * At least one stablecoin address **must** be passed via
+ * {@link TreasuryModuleOptions.stableAddresses} for USD prices to be
+ * non-zero. Tokens with no direct or indirect stablecoin-paired pool
+ * will throw {@link MissingPriceFeedError}.
+ *
+ * @example
+ * ```ts
+ * import { CoralSwapClient, PortfolioModule } from "@coralswap/sdk";
+ *
+ * const client = new CoralSwapClient({ network: "mainnet", rpcUrl: "..." });
+ * const portfolio = new PortfolioModule(client, {
+ *   stableAddresses: ["CUSDC_CONTRACT_ADDRESS"],
+ * });
+ *
+ * const view = await portfolio.getPortfolio("GOWNER...");
+ * console.log(`Total value: $${view.totalValueUSD.toFixed(2)}`);
+ * ```
+ *
+ * @see {@link TreasuryModule} for the inherited price-map logic
+ * @see {@link PositionsModule} for raw on-chain position data
  */
 export class PortfolioModule extends TreasuryModule {
   private readonly portfolioClient: CoralSwapClient;
   private positions: PositionsModule;
 
+  /**
+   * Create a new PortfolioModule.
+   *
+   * @param client - Initialised {@link CoralSwapClient} connected to the
+   *   target network.
+   * @param options - Optional configuration. Pass `stableAddresses` to
+   *   enable USD valuation; without it every `valueUSD` field will be `0`.
+   *
+   * @example
+   * ```ts
+   * const portfolio = new PortfolioModule(client, {
+   *   stableAddresses: ["CUSDC_CONTRACT_ADDRESS"],
+   * });
+   * ```
+   */
   constructor(client: CoralSwapClient, options: TreasuryModuleOptions = {}) {
     super(client, options);
     this.portfolioClient = client;
@@ -35,11 +98,39 @@ export class PortfolioModule extends TreasuryModule {
   }
 
   /**
-   * Get the full portfolio for an owner across one or more pools.
+   * Return the full portfolio for `owner` across one or more CoralSwap pools.
    *
-   * @param owner - Wallet address to query
-   * @param options - Optional pair filter
-   * @returns Portfolio with per-pool positions and total USD value
+   * Fetches all non-zero LP positions held by `owner`, resolves spot prices
+   * for every token using stablecoin-anchored pair reserves, and returns an
+   * aggregated {@link Portfolio} with per-pool breakdowns and a total USD
+   * value.
+   *
+   * This is an alias for {@link get} provided for readability.
+   *
+   * @param owner - Stellar address (`G…` or `C…`) of the wallet to query.
+   * @param options - Optional filter. Supply `pairAddresses` to restrict the
+   *   query to specific pools instead of scanning all factory pairs.
+   * @returns Resolved {@link Portfolio} containing `positions` and
+   *   `totalValueUSD`.
+   *
+   * @throws {@link ValidationError} if `owner` is not a valid Stellar address.
+   * @throws {@link AddressNotFoundError} if the address has no on-chain state.
+   * @throws {@link MissingPriceFeedError} if a token in one of the positions
+   *   has no stablecoin-paired pool (and therefore no derivable USD price).
+   * @throws {@link PortfolioCalculationError} if reserve/balance fetching
+   *   fails for a specific pool.
+   *
+   * @example
+   * ```ts
+   * const view = await portfolio.getPortfolio("GOWNER...");
+   *
+   * for (const pos of view.positions) {
+   *   console.log(
+   *     `Pool ${pos.pairAddress}: $${pos.valueUSD.toFixed(2)}`
+   *   );
+   * }
+   * console.log(`Total: $${view.totalValueUSD.toFixed(2)}`);
+   * ```
    */
   async getPortfolio(
     owner: string,
@@ -48,6 +139,42 @@ export class PortfolioModule extends TreasuryModule {
     return this.get(owner, options);
   }
 
+  /**
+   * Core implementation of {@link getPortfolio}.
+   *
+   * Validates the owner address, retrieves positions from
+   * {@link PositionsModule}, builds a stablecoin-anchored price map,
+   * and computes a USD value for every non-zero position.
+   *
+   * ### Valuation formula
+   *
+   * For each pool position:
+   * ```
+   * valueUSD = (token0Amount / 1e7) × price0
+   *          + (token1Amount / 1e7) × price1
+   * ```
+   *
+   * `totalValueUSD` is the sum of all individual `valueUSD` values.
+   *
+   * @param owner - Stellar wallet address to query.
+   * @param options - Optional pair filter; see {@link GetPortfolioOptions}.
+   * @returns {@link Portfolio} with `owner`, `positions`, and `totalValueUSD`.
+   *
+   * @throws {@link ValidationError} if `owner` fails address validation.
+   * @throws {@link AddressNotFoundError} if position fetch returns no state.
+   * @throws {@link MissingPriceFeedError} if a token price cannot be derived.
+   * @throws {@link PortfolioCalculationError} if valuation arithmetic fails
+   *   for a specific pool.
+   *
+   * @example
+   * ```ts
+   * // Filter to two specific pools
+   * const view = await portfolio.get("GOWNER...", {
+   *   pairAddresses: ["CPAIR_A...", "CPAIR_B..."],
+   * });
+   * console.log(view.totalValueUSD);
+   * ```
+   */
   async get(
     owner: string,
     options: GetPortfolioOptions = {},
@@ -114,7 +241,33 @@ export class PortfolioModule extends TreasuryModule {
   }
 
   /**
-   * Capture a snapshot from a portfolio result for later PnL comparison.
+   * Capture the current portfolio state as an immutable entry snapshot.
+   *
+   * The snapshot records the USD value and token amounts at the moment of
+   * capture and is intended to be stored by the caller (in memory, a
+   * database, or local storage) for later comparison via
+   * {@link getPortfolioPnL}.
+   *
+   * The snapshot represents the **cost basis** — the baseline from which
+   * PnL is measured. Capture it immediately after providing liquidity to
+   * track returns from that entry point.
+   *
+   * @param portfolio - An already-resolved {@link Portfolio} object, e.g.
+   *   the return value of {@link getPortfolio}.
+   * @returns A {@link PortfolioEntrySnapshot} stamped with the current Unix
+   *   timestamp (seconds).
+   *
+   * @example
+   * ```ts
+   * // Record entry cost basis right after depositing
+   * const view = await portfolio.getPortfolio("GOWNER...");
+   * const snapshot = portfolio.createSnapshot(view);
+   *
+   * // … time passes, prices move …
+   *
+   * const pnl = await portfolio.getPortfolioPnL("GOWNER...", snapshot);
+   * console.log(`PnL: ${pnl.pnlPercent.toFixed(2)}%`);
+   * ```
    */
   createSnapshot(portfolio: Portfolio): PortfolioEntrySnapshot {
     return {
@@ -131,11 +284,51 @@ export class PortfolioModule extends TreasuryModule {
   }
 
   /**
-   * Compute PnL relative to an entry snapshot after on-chain state changes.
+   * Compute profit and loss for `owner` relative to a prior entry snapshot.
    *
-   * @param owner - Wallet address to query
-   * @param entry - Entry snapshot from {@link createSnapshot}
-   * @returns PnL breakdown in USD
+   * Fetches the current portfolio (restricted to the pools in `entry`) and
+   * computes the difference from the snapshot's recorded values.
+   *
+   * ### PnL formulas
+   *
+   * ```
+   * pnlUSD     = currentValueUSD − entryValueUSD
+   * pnlPercent = (pnlUSD / entryValueUSD) × 100
+   * ```
+   *
+   * `pnlPercent` is `0` when `entryValueUSD` is zero (i.e. the snapshot was
+   * taken with an empty portfolio) to avoid division by zero.
+   *
+   * ### Impermanent loss
+   *
+   * Because USD values are derived from live on-chain reserves, any
+   * divergence in the price ratio of a pair since the snapshot was captured
+   * is automatically reflected in `currentValueUSD`. There is no separate
+   * IL field; the IL contribution is embedded in `pnlUSD`.
+   *
+   * @param owner - Stellar address of the wallet to evaluate.
+   * @param entry - Snapshot produced by {@link createSnapshot} at the
+   *   desired entry point (cost basis).
+   * @returns {@link PortfolioPnL} with `entryValueUSD`, `currentValueUSD`,
+   *   `pnlUSD`, and `pnlPercent`.
+   *
+   * @throws {@link ValidationError} if `owner` is not a valid Stellar address.
+   * @throws {@link MissingPriceFeedError} if a token's current price cannot
+   *   be derived from on-chain reserves.
+   * @throws {@link PortfolioCalculationError} if valuation fails for any pool
+   *   included in the snapshot.
+   *
+   * @example
+   * ```ts
+   * // Snapshot taken at deposit time (stored in DB / local state)
+   * const entry: PortfolioEntrySnapshot = loadSnapshot("GOWNER...");
+   *
+   * const pnl = await portfolio.getPortfolioPnL("GOWNER...", entry);
+   *
+   * console.log(`Entry value : $${pnl.entryValueUSD.toFixed(2)}`);
+   * console.log(`Current value: $${pnl.currentValueUSD.toFixed(2)}`);
+   * console.log(`PnL          : $${pnl.pnlUSD.toFixed(2)} (${pnl.pnlPercent.toFixed(2)}%)`);
+   * ```
    */
   async getPortfolioPnL(
     owner: string,
@@ -159,10 +352,29 @@ export class PortfolioModule extends TreasuryModule {
   }
 
   /**
-   * Build a price map and track which tokens had no price feed.
+   * Build a spot-price map and report which tokens had no derivable price.
    *
-   * Unlike the inherited {@link TreasuryModule.buildPriceMap}, this version
-   * reports missing tokens so callers can decide whether to warn or fail.
+   * Extends the inherited {@link TreasuryModule.buildPriceMap} by also
+   * collecting a list of tokens that appear in the given pairs but have no
+   * stablecoin anchor — useful for generating warnings without immediately
+   * throwing.
+   *
+   * Stablecoin addresses (set at construction via
+   * {@link TreasuryModuleOptions.stableAddresses}) are unconditionally
+   * assigned a price of `1.0` USD. All other token prices are derived from
+   * the spot rate implied by a pair's reserves when one side is a known
+   * stablecoin:
+   *
+   * ```
+   * priceToken = reserveStable / reserveToken
+   * ```
+   *
+   * Pairs with zero reserves on either side are skipped to avoid
+   * division-by-zero artefacts.
+   *
+   * @param allPairs - List of pair contract addresses to scan.
+   * @returns An object with `priceMap` (token address → USD price) and
+   *   `missingTokens` (addresses for which no price could be derived).
    */
   private async buildPriceMapTracked(
     allPairs: string[],
@@ -178,10 +390,8 @@ export class PortfolioModule extends TreasuryModule {
       for (const pairAddress of allPairs) {
         try {
           const pair = this.portfolioClient.pair(pairAddress);
-          const [{ token0, token1 }, { reserve0, reserve1 }] = await Promise.all([
-            pair.getTokens(),
-            pair.getReserves(),
-          ]);
+          const [{ token0, token1 }, { reserve0, reserve1 }] =
+            await Promise.all([pair.getTokens(), pair.getReserves()]);
 
           if (reserve0 === 0n || reserve1 === 0n) continue;
 
