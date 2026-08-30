@@ -7,6 +7,22 @@ on:
     branches: [main]
 
 jobs:
+  changelog:
+    name: CHANGELOG entry required when src/ changes
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - name: Validate CHANGELOG entry under [Unreleased]
+        run: npm run check:changelog
+
   lint:
     runs-on: ubuntu-latest
     steps:

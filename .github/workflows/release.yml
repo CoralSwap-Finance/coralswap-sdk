@@ -78,7 +78,7 @@ jobs:
             COMMITS=$(git log --pretty=format:"- %s" "${LAST_TAG}..HEAD^")
           fi
 
-          ENTRY="## ${NEW_VERSION} (${DATE})\n\n${COMMITS}\n"
+          ENTRY="## [${NEW_VERSION}] - ${DATE}\n\n${COMMITS}\n"
 
           # Prepend new entry after the first line (title)
           awk -v entry="$ENTRY" 'NR==1{print; print ""; print entry; next}1' CHANGELOG.md > CHANGELOG.tmp
