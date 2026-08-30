@@ -78,7 +78,8 @@ export class CoralSwapClient {
         this.server = this.createRpcServer(rpcUrl);
         this._poller = null;
         this._activeRpcUrl = rpcUrl;
-        this.networkConfig.rpcUrl = rpcUrl;
+        this._factory = null;
+        this._router = null;
       }
 
       try {
