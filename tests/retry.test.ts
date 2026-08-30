@@ -199,6 +199,160 @@ describe('Retry Utilities', () => {
     expect(op2).toHaveBeenCalledTimes(0);
   });
 
+  it('maxRetries=0 with retryable error calls fn exactly once and throws immediately', async () => {
+    const operation = jest
+      .fn<Promise<never>, []>()
+      .mockRejectedValue(Object.assign(new Error('timeout'), { code: 'ETIMEDOUT' }));
+
+    await expect(
+      withRetry(operation, {
+        maxRetries: 0,
+        baseDelayMs: 500,
+        backoffMultiplier: 2,
+        maxDelayMs: 1000,
+      }),
+    ).rejects.toThrow('timeout');
+
+    expect(operation).toHaveBeenCalledTimes(1);
+    expect(setTimeoutSpy).not.toHaveBeenCalled();
+  });
+
+  it('maxRetries=0 with non-retryable error calls fn exactly once and throws immediately', async () => {
+    const operation = jest
+      .fn<Promise<never>, []>()
+      .mockRejectedValueOnce(new Error('slippage exceeded'));
+
+    await expect(
+      withRetry(operation, {
+        maxRetries: 0,
+        baseDelayMs: 500,
+        backoffMultiplier: 2,
+        maxDelayMs: 1000,
+      }),
+    ).rejects.toThrow('slippage exceeded');
+
+    expect(operation).toHaveBeenCalledTimes(1);
+    expect(setTimeoutSpy).not.toHaveBeenCalled();
+  });
+
+  it('non-retryable error is thrown verbatim without wrapping or mutation', async () => {
+    class CustomAppError extends Error {
+      constructor(message: string) {
+        super(message);
+        this.name = 'CustomAppError';
+      }
+    }
+
+    const original = new CustomAppError('invalid pair');
+    const operation = jest.fn<Promise<never>, []>().mockRejectedValueOnce(original);
+
+    await expect(
+      withRetry(operation, {
+        maxRetries: 3,
+        baseDelayMs: 5,
+        backoffMultiplier: 2,
+        maxDelayMs: 100,
+      }),
+    ).rejects.toBe(original);
+
+    expect(operation).toHaveBeenCalledTimes(1);
+  });
+
+  it('half-open state forces maxRetries=0 even when caller requests retries', async () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date('2020-01-01T00:00:00.000Z'));
+
+    const label = 'CircuitTest_halfOpenSingleShot';
+    const failing = jest
+      .fn<Promise<never>, []>()
+      .mockRejectedValue(new Error('ETIMEDOUT'));
+
+    await expect(
+      withRetry(failing, {
+        maxRetries: 0,
+        baseDelayMs: 1,
+        backoffMultiplier: 2,
+        maxDelayMs: 1,
+        circuitBreaker: { failureThreshold: 1, cooldownMs: 30_000 },
+      }, undefined, label),
+    ).rejects.toThrow('ETIMEDOUT');
+
+    jest.advanceTimersByTime(30_000);
+    expect(getCircuitBreaker(label).getState()).toBe('half-open');
+
+    const failingAgain = jest
+      .fn<Promise<never>, []>()
+      .mockRejectedValue(new Error('ETIMEDOUT'));
+
+    await expect(
+      withRetry(failingAgain, {
+        maxRetries: 5,
+        baseDelayMs: 500,
+        backoffMultiplier: 2,
+        maxDelayMs: 1000,
+        circuitBreaker: { failureThreshold: 2, cooldownMs: 30_000 },
+      }, undefined, label),
+    ).rejects.toThrow('ETIMEDOUT');
+
+    expect(failingAgain).toHaveBeenCalledTimes(1);
+    expect(setTimeoutSpy).not.toHaveBeenCalled();
+    expect(getCircuitBreaker(label).getState()).toBe('open');
+  });
+
+  it('half-open probe failure re-opens the circuit', async () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date('2020-01-01T00:00:00.000Z'));
+
+    const label = 'CircuitTest_halfOpenReopen';
+
+    const failing = jest
+      .fn<Promise<never>, []>()
+      .mockRejectedValue(new Error('ETIMEDOUT'));
+
+    await expect(
+      withRetry(failing, {
+        maxRetries: 0,
+        baseDelayMs: 1,
+        backoffMultiplier: 2,
+        maxDelayMs: 1,
+        circuitBreaker: { failureThreshold: 2, cooldownMs: 30_000 },
+      }, undefined, label),
+    ).rejects.toThrow('ETIMEDOUT');
+
+    expect(getCircuitBreaker(label).getState()).toBe('closed');
+
+    await expect(
+      withRetry(failing, {
+        maxRetries: 0,
+        baseDelayMs: 1,
+        backoffMultiplier: 2,
+        maxDelayMs: 1,
+        circuitBreaker: { failureThreshold: 2, cooldownMs: 30_000 },
+      }, undefined, label),
+    ).rejects.toThrow('ETIMEDOUT');
+
+    expect(getCircuitBreaker(label).getState()).toBe('open');
+
+    jest.advanceTimersByTime(30_000);
+    expect(getCircuitBreaker(label).getState()).toBe('half-open');
+
+    const failingOnce = jest
+      .fn<Promise<never>, []>()
+      .mockRejectedValue(new Error('connection reset'));
+
+    await expect(
+      withRetry(failingOnce, {
+        maxRetries: 0,
+        baseDelayMs: 1,
+        backoffMultiplier: 2,
+        maxDelayMs: 1,
+        circuitBreaker: { failureThreshold: 2, cooldownMs: 30_000 },
+      }, undefined, label),
+    ).rejects.toThrow('connection reset');
+
+    expect(getCircuitBreaker(label).getState()).toBe('open');
+  });
+
   it('auto-closes after cooldown and allows a half-open probe', async () => {
     jest.useFakeTimers();
     jest.setSystemTime(new Date('2020-01-01T00:00:00.000Z'));
