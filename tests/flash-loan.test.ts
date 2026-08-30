@@ -149,6 +149,7 @@ describe('FlashLoanModule.execute()', () => {
       expect(result.event.feePaid).toBe(90n);
       expect(result.event.token).toBe('TOKEN_A');
       expect(result.event.callbackAddress).toBe('RECEIVER_ADDR');
+      expect(result.event.decodeStatus).toBe('complete');
     });
 
     it('exposes borrowedAmount and feePaid at top-level via event', async () => {
@@ -173,9 +174,10 @@ describe('FlashLoanModule.execute()', () => {
       const { borrowedAmount, feePaid } = result.event;
       expect(borrowedAmount).toBe(500_000n);
       expect(feePaid).toBe(50n);
+      expect(result.event.decodeStatus).toBe('complete');
     });
 
-    it('falls back to request values when no FlashLoanExecuted event is present', async () => {
+    it('falls back to request values when no FlashLoanExecuted event is present with partial decodeStatus', async () => {
       const client = buildMockClient({
         txResult: {
           status: 'SUCCESS',
@@ -189,12 +191,13 @@ describe('FlashLoanModule.execute()', () => {
       const result = await module.execute(FLASH_REQUEST);
 
       expect(result.txHash).toBe('MOCK_TX');
-      // Fallback event still satisfies the interface
+      // Fallback event still satisfies the interface and is labeled with partial decodeStatus
       expect(result.event.type).toBe('FlashLoanExecuted');
       expect(result.event.borrowedAmount).toBe(FLASH_REQUEST.amount);
+      expect(result.event.decodeStatus).toBe('partial');
     });
 
-    it('ignores events when getTransaction returns non-SUCCESS status', async () => {
+    it('ignores events when getTransaction returns non-SUCCESS status and labels partial decodeStatus', async () => {
       const client = buildMockClient({
         txResult: { status: 'NOT_FOUND' },
       });
@@ -204,6 +207,7 @@ describe('FlashLoanModule.execute()', () => {
 
       expect(result.txHash).toBe('MOCK_TX');
       expect(result.event.type).toBe('FlashLoanExecuted');
+      expect(result.event.decodeStatus).toBe('partial');
     });
   });
 

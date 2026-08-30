@@ -359,10 +359,10 @@ describe('EventParser', () => {
   });
 
   // -----------------------------------------------------------------------
-  // Strict mode
+  // Strict mode & No silent fabrication
   // -----------------------------------------------------------------------
 
-  describe('parseStrict', () => {
+  describe('parseStrict and no silent fabrication', () => {
     it('still skips unknown topics without throwing', () => {
       const diag = makeDiagnosticEvent('unknown_topic', xdr.ScVal.scvVoid());
       const result = parser.parseStrict([diag]);
@@ -372,6 +372,57 @@ describe('EventParser', () => {
     it('throws on malformed data for a known topic', () => {
       const diag = makeDiagnosticEvent('swap', xdr.ScVal.scvVoid());
       expect(() => parser.parseStrict([diag])).toThrow();
+    });
+
+    it('attaches decodeStatus complete to all successfully parsed events', () => {
+      const swapData = scMap([
+        ['sender', addressVal(ADDR_SENDER)],
+        ['token_in', addressVal(ADDR_TOKEN_A)],
+        ['token_out', addressVal(ADDR_TOKEN_B)],
+        ['amount_in', i128Val(1000000n)],
+        ['amount_out', i128Val(980000n)],
+        ['fee_bps', u32Val(30)],
+      ]);
+      const diag = makeDiagnosticEvent(EVENT_TOPICS.SWAP, swapData);
+      const result = parser.parse([diag]);
+      expect(result).toHaveLength(1);
+      expect(result[0].decodeStatus).toBe('complete');
+    });
+
+    it('throws ValidationError instead of silently fabricating 0n for invalid i128 field', () => {
+      const invalidSwapData = scMap([
+        ['sender', addressVal(ADDR_SENDER)],
+        ['token_in', addressVal(ADDR_TOKEN_A)],
+        ['token_out', addressVal(ADDR_TOKEN_B)],
+        ['amount_in', xdr.ScVal.scvString('not_an_i128')], // invalid type
+        ['amount_out', i128Val(980000n)],
+        ['fee_bps', u32Val(30)],
+      ]);
+      const diag = makeDiagnosticEvent(EVENT_TOPICS.SWAP, invalidSwapData);
+      expect(() => parser.parseStrict([diag])).toThrow(/Expected i128 ScVal/);
+    });
+
+    it('throws ValidationError instead of silently fabricating 0 for invalid u32 field', () => {
+      const invalidFeeData = scMap([
+        ['previous_fee_bps', xdr.ScVal.scvString('30')], // string instead of u32
+        ['new_fee_bps', u32Val(45)],
+        ['volatility', i128Val(150000n)],
+      ]);
+      const diag = makeDiagnosticEvent(EVENT_TOPICS.FEE_UPDATE, invalidFeeData);
+      expect(() => parser.parseStrict([diag])).toThrow(/Expected u32 ScVal/);
+    });
+
+    it('throws ValidationError when required field is missing', () => {
+      const incompleteSwapData = scMap([
+        ['sender', addressVal(ADDR_SENDER)],
+        ['token_in', addressVal(ADDR_TOKEN_A)],
+        ['token_out', addressVal(ADDR_TOKEN_B)],
+        ['amount_in', i128Val(1000000n)],
+        // amount_out is missing
+        ['fee_bps', u32Val(30)],
+      ]);
+      const diag = makeDiagnosticEvent(EVENT_TOPICS.SWAP, incompleteSwapData);
+      expect(() => parser.parseStrict([diag])).toThrow(/Missing required event field/);
     });
   });
 });
