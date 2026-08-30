@@ -48,6 +48,7 @@ export class WebhookModule {
   private readonly healthCache: Map<string, WebhookEndpointHealth> = new Map();
   private readonly webhooks: Map<string, StoredWebhook> = new Map();
   private readonly webhookState: Map<string, WebhookState> = new Map();
+  private readonly payloads: Map<string, string> = new Map();
   private readonly logger?: Logger;
 
   constructor(deps: WebhookModuleDeps = undefined) {
@@ -108,6 +109,7 @@ export class WebhookModule {
     const deliveryId = `del_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const delivery: WebhookDelivery = { id: deliveryId, webhookId, alertId: (payload['alertId'] as string) ?? 'unknown', status: 'pending', sentAt: Math.floor(Date.now() / 1000), retryCount: 0 };
     this.deliveries.set(deliveryId, delivery);
+    this.payloads.set(deliveryId, body);
     this.recordDeliveryAttempt(webhookId, delivery);
     await this.sendHttpRequest(endpoint, body, delivery);
     return this.deliveries.get(deliveryId)!;
@@ -119,7 +121,7 @@ export class WebhookModule {
     if (delivery.status === 'success' || delivery.status === 'exhausted') throw new ValidationError(`Cannot retry delivery in status ${delivery.status}`);
     const endpoint = this.endpoints.get(delivery.webhookId);
     if (!endpoint) throw new ValidationError(`Webhook endpoint ${delivery.webhookId} not found`);
-    const body = JSON.stringify(this.loadPayload(deliveryId));
+    const body = this.loadPayload(deliveryId);
     await this.sendHttpRequest(endpoint, body, delivery);
     return this.deliveries.get(deliveryId)!;
   }
@@ -494,6 +496,7 @@ export class WebhookModule {
   clear(): void {
     this.webhooks.clear();
     this.webhookState.clear();
+    this.payloads.clear();
     this.logger?.info('webhooks.clear: cleared all webhooks');
   }
 
@@ -537,10 +540,16 @@ export class WebhookModule {
         status: isSuccess ? 'success' : 'failed',
       });
 
-      if (!isSuccess && delivery.retryCount < 3) {
+      if (isSuccess) {
+        this.payloads.delete(delivery.id);
+        return;
+      }
+
+      if (delivery.retryCount < 3) {
         await this.scheduleRetry(delivery.id, delivery.retryCount + 1);
-      } else if (!isSuccess) {
+      } else {
         this.updateDeliveryStatus(delivery.id, 'exhausted');
+        this.payloads.delete(delivery.id);
       }
     } catch (err) {
       this.updateDeliveryStatus(delivery.id, 'failed', {
@@ -557,15 +566,19 @@ export class WebhookModule {
         await this.scheduleRetry(delivery.id, delivery.retryCount + 1);
       } else {
         this.updateDeliveryStatus(delivery.id, 'exhausted');
+        this.payloads.delete(delivery.id);
       }
     }
   }
 
   private async scheduleRetry(
-    _deliveryId: string,
-    _attempt: number,
+    deliveryId: string,
+    attempt: number,
   ): Promise<void> {
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    const backoffMs = Math.min(30_000, 1_000 * Math.pow(2, Math.max(0, attempt - 1)));
+    await sleep(backoffMs);
+    if (!this.deliveries.has(deliveryId)) return;
+    await this.retryDelivery(deliveryId);
   }
 
   private updateDeliveryStatus(
@@ -610,8 +623,12 @@ export class WebhookModule {
     this.healthCache.set(webhookId, health);
   }
 
-  private loadPayload(_deliveryId: string): Record<string, unknown> {
-    return {};
+  private loadPayload(deliveryId: string): string {
+    const body = this.payloads.get(deliveryId);
+    if (body === undefined) {
+      throw new ValidationError(`Payload for delivery not found: ${deliveryId}`);
+    }
+    return body;
   }
 
   private requireState(webhookId: string): WebhookState {
