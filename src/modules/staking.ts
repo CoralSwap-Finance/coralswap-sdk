@@ -58,20 +58,22 @@ const StakeOperationSchema = z.object({
   lpTokenAddress: z
     .string()
     .min(1, "lpTokenAddress must not be empty")
-    .superRefine(
-      (val, ctx) => {
-        if (!isValidAddress(val)) {
-          ctx.addIssue({ code: z.ZodIssueCode.custom, message: `lpTokenAddress is not a valid Stellar address: ${val}` });
-        }
-      },
-    ),
-  amount: z.bigint().superRefine(
-    (val, ctx) => {
-      if (val <= 0n) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, message: `amount must be greater than 0, got ${val}` });
+    .superRefine((val, ctx) => {
+      if (!isValidAddress(val)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `lpTokenAddress is not a valid Stellar address: ${val}`,
+        });
       }
-    },
-  ),
+    }),
+  amount: z.bigint().superRefine((val, ctx) => {
+    if (val <= 0n) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `amount must be greater than 0, got ${val}`,
+      });
+    }
+  }),
 });
 
 /**
@@ -134,11 +136,7 @@ export class StakingModule {
     validateStakeParams(lpTokenAddress, amount);
     const publicKey = await signer.publicKey();
 
-    const op = this.buildStakeOperation(
-      lpTokenAddress,
-      amount,
-      publicKey,
-    );
+    const op = this.buildStakeOperation(lpTokenAddress, amount, publicKey);
 
     const result = await this.client.submitTransaction([op]);
 
@@ -351,7 +349,11 @@ export class StakingModule {
     signer: Signer,
   ): Promise<string> {
     const publicKey = await signer.publicKey();
-    const op = await this.buildUnstakeOperation(lpTokenAddress, amount, publicKey);
+    const op = await this.buildUnstakeOperation(
+      lpTokenAddress,
+      amount,
+      publicKey,
+    );
 
     const result = await this.client.submitTransaction([op]);
 
@@ -454,16 +456,24 @@ export class StakingModule {
   ): Promise<LiquidityResult> {
     validateAddress(removeLiquidityRequest.tokenA, "tokenA");
     validateAddress(removeLiquidityRequest.tokenB, "tokenB");
-    validateDistinctTokens(removeLiquidityRequest.tokenA, removeLiquidityRequest.tokenB);
+    validateDistinctTokens(
+      removeLiquidityRequest.tokenA,
+      removeLiquidityRequest.tokenB,
+    );
     validateAddress(removeLiquidityRequest.to, "to");
     validatePositiveAmount(removeLiquidityRequest.liquidity, "liquidity");
     validateNonNegativeAmount(removeLiquidityRequest.amountAMin, "amountAMin");
     validateNonNegativeAmount(removeLiquidityRequest.amountBMin, "amountBMin");
 
     const publicKey = await signer.publicKey();
-    const unstakeOp = await this.buildUnstakeOperation(lpTokenAddress, amount, publicKey);
+    const unstakeOp = await this.buildUnstakeOperation(
+      lpTokenAddress,
+      amount,
+      publicKey,
+    );
 
-    const deadline = removeLiquidityRequest.deadline ?? this.client.getDeadline();
+    const deadline =
+      removeLiquidityRequest.deadline ?? this.client.getDeadline();
     const withdrawOp = this.client.router.buildRemoveLiquidity(
       removeLiquidityRequest.to,
       removeLiquidityRequest.tokenA,
