@@ -24,12 +24,13 @@ import { ValidationError } from '@/errors';
 import { validateAddress } from '@/utils/validation';
 import { TreasuryModule, TreasuryModuleOptions } from '@/modules/treasury';
 import { SwapModule } from '@/modules/swap';
+import { LEDGER_CLOSE_INTERVAL_SECONDS } from '@/utils/ledger';
 
 const STROOP = 1e7;
 /** Cache TTL for getProtocolMetrics()/getPoolMetrics(), per acceptance criteria. */
 const METRICS_CACHE_TTL_MS = 60_000;
-/** Approximate ledger count for a 24h window at Stellar's ~5s ledger close time. */
-const LEDGERS_PER_DAY = 17_280;
+/** Approximate ledger count for a 24h window, derived from the shared ledger close interval. */
+const LEDGERS_PER_DAY = 86_400 / LEDGER_CLOSE_INTERVAL_SECONDS;
 /**
  * Max swap events fetched per 24h-window query. getSwapHistory() reads a single
  * RPC page with no pagination, so pools/protocols with more than this many swaps

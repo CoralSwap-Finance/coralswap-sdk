@@ -3,6 +3,7 @@ import { CoralSwapClient } from "@/client";
 import { FeeEstimate } from "@/types/fee";
 import { FeeState } from "@/types/pool";
 import { validateAddress, validatePositiveAmount } from "@/utils/validation";
+import { ledgerToApproxTime, LedgerHead } from "@/utils/ledger";
 
 /**
  * Fee module -- dynamic fee transparency and estimation.
@@ -188,6 +189,13 @@ export class FeeModule {
     const fromLedger = options.fromLedger ?? Math.max(0, currentLedger - 518400);
     const toLedger = options.toLedger ?? currentLedger;
 
+    // Reference head for approximating an event's wall-clock time when the RPC
+    // response omits `ledgerClosedAt`. The chain head is ~now.
+    const head: LedgerHead = {
+      ledger: currentLedger,
+      closeTime: Math.floor(Date.now() / 1000),
+    };
+
     // Query swap events directly from the RPC for fee revenue
     const request: rpc.Server.GetEventsRequest = {
       startLedger: fromLedger,
@@ -255,7 +263,8 @@ export class FeeModule {
         totalFeeXLM += feeXLM;
         history.push({
           ledger: event.ledger,
-          timestamp: Number(event.ledgerClosedAt) || 0,
+          timestamp:
+            Number(event.ledgerClosedAt) || ledgerToApproxTime(event.ledger, head),
           feeBps,
           feeXLM,
         });
@@ -340,8 +349,10 @@ export class FeeModule {
     const currentLedger = await this.client.getCurrentLedger();
     const fromLedger = options.fromLedger ?? Math.max(0, currentLedger - 518400);
     const toLedger = options.toLedger ?? currentLedger;
-    const ledgerSpan = toLedger - fromLedger;
-    const daysInPeriod = (ledgerSpan * 5) / 86400; // 5s per ledger
+    // Approximate the queried window in seconds via the shared ledger-time
+    // helper (the reference close time cancels out of the difference).
+    const periodSeconds = ledgerToApproxTime(toLedger, { ledger: fromLedger, closeTime: 0 });
+    const daysInPeriod = periodSeconds / 86400;
     const aprPercent =
       daysInPeriod > 0 && lpValueXLM > 0
         ? (lpFeeShareXLM / lpValueXLM) * (365 / daysInPeriod) * 100
