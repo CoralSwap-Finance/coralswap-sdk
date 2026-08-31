@@ -631,6 +631,44 @@ export function mapError(err: unknown): CoralSwapSDKError {
     if (mappedError) return mappedError;
   }
 
+  // -----------------------------------------------------------------------
+  // Soroban host-level error strings (no numeric contract code)
+  //
+  // The Soroban runtime and RPC return these when the contract itself did
+  // not emit an #[contracterror]. Normalize them early so downstream
+  // consumers get a stable, typed error class instead of UNKNOWN_ERROR.
+  // -----------------------------------------------------------------------
+
+  // Authentication failures — missing/bad signature, wrong source, etc.
+  if (
+    normalizedMessage.includes("badauth") ||
+    normalizedMessage.includes("bad auth") ||
+    normalizedMessage.includes("unauthorized") && normalizedMessage.includes("sign")
+  ) {
+    return new SignerError();
+  }
+
+  // Resource-budget exhaustion (compute, memory, instructions)
+  if (
+    normalizedMessage.includes("budget") ||
+    normalizedMessage.includes("exceededbudget") ||
+    normalizedMessage.includes("resource exhausted") ||
+    normalizedMessage.includes("exceeded resource")
+  ) {
+    return new RpcError(
+      `Soroban resource budget exceeded: ${message}`,
+      { sorobanError: message },
+    );
+  }
+
+  // Generic Soroban simulation / execution failures
+  if (
+    normalizedMessage.includes("hosterror") ||
+    /failed/.test(normalizedMessage) && !normalizedMessage.includes("flash loan")
+  ) {
+    return new SimulationError(message);
+  }
+
   // Extract deadline value from message - improved regex
   const deadlineMatch = message.match(/deadline[:\s]*[a-z]*[:\s]*(\d+)/i);
   if (message.includes("EXPIRED") || normalizedMessage.includes("deadline")) {
