@@ -367,6 +367,20 @@ try {
 
 High-throughput integrations (trading bots, aggregators, dashboards) should tune caching, RPC failover, and connection pooling. See **[docs/PERFORMANCE.md](docs/PERFORMANCE.md)** for use-case profiles, TTL guidance, benchmark numbers, and copy-paste configuration examples.
 
+## Bundle-size Budget
+
+The public surface of the SDK (`src/index.ts`) is guarded by a bundle-size regression budget. Its public exports are bundled with **esbuild in tree-shaking mode** and minified, and the result is checked against a fixed cap. Because tree-shaking drops anything unreachable from the used bindings, a reintroduced dead export only inflates the bundle when it drags genuinely-new, unused code back in — exactly the regression this guard catches.
+
+```bash
+npm run check:bundle-size
+```
+
+| Budget                              | Value     |
+| ----------------------------------- | --------- |
+| `src/index.ts` (minified bundle)   | 200 KiB (204800 bytes) |
+
+The budget is enforced in CI by `.github/workflows/bundle-size.yml`. To change it, update `BUNDLE_SIZE_BUDGET_BYTES` in `scripts/check-bundle-size.mjs` and this table.
+
 ## Design Principles
 
 | Principle      | Implementation                                 |

@@ -29,6 +29,7 @@
     "test:integration:treasury": "jest --config jest.integration.config.js --testPathPattern=treasury.integration",
     "test:integration:squid": "jest --config jest.integration.config.js --testPathPattern=squid.integration",
     "lint": "eslint src/**/*.ts",
+    "check:bundle-size": "node scripts/check-bundle-size.mjs",
     "lint:fix": "eslint src/**/*.ts --fix",
     "clean": "rimraf dist",
     "prepare": "npm run build",
@@ -70,7 +71,9 @@
     "@types/node": "^26.1.2",
     "@typescript-eslint/eslint-plugin": "^8.68.0",
     "@typescript-eslint/parser": "^8.68.0",
+    "@typescript/native": "npm:typescript@^7.0.2",
     "dotenv": "^17.4.2",
+    "esbuild": "^0.28.2",
     "eslint": "^10.8.0",
     "fast-check": "^4.9.0",
     "jest": "^29.7.0",
@@ -79,8 +82,7 @@
     "ts-node": "^10.9.2",
     "tsconfig-paths": "^4.2.0",
     "typedoc": "^0.28.20",
-    "typescript": "npm:@typescript/typescript6@^6.0.2",
-    "@typescript/native": "npm:typescript@^7.0.2"
+    "typescript": "npm:@typescript/typescript6@^6.0.2"
   },
   "engines": {
     "node": ">=20.0.0"
