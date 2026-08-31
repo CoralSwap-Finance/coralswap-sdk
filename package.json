@@ -39,6 +39,7 @@
     "examples:alert-setup": "ts-node --transpile-only --require tsconfig-paths/register examples/alert-setup.ts",
     "examples:rwa-pool": "ts-node examples/rwa-pool.ts",
     "examples:governance-vote": "ts-node examples/governance-vote.ts",
+    "examples:tax-reporting": "ts-node examples/tax-reporting.ts",
     "docs": "typedoc",
     "fuzz": "jest --testPathPattern=fuzz --no-coverage",
     "benchmark": "ts-node benchmarks/run.ts",
