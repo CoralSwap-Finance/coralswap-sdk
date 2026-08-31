@@ -10,6 +10,30 @@ import { ValidationError, InsufficientLiquidityError } from "@/errors";
 export const MIN_TWAP_WINDOW_SECONDS = 300; // 5 minutes
 
 /**
+ * Hard upper bound on cached observations per pair.
+ *
+ * The observation cache uses a dual-pruning policy:
+ *
+ * 1. **Window-coverage pruning (primary):** After each new observation, entries
+ *    are dropped from the front only when the remaining cache still spans at
+ *    least {@link MIN_TWAP_WINDOW_SECONDS}. This guarantees that, once a pair
+ *    has been polled for the full minimum window, the cache always holds enough
+ *    history to produce a valid TWAP — regardless of polling frequency.
+ *
+ * 2. **Hard-cap pruning (growth bound):** If window-coverage pruning has not
+ *    reduced the cache below {@link MAX_OBSERVATIONS} (e.g., because all
+ *    observations are still within the minimum window), the oldest entries are
+ *    evicted until the count reaches the cap. This prevents unbounded memory
+ *    growth for very high-frequency pairs.
+ *
+ * Consequence: for a pair polled once per second the cache can hold up to
+ * `MAX_OBSERVATIONS` entries; once the oldest observation is more than
+ * `MIN_TWAP_WINDOW_SECONDS` old, window-coverage pruning takes over and the
+ * cache stabilises at the number of observations produced in that window.
+ */
+export const MAX_OBSERVATIONS = 500;
+
+/**
  * TWAP Oracle data point from cumulative price accumulators.
  */
 export interface TWAPObservation {
@@ -89,14 +113,39 @@ export class OracleModule {
       blockTimestampLast: prices.blockTimestampLast,
     };
 
-    // Cache observation for TWAP calculation
+    // Cache observation for TWAP calculation using dual-pruning policy:
+    //
+    // Pass 1 — window-coverage pruning:
+    //   Drop the oldest entry if the cache still covers MIN_TWAP_WINDOW_SECONDS
+    //   after the removal (i.e. observations[1]..newest spans the minimum window).
+    //   Repeat until the invariant would be violated or the cache has ≤ 1 entry.
+    //
+    // Pass 2 — hard-cap pruning (growth bound):
+    //   If the cache still exceeds MAX_OBSERVATIONS after pass 1, evict from the
+    //   front until it fits. This caps memory use for high-frequency pairs whose
+    //   entire history is still inside the minimum window.
     const key = pairAddress;
     const existing = this.observationCache.get(key) ?? [];
     existing.push(observation);
-    // Keep only last 100 observations
-    if (existing.length > 100) {
-      existing.splice(0, existing.length - 100);
+
+    const newestTs = existing[existing.length - 1].blockTimestampLast;
+
+    // Pass 1: drop from the front while window coverage is preserved
+    while (existing.length > 1) {
+      const windowAfterDrop =
+        newestTs - existing[1].blockTimestampLast;
+      if (windowAfterDrop >= MIN_TWAP_WINDOW_SECONDS) {
+        existing.shift();
+      } else {
+        break;
+      }
     }
+
+    // Pass 2: enforce hard cap as a growth bound
+    if (existing.length > MAX_OBSERVATIONS) {
+      existing.splice(0, existing.length - MAX_OBSERVATIONS);
+    }
+
     this.observationCache.set(key, existing);
 
     return observation;
