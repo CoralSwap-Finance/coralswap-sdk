@@ -21,6 +21,8 @@ import { buildSimulationResult } from '@/utils/simulation';
 import { RateLimiter } from '@/utils/rate-limiter';
 import { withRetry, RetryOptions, isRetryable } from '@/utils/retry';
 import { TransactionComposer } from '@/transaction-composer';
+import { TypedEventCursor } from '@/utils/event-cursor';
+import { EventCursorOptions } from '@/utils/event-cursor';
 export { KeypairSigner, PollingStrategy, PollingOptions };
 
 /**
@@ -304,6 +306,38 @@ export class CoralSwapClient {
    */
   transactionComposer(): TransactionComposer {
     return new TransactionComposer(this);
+  }
+
+  /**
+   * Open a single, filtered, cursor-pagination-aware stream of typed events
+   * for a contract.
+   *
+   * Returns a {@link TypedEventCursor} that applies the given topic filters at
+   * the cursor level (reusing the shared {@link EventCursor} pagination and
+   * ledger-window semantics) and decodes each page into typed
+   * {@link CoralSwapEvent}s. Multiple listeners can compose over the one cursor
+   * instead of each re-issuing `getEvents` and re-filtering per module.
+   *
+   * @param contractId - Contract whose events should be streamed (e.g. a pair
+   *   address).
+   * @param filters - Topic symbols to filter on, e.g. `["swap", "sync"]`. Omit
+   *   to receive all recognised CoralSwap topics.
+   * @param options - Optional ledger-window / page-limit defaults forwarded to
+   *   the underlying cursor.
+   * @returns A typed, cursor-pagination-aware event cursor.
+   * @example
+   * const cursor = client.allEvents(pairAddress, ['swap', 'sync']);
+   * const events = await cursor.scan({ limit: 500 });
+   * for await (const event of cursor.stream()) {
+   *   if (event.type === 'swap') console.log(event.amountIn);
+   * }
+   */
+  allEvents(
+    contractId: string,
+    filters?: string[],
+    options?: EventCursorOptions,
+  ): TypedEventCursor {
+    return new TypedEventCursor(this.server, contractId, filters, options);
   }
 
 

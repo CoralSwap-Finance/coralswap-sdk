@@ -246,6 +246,42 @@ export class EventParser {
     return this.parse(diagnosticEvents, txHash, ledger);
   }
 
+  /**
+   * Decode a single Soroban `getEvents` response entry into a typed
+   * {@link CoralSwapEvent}.
+   *
+   * Unlike {@link parse}/{@link fromTransaction}, which operate on
+   * `xdr.DiagnosticEvent`s from transaction result meta, this consumes the
+   * `rpc.Api.EventResponse` shape returned by live event streaming (see
+   * {@link EventCursor}). It applies the same contract-filter and
+   * topic-dispatch rules, so streamed events are typed identically to
+   * transaction-parsed ones.
+   *
+   * @param event - A single event entry from `server.getEvents`.
+   * @returns The typed event, or `null` when it is not a recognised CoralSwap
+   *   event, is filtered out, or did not run in a successful contract call.
+   */
+  fromEventResponse(event: rpc.Api.EventResponse): CoralSwapEvent | null {
+    if (event.inSuccessfulContractCall === false) return null;
+
+    const contractId = event.contractId ? event.contractId.toString() : "";
+    const topics = event.topic ?? [];
+    const data = event.value;
+    if (!data) return null;
+
+    try {
+      return this.decodeParts(
+        contractId,
+        topics,
+        data,
+        event.txHash ?? "",
+        event.ledger ?? 0,
+      );
+    } catch {
+      return null;
+    }
+  }
+
   // -------------------------------------------------------------------------
   // Internal decode logic
   // -------------------------------------------------------------------------
@@ -264,17 +300,39 @@ export class EventParser {
 
     const contractId = extractContractId(evt);
 
-    // If contract filter is configured, skip non-matching contracts
-    if (this.contractIds.size > 0 && !this.contractIds.has(contractId)) {
-      return null;
-    }
-
     let topics: xdr.ScVal[];
     let data: xdr.ScVal;
     try {
       topics = extractTopics(evt);
       data = extractData(evt);
     } catch {
+      return null;
+    }
+
+    return this.decodeParts(contractId, topics, data, txHash, ledger);
+  }
+
+  /**
+   * Decode an already-extracted `(contractId, topics, data)` triple into a
+   * typed {@link CoralSwapEvent}.
+   *
+   * This is the shared core used by both {@link decodeSingle} (diagnostic
+   * events) and {@link fromEventResponse} (Soroban `getEvents` responses), so
+   * live-event streaming and transaction-result parsing apply identical
+   * contract-filtering and topic-dispatch rules.
+   *
+   * @returns The typed event, or `null` when the contract is filtered out or
+   *   the topic is not a recognised CoralSwap event.
+   */
+  private decodeParts(
+    contractId: string,
+    topics: xdr.ScVal[],
+    data: xdr.ScVal,
+    txHash: string,
+    ledger: number,
+  ): CoralSwapEvent | null {
+    // If contract filter is configured, skip non-matching contracts
+    if (this.contractIds.size > 0 && !this.contractIds.has(contractId)) {
       return null;
     }
 

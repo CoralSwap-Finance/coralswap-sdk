@@ -1,4 +1,6 @@
 import { xdr, rpc } from "@stellar/stellar-sdk";
+import { EventParser } from "./events";
+import { CoralSwapEvent } from "@/types/events";
 
 /**
  * Lowest ledger sequence that can legally be passed as `startLedger`.
@@ -183,6 +185,117 @@ export class EventCursor {
     }
 
     return allEvents;
+  }
+}
+
+/**
+ * Per-scan overrides for a {@link TypedEventCursor}. The `contractIds`/`topics`
+ * filters are fixed for the lifetime of the cursor (they are the whole point of
+ * composing a single filtered cursor), so only the ledger window and page limit
+ * are adjustable here.
+ */
+export interface TypedEventScanParams {
+  /** Explicit start ledger. Defaults to the cursor's anchored position. */
+  fromLedger?: number;
+  /** Explicit end ledger. When omitted the scan runs to the chain head. */
+  toLedger?: number;
+  /** Per-request page limit passed through to `getEvents`. */
+  limit?: number;
+}
+
+/**
+ * TypedEventCursor — a single, filtered, cursor-pagination-aware stream of
+ * typed {@link CoralSwapEvent}s.
+ *
+ * Composed listeners historically forked topic filtering per module, each
+ * re-issuing `getEvents` and re-decoding raw responses. This cursor bakes the
+ * contract and topic filters in once (applied at the cursor level via the
+ * shared {@link EventCursor}) and decodes every page through the shared
+ * {@link EventParser}, so multiple listeners can compose over one cursor
+ * instead of each re-filtering.
+ *
+ * Pagination semantics are inherited verbatim from {@link EventCursor}:
+ * ledger-window anchoring against `getLatestLedger()`, base64-XDR topic
+ * encoding, in-memory cursor advancement, and full-page pagination.
+ *
+ * @example
+ * ```ts
+ * const cursor = client.allEvents(pairAddress, ["swap", "sync"]);
+ * for await (const event of cursor.stream()) {
+ *   if (event.type === "swap") console.log(event.amountIn, event.amountOut);
+ * }
+ * ```
+ */
+export class TypedEventCursor {
+  private readonly cursor: EventCursor;
+  private readonly parser: EventParser;
+  private readonly contractId?: string;
+  private readonly topicFilters?: string[];
+
+  /**
+   * @param server - Soroban RPC server used for `getEvents`.
+   * @param contractId - Contract whose events are streamed. When omitted,
+   *   events from any contract are returned (still topic-filtered).
+   * @param filters - Topic symbols to filter on at the cursor level (e.g.
+   *   `["swap", "sync"]`). Omit for all recognised topics.
+   * @param opts - Ledger-window / page-limit defaults for the underlying cursor.
+   */
+  constructor(
+    server: rpc.Server,
+    contractId?: string,
+    filters?: string[],
+    opts: EventCursorOptions = {},
+  ) {
+    this.cursor = new EventCursor(server, opts);
+    this.parser = new EventParser(contractId ? [contractId] : []);
+    this.contractId = contractId;
+    this.topicFilters = filters;
+  }
+
+  /** Reset the underlying cursor position. Useful for tests / re-scans. */
+  reset(): void {
+    this.cursor.reset();
+  }
+
+  /**
+   * Scan the next window and return the decoded, typed events.
+   *
+   * Applies the cursor's fixed contract/topic filters, advances the shared
+   * pagination cursor, and decodes each raw response into a typed event
+   * (undecodable / unrecognised entries are dropped).
+   */
+  async scan(params: TypedEventScanParams = {}): Promise<CoralSwapEvent[]> {
+    const raw = await this.cursor.scan({
+      contractIds: this.contractId ? [this.contractId] : [],
+      topics: this.topicFilters,
+      fromLedger: params.fromLedger,
+      toLedger: params.toLedger,
+      limit: params.limit,
+    });
+    return this.decode(raw);
+  }
+
+  /**
+   * Stream the decoded, typed events one at a time.
+   *
+   * A thin async-iterable wrapper over {@link scan} so listeners can consume
+   * the filtered cursor with `for await`.
+   */
+  async *stream(
+    params: TypedEventScanParams = {},
+  ): AsyncGenerator<CoralSwapEvent, void, unknown> {
+    for (const event of await this.scan(params)) {
+      yield event;
+    }
+  }
+
+  private decode(raw: rpc.Api.EventResponse[]): CoralSwapEvent[] {
+    const decoded: CoralSwapEvent[] = [];
+    for (const event of raw) {
+      const typed = this.parser.fromEventResponse(event);
+      if (typed) decoded.push(typed);
+    }
+    return decoded;
   }
 }
 

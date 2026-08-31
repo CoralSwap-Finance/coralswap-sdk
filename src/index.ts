@@ -138,6 +138,7 @@ export {
   decodeEvents,
   decodeEventsFromXdr,
   EventCursor,
+  TypedEventCursor,
   decodeEventTopic,
   MIN_START_LEDGER,
   batchCall,
@@ -161,6 +162,7 @@ export type {
   TransactionStatus,
   RetryDecision,
   EventCursorOptions,
+  TypedEventScanParams,
 } from "./utils";
 
 // Schema validation
