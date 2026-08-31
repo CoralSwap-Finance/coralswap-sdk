@@ -146,6 +146,8 @@ export {
   batchRequestOrThrow,
   DEFAULT_BATCH_CONCURRENCY,
   ConnectionPool,
+  ledgerToApproxTime,
+  LEDGER_CLOSE_INTERVAL_SECONDS,
 } from './utils';
 
 
@@ -154,6 +156,7 @@ export type {
   SimulationResult,
   SimulationResourceEstimate,
   WaitNextLedgerOptions,
+  LedgerHead,
   DecodeEventsOptions,
   SimulateFn,
   BatchRequestOptions,
