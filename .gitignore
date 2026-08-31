@@ -8,5 +8,6 @@ coverage/
 *.sh
 .DS_Store
 *.tsbuildinfo
+benchmarks/bundle-size.json
 docs/*
 !docs/PERFORMANCE.md
