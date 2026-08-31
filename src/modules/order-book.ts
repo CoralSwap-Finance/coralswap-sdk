@@ -86,6 +86,16 @@ export async function getStopLossOrders(address: string): Promise<UnifiedOrder[]
   return MOCK_OPEN_STOP_LOSS_ORDERS;
 }
 
+/**
+ * NOTE — not a price oracle.
+ *
+ * All monetary values in this module (limit prices, total-value-locked,
+ * trade prices) are derived from on-chain order parameters or mock fixtures
+ * and are **not** guaranteed to reflect fair market value. Do not use them
+ * as the sole basis for pricing decisions, settlement, or settlement
+ * accounting. For reliable, manipulation-resistant pricing, use the TWAP
+ * Oracle module (`src/modules/oracle.ts`).
+ */
 export async function getOpenOrders(address: string): Promise<UnifiedOrder[]> {
   validateWithSchema(OrderBookAddressSchema, address, 'getOpenOrders.address');
   const limitOrders = await getLimitOrders(address);
@@ -100,6 +110,14 @@ export async function getOpenOrders(address: string): Promise<UnifiedOrder[]> {
   return allOrders;
 }
 
+/**
+ * NOTE — not a price oracle.
+ *
+ * `totalValueLocked` is computed from order-embedded amounts and hardcoded
+ * mock token prices. It should not be treated as an authoritative valuation
+ * of locked assets. For real USD valuations, use the Treasury module
+ * (`src/modules/treasury.ts`).
+ */
 export async function getOrderSummary(
   address: string,
   _client: CoralSwapClient,
@@ -137,6 +155,15 @@ export async function getOrderSummary(
   };
 }
 
+/**
+ * NOTE — not a price oracle.
+ *
+ * The `price` field on each trade reflects the on-chain exchange rate at
+ * the time the (mock) trade was recorded and should not be relied upon as
+ * a reliable market price feed. For signed price attestations, use the
+ * RedStone price guard (`src/utils/redstone.ts`) or the TWAP Oracle
+ * (`src/modules/oracle.ts`).
+ */
 export async function getTradeHistory(address: string, filter?: TradeFilter): Promise<Trade[]> {
     validateWithSchema(OrderBookAddressSchema, address, 'getTradeHistory.address');
     if (filter !== undefined) {
