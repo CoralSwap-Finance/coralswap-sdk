@@ -69,6 +69,40 @@ describe("EventCursor", () => {
     expect(all.map((e: any) => e.txHash)).toEqual(['a','b','c','d','e']);
   });
 
+  it("exposes pageInfo metadata and a truncated flag when a page hits the cap", async () => {
+    const eventsPage1 = [
+      { ledger: 1, txHash: 'a' },
+      { ledger: 2, txHash: 'b' },
+      { ledger: 3, txHash: 'c' },
+    ];
+
+    const server: any = {
+      getLatestLedger: jest.fn().mockResolvedValue({ sequence: 500 }),
+      getEvents: jest.fn().mockImplementation(async (req: any) => {
+        if (req.startLedger === 1) {
+          return {
+            events: eventsPage1,
+            latestLedger: 3,
+            cursor: 'next-page',
+          };
+        }
+        return { events: [], latestLedger: 3, cursor: 'final-page' };
+      }),
+    };
+
+    const cursor = new EventCursor(server);
+    const all = await cursor.scan({ fromLedger: 1, limit: 3 });
+
+    expect(all.truncated).toBe(true);
+    expect(all.pageInfo).toMatchObject({
+      startLedger: 1,
+      endLedger: 3,
+      limit: 3,
+      hasMore: true,
+      nextCursor: 'next-page',
+    });
+  });
+
   // ---------------------------------------------------------------------------
   // Ledger anchoring floor (#437)
   // ---------------------------------------------------------------------------
