@@ -135,6 +135,14 @@ The example simulates both a happy path (within deviation) and a failure case (s
 
 ---
 
+### `tax-reporting.ts` ← **New**
+
+**Run:** `npm run examples:tax-reporting`
+
+Demonstrates a portfolio reconciliation workflow that ingests a fixture history, groups trades by month, and produces a tax summary per period with pagination-friendly export rows. The example stays fully offline so it can run in CI without requiring a live Stellar RPC endpoint.
+
+---
+
 ### `alert-setup.ts` ← **New**
 
 **Run:** `npm run examples:alert-setup`
