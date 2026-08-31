@@ -1,4 +1,5 @@
 import { CoralSwapClient } from '../src/client';
+import { TaxReportingModule } from '../src/modules/tax-reporting';
 import { Network } from '../src/types/common';
 
 export interface ReconciliationEvent {
