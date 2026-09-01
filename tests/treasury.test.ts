@@ -1,5 +1,7 @@
+import { xdr, Address } from '@stellar/stellar-sdk';
 import { TreasuryModule } from '../src/modules/treasury';
 import { CoralSwapClient } from '../src/client';
+import { MIN_START_LEDGER } from '../src/utils/event-cursor';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -57,29 +59,51 @@ function makeSwapEvent(
   feeBps: number,
   tokenIn: string,
 ) {
-  const makeI128 = (n: bigint) => ({
-    i128: () => ({ hi: () => ({ toString: () => (n >> 64n).toString() }), lo: () => ({ toString: () => (n & ((1n << 64n) - 1n)).toString() }) }),
-  });
-  const makeU32 = (n: number) => ({ u32: () => n });
-  const makeAddr = (s: string) => ({ address: () => ({ toString: () => s }) });
+  const entry = (key: string, val: xdr.ScVal) =>
+    new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol(key), val });
+  const addrVal = (s: string) =>
+    ({
+      type: 'scvAddress',
+      address: { toString: () => s },
+    }) as unknown as xdr.ScVal;
 
-  const entries = [
-    { key: { sym: () => ({ toString: () => 'amount_in' }) }, val: makeI128(amountIn) },
-    { key: { sym: () => ({ toString: () => 'fee_bps' }) }, val: makeU32(feeBps) },
-    { key: { sym: () => ({ toString: () => 'token_in' }) }, val: makeAddr(tokenIn) },
-    { key: { sym: () => ({ toString: () => 'amount_out' }) }, val: makeI128(amountIn - (amountIn * BigInt(feeBps)) / 10000n) },
-    { key: { sym: () => ({ toString: () => 'token_out' }) }, val: makeAddr(TOKEN_B) },
-    { key: { sym: () => ({ toString: () => 'sender' }) }, val: makeAddr('GSENDER') },
-  ];
+  const value = xdr.ScVal.scvMap([
+    entry('amount_in', xdr.ScVal.scvI128(amountIn)),
+    entry('fee_bps', xdr.ScVal.scvU32(feeBps)),
+    entry('token_in', addrVal(tokenIn)),
+    entry(
+      'amount_out',
+      xdr.ScVal.scvI128(amountIn - (amountIn * BigInt(feeBps)) / 10000n),
+    ),
+    entry('token_out', addrVal(TOKEN_B)),
+    entry('sender', addrVal('GSENDER')),
+  ]);
 
   return {
-    topic: ['swap'],
-    value: { map: () => entries },
+    // Real getEvents responses carry topics as XDR ScVals, never bare strings.
+    topic: [xdr.ScVal.scvSymbol('swap')],
+    value,
     ledger,
     contractId: PAIR_ADDR_1,
     txHash: `txhash_${ledger}`,
+    pagingToken: `${ledger}-1`,
     ledgerClosedAt: new Date(ledger * 5000).toISOString(),
   };
+}
+
+/**
+ * Decode a `getEvents` topic filter segment the way a real RPC node does.
+ *
+ * Throws on a raw-string filter, so a regression back to `topics: [['swap']]`
+ * fails the mock instead of silently matching.
+ */
+function decodeTopicFilter(segment: string): string {
+  if (segment === '*') return segment;
+  const decoded = xdr.ScVal.fromXdr(segment, 'base64');
+  if (decoded.type !== 'scvSymbol') {
+    throw new Error(`topic filter must be an scvSymbol, got ${decoded.type}`);
+  }
+  return decoded.sym.toString();
 }
 
 /**
@@ -115,13 +139,35 @@ function createMockClient(opts: {
       makeMockLPToken(lpSpecs[addr] ?? {}),
     ),
     server: {
+      // Mirrors a real RPC node: rejects raw-string topic filters and
+      // zero-anchored ledger cursors instead of matching them literally.
       getEvents: jest.fn().mockImplementation(
-        (req: { filters?: Array<{ contractIds?: string[] }> }) => {
+        (req: {
+          startLedger?: number;
+          cursor?: string;
+          filters?: Array<{ contractIds?: string[]; topics?: string[][] }>;
+        }) => {
+          if (req?.cursor === undefined) {
+            if (typeof req?.startLedger !== 'number' || req.startLedger < MIN_START_LEDGER) {
+              throw new Error(`invalid startLedger: ${req?.startLedger}`);
+            }
+            if (req.startLedger > currentLedger) {
+              throw new Error('startLedger is after the latest ledger');
+            }
+          }
+
+          const topicFilter = req?.filters?.[0]?.topics?.[0] ?? [];
+          const topics = topicFilter.map(decodeTopicFilter);
+          if (topics.length > 0 && topics[0] !== 'swap') {
+            return Promise.resolve({ events: [], latestLedger: currentLedger });
+          }
+
           const id = req?.filters?.[0]?.contractIds?.[0] ?? '';
           const events = eventsPerPair[id] ?? [];
-          return Promise.resolve({ events });
+          return Promise.resolve({ events, latestLedger: currentLedger });
         },
       ),
+      getLatestLedger: jest.fn().mockResolvedValue({ sequence: currentLedger }),
     },
     getCurrentLedger: jest.fn().mockResolvedValue(currentLedger),
   } as unknown as CoralSwapClient;
@@ -618,6 +664,90 @@ describe('TreasuryModule', () => {
       const inactive = result.byPool.find((p) => p.pairAddress === PAIR_ADDR_2);
       expect(inactive?.revenueUSD).toBe(0);
       expect(inactive?.volumeUSD).toBe(0);
+    });
+  });
+
+  // =========================================================================
+  // EventCursor migration (#482)
+  // =========================================================================
+  describe('getFeeRevenue() event queries', () => {
+    it('encodes the swap topic filter as a base64 XDR ScVal symbol', async () => {
+      const client = createMockClient({ pairs: [PAIR_ADDR_1], currentLedger: 100_000 });
+      const treasury = new TreasuryModule(client);
+
+      await treasury.getFeeRevenue({ granularity: '1d' });
+
+      const request = (client.server.getEvents as jest.Mock).mock.calls[0][0];
+      const [segment] = request.filters[0].topics[0];
+      expect(segment).toBe(xdr.ScVal.scvSymbol('swap').toXdr('base64'));
+      expect(decodeTopicFilter(segment)).toBe('swap');
+    });
+
+    it('anchors startLedger to the chain head instead of ledger 0', async () => {
+      const client = createMockClient({ pairs: [PAIR_ADDR_1], currentLedger: 100_000 });
+      const treasury = new TreasuryModule(client);
+
+      // Even an explicit zero cursor is clamped to a ledger the RPC accepts.
+      await treasury.getFeeRevenue({ fromLedger: 0, toLedger: 1_000, granularity: '1d' });
+
+      const request = (client.server.getEvents as jest.Mock).mock.calls[0][0];
+      expect(request.startLedger).toBeGreaterThanOrEqual(MIN_START_LEDGER);
+      expect(request.cursor).toBeUndefined();
+    });
+
+    it('defaults the window to the last 30 days of ledgers below the head', async () => {
+      const currentLedger = 1_000_000;
+      const client = createMockClient({ pairs: [PAIR_ADDR_1], currentLedger });
+      const treasury = new TreasuryModule(client);
+
+      await treasury.getFeeRevenue({ granularity: '1d' });
+
+      const request = (client.server.getEvents as jest.Mock).mock.calls[0][0];
+      expect(request.startLedger).toBe(currentLedger - 518_400);
+    });
+
+    it('clamps a toLedger beyond the chain head', async () => {
+      const currentLedger = 5_000;
+      const client = createMockClient({
+        pairs: [PAIR_ADDR_1],
+        currentLedger,
+        eventsPerPair: {
+          [PAIR_ADDR_1]: [makeSwapEvent(4_000, 10_000_000n, 30, STABLE_ADDR)],
+        },
+        pairSpecs: {
+          [PAIR_ADDR_1]: { token0: STABLE_ADDR, token1: TOKEN_A, reserve0: 10_000_000n, reserve1: 10_000_000n },
+        },
+      });
+      const treasury = new TreasuryModule(client, { stableAddresses: [STABLE_ADDR] });
+
+      // A toLedger in the future must not push startLedger past the head.
+      const result = await treasury.getFeeRevenue({ toLedger: 9_999_999, granularity: '1d' });
+
+      const request = (client.server.getEvents as jest.Mock).mock.calls[0][0];
+      expect(request.startLedger).toBeLessThanOrEqual(currentLedger);
+      expect(result.byPool[0].revenueUSD).toBeGreaterThan(0);
+    });
+
+    it('ignores swap events emitted after the requested toLedger', async () => {
+      const client = createMockClient({
+        pairs: [PAIR_ADDR_1],
+        currentLedger: 100_000,
+        eventsPerPair: {
+          [PAIR_ADDR_1]: [
+            makeSwapEvent(500, 10_000_000n, 30, STABLE_ADDR),
+            makeSwapEvent(90_000, 10_000_000n, 30, STABLE_ADDR),
+          ],
+        },
+        pairSpecs: {
+          [PAIR_ADDR_1]: { token0: STABLE_ADDR, token1: TOKEN_A, reserve0: 10_000_000n, reserve1: 10_000_000n },
+        },
+      });
+      const treasury = new TreasuryModule(client, { stableAddresses: [STABLE_ADDR] });
+
+      const windowed = await treasury.getFeeRevenue({ fromLedger: 1, toLedger: 1_000, granularity: '1d' });
+      const full = await treasury.getFeeRevenue({ fromLedger: 1, toLedger: 100_000, granularity: '1d' });
+
+      expect(full.byPool[0].revenueUSD).toBeCloseTo(windowed.byPool[0].revenueUSD * 2, 6);
     });
   });
 });

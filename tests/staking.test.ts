@@ -1,5 +1,6 @@
 import { StakingModule } from "../src/modules/staking";
 import { CoralSwapClient } from "../src/client";
+import { xdr, Address } from "@stellar/stellar-sdk";
 import {
   ValidationError,
   TransactionError,
@@ -107,10 +108,18 @@ function createMockClient(
     },
     submitTransaction: jest.fn().mockResolvedValue(
       submitSuccess
-        ? { success: true, txHash: submitTxHash, data: { ledger: 100 } }
+        ? { success: true, txHash: submitTxHash, data: { txHash: submitTxHash, ledger: 100 } }
         : { success: false, txHash: submitTxHash, error: { message: submitErrorMessage } },
     ),
   } as unknown as CoralSwapClient;
+}
+
+function symVal(key: string): xdr.ScVal {
+  return xdr.ScVal.scvSymbol(key);
+}
+
+function mapEntry(key: string, val: xdr.ScVal): xdr.ScMapEntry {
+  return new xdr.ScMapEntry({ key: symVal(key), val });
 }
 
 /**
@@ -120,28 +129,12 @@ function createMockStakeResult(
   amount: bigint,
   stakedAt: number,
   cooldownEnd: number,
-) {
-  return {
-    map: () => [
-      {
-        key: () => ({ sym: () => ({ toString: () => "amount" }) }),
-        val: () => ({
-          i128: () => ({
-            lo: () => ({ toString: () => (amount & ((1n << 64n) - 1n)).toString() }),
-            hi: () => ({ toString: () => (amount >> 64n).toString() }),
-          }),
-        }),
-      },
-      {
-        key: () => ({ sym: () => ({ toString: () => "staked_at" }) }),
-        val: () => ({ u64: () => BigInt(stakedAt) }),
-      },
-      {
-        key: () => ({ sym: () => ({ toString: () => "cooldown_end" }) }),
-        val: () => ({ u64: () => BigInt(cooldownEnd) }),
-      },
-    ],
-  };
+): xdr.ScVal {
+  return xdr.ScVal.scvMap([
+    mapEntry("amount", xdr.ScVal.scvI128(amount)),
+    mapEntry("staked_at", xdr.ScVal.scvU64(BigInt(stakedAt))),
+    mapEntry("cooldown_end", xdr.ScVal.scvU64(BigInt(cooldownEnd))),
+  ]);
 }
 
 /**
@@ -152,62 +145,32 @@ function createMockRewardsResult(
   claimedRewards: bigint,
   projectedAPYBps: number,
   rewardToken: string = MOCK_REWARD_TOKEN,
-) {
-  return {
-    map: () => [
-      {
-        key: () => ({ sym: () => ({ toString: () => "pending_rewards" }) }),
-        val: () => ({
-          i128: () => ({
-            lo: () => ({ toString: () => (pendingRewards & ((1n << 64n) - 1n)).toString() }),
-            hi: () => ({ toString: () => (pendingRewards >> 64n).toString() }),
-          }),
-        }),
-      },
-      {
-        key: () => ({ sym: () => ({ toString: () => "claimed_rewards" }) }),
-        val: () => ({
-          i128: () => ({
-            lo: () => ({ toString: () => (claimedRewards & ((1n << 64n) - 1n)).toString() }),
-            hi: () => ({ toString: () => (claimedRewards >> 64n).toString() }),
-          }),
-        }),
-      },
-      {
-        key: () => ({ sym: () => ({ toString: () => "projected_apy" }) }),
-        val: () => ({ u32: () => projectedAPYBps }),
-      },
-      {
-        key: () => ({ sym: () => ({ toString: () => "reward_token" }) }),
-        val: () => ({
-          address: () => ({ toString: () => rewardToken }),
-        }),
-      },
-    ],
-  };
+): xdr.ScVal {
+  return xdr.ScVal.scvMap([
+    mapEntry("pending_rewards", xdr.ScVal.scvI128(pendingRewards)),
+    mapEntry("claimed_rewards", xdr.ScVal.scvI128(claimedRewards)),
+    mapEntry("projected_apy", xdr.ScVal.scvU32(projectedAPYBps)),
+    mapEntry(
+      "reward_token",
+      xdr.ScVal.scvAddress(Address.fromString(rewardToken)),
+    ),
+  ]);
 }
 
 /**
  * Create a mock ScVal map representing CooldownStatus.
  */
-function createMockCooldownResult(cooldownEnd: number) {
-  return {
-    map: () => [
-      {
-        key: () => ({ sym: () => ({ toString: () => "cooldown_end" }) }),
-        val: () => ({ u64: () => BigInt(cooldownEnd) }),
-      },
-    ],
-  };
+function createMockCooldownResult(cooldownEnd: number): xdr.ScVal {
+  return xdr.ScVal.scvMap([
+    mapEntry("cooldown_end", xdr.ScVal.scvU64(BigInt(cooldownEnd))),
+  ]);
 }
 
 /**
  * Create a mock ScVal for getStakingAPY (returns u32 basis points).
  */
-function createMockAPYResult(apyBps: number) {
-  return {
-    u32: () => apyBps,
-  };
+function createMockAPYResult(apyBps: number): xdr.ScVal {
+  return xdr.ScVal.scvU32(apyBps);
 }
 
 /**
@@ -528,6 +491,152 @@ describe("StakingModule", () => {
       // Partial unstake of 300 from 1000 staked
       const txHash = await module.unstake(MOCK_LP_TOKEN, 300n, signer);
       expect(txHash).toBe(MOCK_TX_HASH);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // unstakeAndWithdraw()
+  // -----------------------------------------------------------------------
+  describe("unstakeAndWithdraw()", () => {
+    const TOKEN_A = MOCK_LP_TOKEN;
+    const TOKEN_B = MOCK_REWARD_TOKEN;
+
+    function withComposer(client: CoralSwapClient, buildRemoveLiquidity: jest.Mock) {
+      return Object.assign(client, {
+        router: { buildRemoveLiquidity },
+        getDeadline: jest.fn().mockReturnValue(9_999_999_999),
+        transactionComposer() {
+          const operations: unknown[] = [];
+          const composer = {
+            addOperation(op: unknown) {
+              operations.push(op);
+              return composer;
+            },
+            submit: () => (client as any).submitTransaction(operations),
+          };
+          return composer;
+        },
+      }) as CoralSwapClient;
+    }
+
+    function removeLiquidityRequest(overrides: Record<string, unknown> = {}) {
+      return {
+        tokenA: TOKEN_A,
+        tokenB: TOKEN_B,
+        liquidity: 500n,
+        amountAMin: 0n,
+        amountBMin: 0n,
+        to: MOCK_ADDRESS,
+        ...overrides,
+      };
+    }
+
+    it("unstakes and withdraws as a single atomic transaction once cooldown has elapsed", async () => {
+      const pastTimestamp = Math.floor(Date.now() / 1000) - 3600;
+      const mockCooldown = createMockCooldownResult(pastTimestamp);
+      const mockStake = createMockStakeResult(1000n, pastTimestamp - 86400, pastTimestamp);
+
+      const client = createSequentialMockClient([mockCooldown, mockStake]);
+      const buildRemoveLiquidity = jest.fn().mockReturnValue("withdraw-operation");
+      withComposer(client, buildRemoveLiquidity);
+
+      const module = new StakingModule(client);
+      const signer = createMockSigner();
+
+      const result = await module.unstakeAndWithdraw(
+        MOCK_LP_TOKEN,
+        500n,
+        removeLiquidityRequest(),
+        signer,
+      );
+
+      expect(result.txHash).toBe(MOCK_TX_HASH);
+      expect(result.ledger).toBe(100);
+      expect(result.liquidity).toBe(500n);
+      expect(buildRemoveLiquidity).toHaveBeenCalledTimes(1);
+      expect(client.submitTransaction).toHaveBeenCalledTimes(1);
+
+      const [operations] = (client.submitTransaction as jest.Mock).mock.calls[0];
+      expect(operations).toHaveLength(2);
+      expect(operations[1]).toBe("withdraw-operation");
+    });
+
+    it("throws CooldownError and never builds the withdrawal when cooldown is active", async () => {
+      const futureTimestamp = Math.floor(Date.now() / 1000) + 3600;
+      const mockCooldown = createMockCooldownResult(futureTimestamp);
+
+      const client = createMockClient({ simulationResult: mockCooldown });
+      const buildRemoveLiquidity = jest.fn().mockReturnValue("withdraw-operation");
+      withComposer(client, buildRemoveLiquidity);
+
+      const module = new StakingModule(client);
+      const signer = createMockSigner();
+
+      await expect(
+        module.unstakeAndWithdraw(MOCK_LP_TOKEN, 500n, removeLiquidityRequest(), signer),
+      ).rejects.toThrow(CooldownError);
+
+      expect(buildRemoveLiquidity).not.toHaveBeenCalled();
+      expect(client.submitTransaction).not.toHaveBeenCalled();
+    });
+
+    it("throws StakingError when unstake amount exceeds staked balance", async () => {
+      const pastTimestamp = Math.floor(Date.now() / 1000) - 3600;
+      const mockCooldown = createMockCooldownResult(pastTimestamp);
+      const mockStake = createMockStakeResult(100n, pastTimestamp - 86400, pastTimestamp);
+
+      const client = createSequentialMockClient([mockCooldown, mockStake]);
+      const buildRemoveLiquidity = jest.fn().mockReturnValue("withdraw-operation");
+      withComposer(client, buildRemoveLiquidity);
+
+      const module = new StakingModule(client);
+      const signer = createMockSigner();
+
+      await expect(
+        module.unstakeAndWithdraw(MOCK_LP_TOKEN, 200n, removeLiquidityRequest(), signer),
+      ).rejects.toThrow(StakingError);
+
+      expect(client.submitTransaction).not.toHaveBeenCalled();
+    });
+
+    it("rolls back both legs when the composed transaction fails on-chain", async () => {
+      const pastTimestamp = Math.floor(Date.now() / 1000) - 3600;
+      const mockCooldown = createMockCooldownResult(pastTimestamp);
+      const mockStake = createMockStakeResult(1000n, pastTimestamp - 86400, pastTimestamp);
+
+      const client = createSequentialMockClient([mockCooldown, mockStake], false);
+      const buildRemoveLiquidity = jest.fn().mockReturnValue("withdraw-operation");
+      withComposer(client, buildRemoveLiquidity);
+
+      const module = new StakingModule(client);
+      const signer = createMockSigner();
+
+      await expect(
+        module.unstakeAndWithdraw(MOCK_LP_TOKEN, 500n, removeLiquidityRequest(), signer),
+      ).rejects.toThrow(TransactionError);
+
+      // Exactly one atomic submission attempted -- no dangling unstake-only transaction.
+      expect(client.submitTransaction).toHaveBeenCalledTimes(1);
+    });
+
+    it("rejects invalid liquidity request params without touching the unstake leg", async () => {
+      const client = createMockClient();
+      const buildRemoveLiquidity = jest.fn().mockReturnValue("withdraw-operation");
+      withComposer(client, buildRemoveLiquidity);
+
+      const module = new StakingModule(client);
+      const signer = createMockSigner();
+
+      await expect(
+        module.unstakeAndWithdraw(
+          MOCK_LP_TOKEN,
+          500n,
+          removeLiquidityRequest({ tokenB: TOKEN_A }),
+          signer,
+        ),
+      ).rejects.toThrow(ValidationError);
+
+      expect(client.submitTransaction).not.toHaveBeenCalled();
     });
   });
 

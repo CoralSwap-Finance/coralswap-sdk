@@ -1,29 +1,28 @@
-## Summary
+## Description
 
-Brief description of what this PR does.
+Describe what this PR changes and why it is needed.
 
 ## Related Issue
 
-Closes #
+Closes #XXX
 
-## Changes
+Replace `XXX` with the issue number this PR resolves. If there is no linked issue, explain why.
 
-- [ ] Change 1
-- [ ] Change 2
+## Changes Made
+
+- List the key changes included in this PR.
 
 ## Testing
 
-- [ ] All existing tests pass (`npm test`)
-- [ ] New tests added for new functionality
-- [ ] No `any` types introduced
+Describe the tests or manual checks performed for this change.
+
+- [ ] Tests added or updated
+- [ ] Existing tests pass
 
 ## Checklist
 
-- [ ] Code follows project coding standards
-- [ ] `npm run lint` passes
-- [ ] `npm run build` passes (TypeScript compiles)
-- [ ] `npm test` passes
-- [ ] Public functions have JSDoc comments
-- [ ] Commit messages follow conventional format
-- [ ] No unrelated changes included
-- [ ] Uses typed errors from `src/errors.ts` (no raw `Error` throws)
+- [ ] Tests added where applicable
+- [ ] Documentation updated where applicable
+- [ ] Lint passes
+- [ ] No breaking changes, or any breaking changes are documented
+- [ ] Commit messages are clear and follow the project convention

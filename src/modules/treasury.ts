@@ -1,5 +1,5 @@
-import { SorobanRpc } from "@stellar/stellar-sdk";
 import { CoralSwapClient } from "@/client";
+import { EventCursor, decodeEventTopic, MIN_START_LEDGER } from "@/utils/event-cursor";
 import {
   TreasuryBalance,
   TokenBalance,
@@ -11,6 +11,9 @@ import {
 } from "@/types/treasury";
 
 const LEDGERS_PER_30_DAYS = 518_400; // 30 days × 86 400 s/day ÷ 5 s/ledger
+
+/** Upper bound on swap events aggregated per pool in getFeeRevenue(). */
+const MAX_REVENUE_EVENTS = 10_000;
 
 /**
  * Options for constructing a TreasuryModule.
@@ -38,6 +41,11 @@ export class TreasuryModule {
   constructor(client: CoralSwapClient, options: TreasuryModuleOptions = {}) {
     this.client = client;
     this.stableSet = new Set(options.stableAddresses ?? []);
+  }
+
+  /** Expose stablecoin addresses for subclasses. */
+  protected get stableAddresses(): ReadonlySet<string> {
+    return this.stableSet;
   }
 
   /**
@@ -132,9 +140,17 @@ export class TreasuryModule {
    * console.log(revenue.trend); // 'rising' | 'falling' | 'stable'
    */
   async getFeeRevenue(period?: RevenuePeriod): Promise<RevenueData> {
+    // Anchor the window once against the chain head and reuse it for every
+    // pool cursor, so all pools scan an identical, valid ledger range.
     const currentLedger = await this.client.getCurrentLedger();
-    const fromLedger = period?.fromLedger ?? Math.max(0, currentLedger - this.ledgersPer30Days);
     const toLedger = period?.toLedger ?? currentLedger;
+    // Clamp to MIN_START_LEDGER rather than 0: on a chain younger than the
+    // window, `currentLedger - ledgersPer30Days` goes negative and RPC rejects
+    // a startLedger below 1.
+    const fromLedger = Math.max(
+      MIN_START_LEDGER,
+      period?.fromLedger ?? currentLedger - this.ledgersPer30Days,
+    );
     const midLedger = Math.floor((fromLedger + toLedger) / 2);
 
     const allPairs = await this.client.factory.getAllPairs();
@@ -146,7 +162,13 @@ export class TreasuryModule {
 
     for (const pairAddress of allPairs) {
       const { revenueUSD, volumeUSD, firstHalf, secondHalf } =
-        await this.fetchPoolRevenue(pairAddress, fromLedger, toLedger, midLedger, priceMap);
+        await this.fetchPoolRevenue(
+          pairAddress,
+          fromLedger,
+          toLedger,
+          midLedger,
+          priceMap,
+        );
       firstHalfRevenue += firstHalf;
       secondHalfRevenue += secondHalf;
       byPool.push({ pairAddress, revenueUSD, volumeUSD });
@@ -173,14 +195,20 @@ export class TreasuryModule {
     priceMap: Map<string, number>,
   ): Promise<{ revenueUSD: number; volumeUSD: number; firstHalf: number; secondHalf: number }> {
     try {
-      const request: SorobanRpc.Server.GetEventsRequest = {
-        startLedger: fromLedger,
-        filters: [{ type: 'contract', contractIds: [pairAddress], topics: [['swap']] }],
-        limit: 10000,
-      };
-      const response = await this.client.server.getEvents(request);
+      // Delegated to the shared EventCursor: it encodes the "swap" topic as a
+      // base64 XDR ScVal and paginates — no hand-rolled request building here.
+      // The window is passed explicitly, so the cursor never has to fall back
+      // to its own anchoring.
+      const cursor = new EventCursor(this.client.server);
+      const events = await cursor.scan({
+        contractIds: [pairAddress],
+        topics: ["swap"],
+        fromLedger,
+        toLedger,
+        limit: MAX_REVENUE_EVENTS,
+      });
 
-      if (!Array.isArray(response?.events) || response.events.length === 0) {
+      if (events.length === 0) {
         return { revenueUSD: 0, volumeUSD: 0, firstHalf: 0, secondHalf: 0 };
       }
 
@@ -189,7 +217,7 @@ export class TreasuryModule {
       let firstHalf = 0;
       let secondHalf = 0;
 
-      for (const event of response.events) {
+      for (const event of events) {
         if (event.ledger > toLedger) continue;
         const parsed = this.parseSwapEventForRevenue(event);
         if (!parsed) continue;
@@ -214,56 +242,91 @@ export class TreasuryModule {
     }
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private parseSwapEventForRevenue(rawEvent: any): {
+  private parseSwapEventForRevenue(rawEvent: unknown): {
     amountIn: bigint;
     feeAmount: bigint;
     tokenIn: string;
   } | null {
     try {
-      const topics: string[] = rawEvent.topic ?? [];
-      if (!topics.length || topics[0] !== 'swap') return null;
+      if (!rawEvent || typeof rawEvent !== 'object') return null;
+      const eventObj = rawEvent as Record<string, unknown>;
+      // Topics come back as XDR ScVals (or base64 XDR on raw responses) —
+      // decode before comparing rather than matching a bare string.
+      const topics = (eventObj.topic as unknown[]) ?? [];
+      if (!topics.length || decodeEventTopic(topics[0]) !== 'swap') return null;
 
-      const value = rawEvent.value;
-      if (!value) return null;
+      const value = eventObj.value;
+      if (!value || typeof value !== 'object') return null;
+      const valueObj = value as Record<string, unknown>;
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const map: any[] = typeof value.map === 'function' ? value.map() : value._value;
+      const map = Array.isArray(valueObj.map)
+        ? valueObj.map
+        : typeof valueObj.map === 'function'
+          ? (valueObj.map as () => unknown[])()
+          : (valueObj._value as unknown[]);
       if (!Array.isArray(map)) return null;
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const get = (key: string): any => {
+      const decodeKey = (kObj: Record<string, unknown>): string | undefined => {
+        try {
+          if (typeof kObj.sym === 'function') return (kObj.sym as () => { toString(): string })().toString();
+          if (typeof (kObj.sym as { toString?: () => string } | undefined)?.toString === 'function') return (kObj.sym as { toString(): string }).toString();
+          if (typeof kObj.str === 'function') return (kObj.str as () => { toString(): string })().toString();
+          if (typeof (kObj.str as { toString?: () => string } | undefined)?.toString === 'function') return (kObj.str as { toString(): string }).toString();
+        } catch { /* skip */ }
+        return undefined;
+      };
+
+      const get = (key: string): unknown => {
         for (const entry of map) {
-          const k = entry.key;
-          let keyStr: string | undefined;
-          try {
-            if (typeof k.sym === 'function') keyStr = k.sym().toString();
-            else if (typeof k.str === 'function') keyStr = k.str().toString();
-          } catch { /* skip */ }
-          if (keyStr === key) return entry.val;
+          if (!entry || typeof entry !== 'object') continue;
+          const entryObj = entry as { key: unknown; val: unknown };
+          const k = entryObj.key;
+          if (!k || typeof k !== 'object') continue;
+          if (decodeKey(k as Record<string, unknown>) === key) return entryObj.val;
         }
         return undefined;
       };
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const decodeI128 = (val: any): bigint => {
-        if (typeof val?.i128 === 'function') {
-          const parts = val.i128();
-          return (BigInt(parts.hi().toString()) << 64n) + BigInt(parts.lo().toString());
+      const decodeI128 = (val: unknown): bigint => {
+        if (typeof val === 'bigint') return val;
+        if (val && typeof val === 'object') {
+          const valObj = val as { i128?: unknown };
+          if (typeof valObj.i128 === 'bigint') return valObj.i128;
+          if (typeof valObj.i128 === 'function') {
+            const parts = (valObj.i128 as () => { hi(): { toString(): string }; lo(): { toString(): string } })();
+            return (BigInt(parts.hi().toString()) << 64n) + BigInt(parts.lo().toString());
+          }
         }
         throw new Error('cannot decode i128');
       };
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const decodeU32 = (val: any): number => {
-        if (typeof val?.u32 === 'function') return val.u32();
+      const decodeU32 = (val: unknown): number => {
+        if (typeof val === 'number') return val;
+        if (val && typeof val === 'object') {
+          const valObj = val as { u32?: unknown };
+          if (typeof valObj.u32 === 'number') return valObj.u32;
+          if (typeof valObj.u32 === 'function') return (valObj.u32 as () => number)();
+        }
         throw new Error('cannot decode u32');
       };
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const decodeAddr = (val: any): string => {
-        if (typeof val?.address === 'function') return val.address().toString();
-        if (typeof val?._value?.toString === 'function') return val._value.toString();
+      const decodeAddr = (val: unknown): string => {
+        if (val && typeof val === 'object') {
+          const valObj = val as { address?: unknown; _value?: unknown };
+          if (typeof valObj.address === 'function') return (valObj.address as () => { toString(): string })().toString();
+          if (
+            valObj.address &&
+            typeof (valObj.address as { toString?: () => string }).toString === 'function'
+          ) {
+            return (valObj.address as { toString(): string }).toString();
+          }
+          if (
+            valObj._value &&
+            typeof (valObj._value as { toString?: () => string }).toString === 'function'
+          ) {
+            return (valObj._value as { toString(): string }).toString();
+          }
+        }
         throw new Error('cannot decode address');
       };
 
@@ -342,6 +405,15 @@ export class TreasuryModule {
     }
 
     return holdings;
+  }
+
+  /**
+   * Public wrapper around {@link buildPriceMap} for callers outside this
+   * module hierarchy (e.g. MonitoringModule) that need the same
+   * stablecoin-anchored spot pricing used for treasury/portfolio valuations.
+   */
+  async getSpotPriceMap(allPairs: string[]): Promise<Map<string, number>> {
+    return this.buildPriceMap(allPairs);
   }
 
   /**

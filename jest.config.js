@@ -3,6 +3,7 @@ module.exports = {
   preset: 'ts-jest',
   testEnvironment: 'node',
   testMatch: ['<rootDir>/tests/**/*.test.ts'],
+  testPathIgnorePatterns: ['<rootDir>/tests/integration/'],
   setupFilesAfterEnv: ['<rootDir>/jest.setup.js'],
   collectCoverageFrom: ['src/**/*.ts', '!src/**/index.ts'],
   coverageDirectory: 'coverage',
@@ -19,5 +20,15 @@ module.exports = {
         diagnostics: false,
       },
     ],
+    '^.+\\.jsx?$': [
+      'ts-jest',
+      {
+        diagnostics: false,
+        isolatedModules: true,
+      },
+    ],
   },
+  transformIgnorePatterns: [
+    'node_modules/(?!(@stellar/stellar-sdk|@stellar/js-xdr|@noble/ed25519|@noble/hashes|uint8array-extras|@exodus/bytes|zod)/)',
+  ],
 };

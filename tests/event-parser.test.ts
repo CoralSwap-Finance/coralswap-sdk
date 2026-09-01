@@ -58,14 +58,13 @@ function makeDiagnosticEvent(
 ): xdr.DiagnosticEvent {
   const topics = [symbolVal(topic)];
   const bodyV0 = new xdr.ContractEventV0({ topics, data });
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const body = new (xdr.ContractEventBody as any)(0, bodyV0) as xdr.ContractEventBody;
+  // v17 XDR unions are built from per-variant factories, not `new`.
+  const body = xdr.ContractEventBody.v0(bodyV0) as xdr.ContractEventBody;
 
   const contractEvent = new xdr.ContractEvent({
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ext: new (xdr.ExtensionPoint as any)(0) as xdr.ExtensionPoint,
+    ext: xdr.ExtensionPoint.v0() as xdr.ExtensionPoint,
     contractId: contractBuf,
-    type: xdr.ContractEventType.contract(),
+    type: xdr.ContractEventType.contract,
     body,
   });
 

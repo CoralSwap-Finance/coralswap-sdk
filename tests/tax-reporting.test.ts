@@ -1,7 +1,7 @@
 import { CoralSwapClient } from "../src/client";
 import { TaxReportingModule, TaxReportRow } from "../src/modules/tax-reporting";
 import { Network } from "../src/types/common";
-import { SorobanRpc } from "@stellar/stellar-sdk";
+import { rpc as SorobanRpc, xdr } from "@stellar/stellar-sdk";
 
 // ---------------------------------------------------------------------------
 // Test fixtures
@@ -33,6 +33,23 @@ const makeI128 = (n: bigint) => ({
 const makeU32 = (n: number) => ({ u32: () => n });
 const makeSym = (s: string) => ({ sym: () => ({ toString: () => s }) });
 
+/**
+ * Decode the topic filter of a getEvents request the way a real RPC node does.
+ *
+ * Filters must be base64-encoded XDR ScVals; a raw string such as `"swap"`
+ * throws here so a regression cannot pass by matching the mock literally.
+ */
+function requestedTopic(req: { filters?: Array<{ topics?: string[][] }> }): string {
+  const segment = req.filters?.[0]?.topics?.[0]?.[0];
+  if (segment === undefined) return "";
+  if (segment === "*") return segment;
+  const decoded = xdr.ScVal.fromXdr(segment, "base64");
+  if (decoded.type !== "scvSymbol") {
+    throw new Error(`topic filter must be an scvSymbol, got ${decoded.type}`);
+  }
+  return decoded.sym.toString();
+}
+
 function makeSwapEvent(opts: {
   sender: string;
   tokenIn: string;
@@ -44,7 +61,8 @@ function makeSwapEvent(opts: {
   ledgerClosedAt?: string;
 }): Record<string, unknown> {
   return {
-    topic: ["swap"],
+    // Real getEvents responses carry topics as XDR ScVals, never bare strings.
+    topic: [xdr.ScVal.scvSymbol("swap")],
     value: {
       map: () => [
         { key: makeSym("sender"), val: makeAddr(opts.sender) },
@@ -71,7 +89,7 @@ function makeLiquidityEvent(opts: {
   ledgerClosedAt?: string;
 }): Record<string, unknown> {
   return {
-    topic: [opts.type],
+    topic: [xdr.ScVal.scvSymbol(opts.type)],
     value: {
       map: () => [
         { key: makeSym("provider"), val: makeAddr(opts.provider) },
@@ -144,7 +162,7 @@ describe("TaxReportingModule.exportTradeHistory()", () => {
     });
 
     jest.spyOn(client.server, "getEvents").mockImplementation(async (req) => {
-      const topic = (req.filters?.[0]?.topics?.[0] as string[])?.[0];
+      const topic = requestedTopic(req);
       return mockEventsResponse(topic === "swap" ? [swapEv] : []);
     });
 
@@ -164,7 +182,7 @@ describe("TaxReportingModule.exportTradeHistory()", () => {
     });
 
     jest.spyOn(client.server, "getEvents").mockImplementation(async (req) => {
-      const topic = (req.filters?.[0]?.topics?.[0] as string[])?.[0];
+      const topic = requestedTopic(req);
       return mockEventsResponse(topic === "swap" ? [swapEv] : []);
     });
 
@@ -185,7 +203,7 @@ describe("TaxReportingModule.exportTradeHistory()", () => {
     });
 
     jest.spyOn(client.server, "getEvents").mockImplementation(async (req) => {
-      const topic = (req.filters?.[0]?.topics?.[0] as string[])?.[0];
+      const topic = requestedTopic(req);
       return mockEventsResponse(topic === "swap" ? [swapEv] : []);
     });
 
@@ -208,7 +226,7 @@ describe("TaxReportingModule.exportTradeHistory()", () => {
     });
 
     jest.spyOn(client.server, "getEvents").mockImplementation(async (req) => {
-      const topic = (req.filters?.[0]?.topics?.[0] as string[])?.[0];
+      const topic = requestedTopic(req);
       return mockEventsResponse(topic === "swap" ? [swapEv] : []);
     });
 
@@ -235,7 +253,7 @@ describe("TaxReportingModule.exportTradeHistory()", () => {
     });
 
     jest.spyOn(client.server, "getEvents").mockImplementation(async (req) => {
-      const topic = (req.filters?.[0]?.topics?.[0] as string[])?.[0];
+      const topic = requestedTopic(req);
       if (topic === "add_liquidity") return mockEventsResponse([addEv]);
       return mockEventsResponse([]);
     });
@@ -259,7 +277,7 @@ describe("TaxReportingModule.exportTradeHistory()", () => {
     });
 
     jest.spyOn(client.server, "getEvents").mockImplementation(async (req) => {
-      const topic = (req.filters?.[0]?.topics?.[0] as string[])?.[0];
+      const topic = requestedTopic(req);
       if (topic === "remove_liquidity") return mockEventsResponse([removeEv]);
       return mockEventsResponse([]);
     });
@@ -291,7 +309,7 @@ describe("TaxReportingModule.exportTradeHistory()", () => {
     });
 
     jest.spyOn(client.server, "getEvents").mockImplementation(async (req) => {
-      const topic = (req.filters?.[0]?.topics?.[0] as string[])?.[0];
+      const topic = requestedTopic(req);
       return mockEventsResponse(topic === "swap" ? [oldEv, newEv] : []);
     });
 
@@ -321,7 +339,7 @@ describe("TaxReportingModule.exportTradeHistory()", () => {
     });
 
     jest.spyOn(client.server, "getEvents").mockImplementation(async (req) => {
-      const topic = (req.filters?.[0]?.topics?.[0] as string[])?.[0];
+      const topic = requestedTopic(req);
       return mockEventsResponse(topic === "swap" ? [oldEv, newEv] : []);
     });
 
@@ -350,7 +368,7 @@ describe("TaxReportingModule.exportTradeHistory()", () => {
     });
 
     jest.spyOn(client.server, "getEvents").mockImplementation(async (req) => {
-      const topic = (req.filters?.[0]?.topics?.[0] as string[])?.[0];
+      const topic = requestedTopic(req);
       return mockEventsResponse(topic === "swap" ? [otherEv] : []);
     });
 
@@ -385,5 +403,262 @@ describe("TaxReportingModule.exportTradeHistory()", () => {
     await expect(
       tax.exportTradeHistory("NOT_AN_ADDRESS"),
     ).rejects.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getCostBasis() tests
+// ---------------------------------------------------------------------------
+
+describe("TaxReportingModule.getCostBasis()", () => {
+  let client: CoralSwapClient;
+  let tax: TaxReportingModule;
+
+  beforeEach(() => {
+    client = new CoralSwapClient({
+      network: Network.TESTNET,
+      secretKey: TEST_SECRET,
+    });
+
+    jest.spyOn(client, "getCurrentLedger").mockResolvedValue(5000);
+    tax = new TaxReportingModule(client);
+  });
+
+  afterEach(() => jest.restoreAllMocks());
+
+  it("calculates cost basis for a token using FIFO method", async () => {
+    const swapEv1 = makeSwapEvent({
+      sender: USER,
+      tokenIn: TOKEN_A,
+      tokenOut: TOKEN_B,
+      amountIn: 10_000_000n,
+      amountOut: 5_000_000n,
+      feeBps: 30,
+    });
+    const swapEv2 = makeSwapEvent({
+      sender: USER,
+      tokenIn: TOKEN_A,
+      tokenOut: TOKEN_B,
+      amountIn: 20_000_000n,
+      amountOut: 10_000_000n,
+      feeBps: 30,
+      txHash: "tx-2",
+      ledgerClosedAt: new Date(1_700_000_000_000 + 86_400_000).toISOString(),
+    });
+
+    jest.spyOn(client.server, "getEvents").mockImplementation(async (req) => {
+      const topic = requestedTopic(req);
+      return mockEventsResponse(
+        topic === "swap"
+          ? [swapEv1, swapEv2]
+          : topic === "add_liquidity"
+            ? []
+            : []
+      );
+    });
+
+    const basis = await tax.getCostBasis(USER, TOKEN_B, { method: "FIFO" });
+    expect(basis.token).toBe(TOKEN_B);
+    expect(basis.method).toBe("FIFO");
+    expect(basis.disposals).toEqual([]);
+  });
+
+  it("handles partial disposal with FIFO accounting", async () => {
+    const purchaseEv = makeSwapEvent({
+      sender: USER,
+      tokenIn: TOKEN_A,
+      tokenOut: TOKEN_B,
+      amountIn: 10_000_000n,
+      amountOut: 5_000_000n,
+      feeBps: 30,
+    });
+    const disposalEv = makeSwapEvent({
+      sender: USER,
+      tokenIn: TOKEN_B,
+      tokenOut: TOKEN_A,
+      amountIn: 2_000_000n,
+      amountOut: 4_000_000n,
+      feeBps: 30,
+      txHash: "tx-disposal",
+      ledgerClosedAt: new Date(1_700_000_000_000 + 86_400_000).toISOString(),
+    });
+
+    jest.spyOn(client.server, "getEvents").mockImplementation(async (req) => {
+      const topic = requestedTopic(req);
+      return mockEventsResponse(topic === "swap" ? [purchaseEv, disposalEv] : []);
+    });
+
+    const basis = await tax.getCostBasis(USER, TOKEN_B, { method: "FIFO" });
+    expect(basis.disposals.length).toBeGreaterThan(0);
+    expect(basis.disposals[0].quantity).toBe("0.2000000");
+  });
+
+  it("throws ValidationError for invalid token address", async () => {
+    await expect(
+      tax.getCostBasis(USER, "INVALID_TOKEN", { method: "FIFO" })
+    ).rejects.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getCapitalGains() tests
+// ---------------------------------------------------------------------------
+
+describe("TaxReportingModule.getCapitalGains()", () => {
+  let client: CoralSwapClient;
+  let tax: TaxReportingModule;
+
+  beforeEach(() => {
+    client = new CoralSwapClient({
+      network: Network.TESTNET,
+      secretKey: TEST_SECRET,
+    });
+
+    jest.spyOn(client, "getCurrentLedger").mockResolvedValue(5000);
+    tax = new TaxReportingModule(client);
+  });
+
+  afterEach(() => jest.restoreAllMocks());
+
+  it("calculates capital gains for a tax year", async () => {
+    const swapEv = makeSwapEvent({
+      sender: USER,
+      tokenIn: TOKEN_A,
+      tokenOut: TOKEN_B,
+      amountIn: 10_000_000n,
+      amountOut: 9_000_000n,
+      feeBps: 30,
+      ledgerClosedAt: new Date("2024-06-15T00:00:00Z").toISOString(),
+    });
+
+    jest.spyOn(client.server, "getEvents").mockImplementation(async (req) => {
+      const topic = requestedTopic(req);
+      return mockEventsResponse(topic === "swap" ? [swapEv] : []);
+    });
+
+    const gains = await tax.getCapitalGains(USER, 2024);
+    expect(gains.period.start).toContain("2024");
+    expect(gains.netGain).toBeDefined();
+  });
+
+  it("categorizes gains as short-term or long-term based on holding period", async () => {
+    jest.spyOn(client.server, "getEvents").mockResolvedValue(
+      mockEventsResponse([])
+    );
+    const gains = await tax.getCapitalGains(USER, 2024);
+    expect(gains.shortTermGains).toBeDefined();
+    expect(gains.longTermGains).toBeDefined();
+    expect(gains.shortTermLosses).toBeDefined();
+    expect(gains.longTermLosses).toBeDefined();
+  });
+
+  it("respects custom date range in options", async () => {
+    jest.spyOn(client.server, "getEvents").mockResolvedValue(
+      mockEventsResponse([])
+    );
+
+    const fromDate = new Date("2024-03-01");
+    const toDate = new Date("2024-06-30");
+    const gains = await tax.getCapitalGains(USER, 2024, {
+      fromDate,
+      toDate,
+    });
+    expect(gains.period.start).toBe("2024-03-01");
+    expect(gains.period.end).toBe("2024-06-30");
+  });
+
+  it("throws ValidationError for invalid address", async () => {
+    await expect(
+      tax.getCapitalGains("NOT_AN_ADDRESS", 2024)
+    ).rejects.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getEvents topic-filter / ledger-anchoring audit (#437)
+// ---------------------------------------------------------------------------
+
+describe("TaxReportingModule getEvents encoding", () => {
+  let client: CoralSwapClient;
+  let tax: TaxReportingModule;
+
+  beforeEach(() => {
+    client = new CoralSwapClient({ network: Network.TESTNET, secretKey: TEST_SECRET });
+    jest.spyOn(client, "getCurrentLedger").mockResolvedValue(50_000);
+    tax = new TaxReportingModule(client);
+  });
+
+  afterEach(() => jest.restoreAllMocks());
+
+  it("encodes every topic filter as a base64 XDR ScVal symbol", async () => {
+    const spy = jest
+      .spyOn(client.server, "getEvents")
+      .mockResolvedValue(mockEventsResponse([]));
+
+    await tax.exportTradeHistory(USER);
+
+    // One query per topic: swap, add_liquidity, remove_liquidity.
+    const topics = spy.mock.calls.map(([req]) => requestedTopic(req));
+    expect(topics.sort()).toEqual(["add_liquidity", "remove_liquidity", "swap"]);
+    for (const [req] of spy.mock.calls) {
+      expect(req.filters[0].topics![0][0]).not.toBe("swap");
+    }
+  });
+
+  it("anchors startLedger to the chain head, never to ledger 0", async () => {
+    // Head below the default history window: the old code clamped this to 0.
+    jest.spyOn(client, "getCurrentLedger").mockResolvedValue(100);
+    const spy = jest
+      .spyOn(client.server, "getEvents")
+      .mockResolvedValue(mockEventsResponse([]));
+
+    await tax.exportTradeHistory(USER);
+
+    for (const [req] of spy.mock.calls) {
+      expect(req.startLedger).toBeGreaterThanOrEqual(1);
+      expect(req.startLedger).toBeLessThanOrEqual(100);
+    }
+  });
+
+  it("uses the default one-day window when the head allows it", async () => {
+    const spy = jest
+      .spyOn(client.server, "getEvents")
+      .mockResolvedValue(mockEventsResponse([]));
+
+    await tax.exportTradeHistory(USER);
+
+    expect(spy.mock.calls[0][0].startLedger).toBe(50_000 - 17_280);
+  });
+
+  it("classifies liquidity rows from the decoded ScVal topic", async () => {
+    const addEv = makeLiquidityEvent({
+      type: "add_liquidity",
+      provider: USER,
+      tokenA: TOKEN_A,
+      tokenB: TOKEN_B,
+      amountA: 10_000_000n,
+      amountB: 20_000_000n,
+    });
+    const removeEv = makeLiquidityEvent({
+      type: "remove_liquidity",
+      provider: USER,
+      tokenA: TOKEN_A,
+      tokenB: TOKEN_B,
+      amountA: 30_000_000n,
+      amountB: 40_000_000n,
+    });
+
+    jest.spyOn(client.server, "getEvents").mockImplementation(async (req) => {
+      const topic = requestedTopic(req);
+      if (topic === "add_liquidity") return mockEventsResponse([addEv]);
+      if (topic === "remove_liquidity") return mockEventsResponse([removeEv]);
+      return mockEventsResponse([]);
+    });
+
+    const rows = JSON.parse(await tax.exportTradeHistory(USER, { format: "json" })) as TaxReportRow[];
+
+    // Both classifications must appear: comparing a raw string against the
+    // ScVal topic reported every add_liquidity as a removal.
+    expect(rows.map((r) => r.type).sort()).toEqual(["add_liquidity", "remove_liquidity"]);
   });
 });

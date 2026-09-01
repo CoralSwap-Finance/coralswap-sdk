@@ -66,13 +66,30 @@ export {
   FlashLoanModule,
   FeeModule,
   OracleModule,
+  PortfolioModule,
+  RiskMetricsModule,
   TokenListModule,
+  FactoryModule,
   RouterModule,
   TreasuryModule,
+  AlertsModule,
+  AlertModule,
+  WebhookModule,
+  MonitoringModule,
+  StopLossModule,
+  LeaderboardModule,
+  HealthCheckModule,
+  TaxReportingModule,
+  GovernanceModule,
+  DCAModule,
+  LimitOrderModule,
+  SquidModule,
+  BlendModule,
 } from "@/modules";
 export type { OptimalPath } from "@/modules/router";
-export type { TWAPObservation, TWAPResult } from "@/modules";
-export type { TreasuryModuleOptions } from "@/modules";
+export type { TWAPObservation, TWAPResult, TraderRanking, GetTopTradersOptions } from "@/modules";
+export { MIN_TWAP_WINDOW_SECONDS } from "@/modules";
+export type { TreasuryModuleOptions, LeaderboardEntry, LeaderboardOptions } from "@/modules";
 
 // Utilities
 export {
@@ -108,6 +125,8 @@ export {
   withRetry,
   isRetryable,
   sleep,
+  getTransactionStatus,
+  shouldRetrySubmission,
   validateAddress,
   validatePositiveAmount,
   validateNonNegativeAmount,
@@ -118,6 +137,15 @@ export {
   EVENT_TOPICS,
   decodeEvents,
   decodeEventsFromXdr,
+  EventCursor,
+  decodeEventTopic,
+  MIN_START_LEDGER,
+  batchCall,
+  batchCallSequential,
+  batchRequest,
+  batchRequestOrThrow,
+  DEFAULT_BATCH_CONCURRENCY,
+  ConnectionPool,
 } from './utils';
 
 
@@ -128,7 +156,15 @@ export type {
   WaitNextLedgerOptions,
   DecodeEventsOptions,
   SimulateFn,
+  BatchRequestOptions,
+  BatchResult,
+  TransactionStatus,
+  RetryDecision,
+  EventCursorOptions,
 } from "./utils";
+
+// Schema validation
+export { validateWithSchema, OrderBookAddressSchema, TradeFilterSchema, GetOpenOrdersSchema, GetOrderSummarySchema } from "@/schemas";
 
 // Errors
 export {
@@ -144,7 +180,15 @@ export {
   ValidationError,
   FlashLoanError,
   FlashLoanFailedError,
+  CrossChainError,
   CircuitBreakerError,
   SignerError,
+  MissingPriceFeedError,
+  AddressNotFoundError,
+  PortfolioCalculationError,
+  WebhookError,
+  WebhookDisabledError,
   mapError,
 } from "@/errors";
+
+export { TransactionComposer } from "./transaction-composer";

@@ -1,4 +1,4 @@
-import { SorobanRpc, xdr, nativeToScVal } from '@stellar/stellar-sdk';
+import { rpc as SorobanRpc, xdr, nativeToScVal } from '@stellar/stellar-sdk';
 import {
   LimitOrderModule,
   parseOrderStatus,
@@ -31,7 +31,7 @@ function makeOrderVal(
     fields.execution_price = xdr.ScVal.scvVoid();
   }
   if (filledAt !== undefined) {
-    fields.filled_at = xdr.ScVal.scvU64(new xdr.Uint64(filledAt));
+    fields.filled_at = xdr.ScVal.scvU64(xdr.Uint64(filledAt));
   } else {
     fields.filled_at = xdr.ScVal.scvVoid();
   }
@@ -64,6 +64,8 @@ describe('LimitOrderModule', () => {
     mockServer = {
       getAccount: jest.fn().mockResolvedValue(mockAccount),
       simulateTransaction: jest.fn(),
+      // Backs getTransactionStatus() in the idempotent resubmission path.
+      getTransaction: jest.fn(),
     } as any;
 
     mockClient = {
@@ -320,7 +322,6 @@ describe('LimitOrderModule', () => {
       const callback = jest.fn();
       unsub = module.watchOrder('order-error', callback, 100);
 
-      // Wait long enough for the initial (failing) poll and first successful interval
       await new Promise(r => setTimeout(r, 250));
 
       expect(callback.mock.calls.length).toBeGreaterThanOrEqual(1);
@@ -511,7 +512,7 @@ describe('LimitOrderModule', () => {
         fill_percent: xdr.ScVal.scvU32(fillPercent),
         amount_filled: nativeToScVal(amountFilled, { type: 'i128' }),
         amount_remaining: nativeToScVal(amountRemaining, { type: 'i128' }),
-        created_at: xdr.ScVal.scvU64(new xdr.Uint64(createdAt)),
+        created_at: xdr.ScVal.scvU64(xdr.Uint64(createdAt)),
       };
       if (executionPrice !== undefined) {
         fields.execution_price = xdr.ScVal.scvU32(executionPrice);
@@ -519,7 +520,7 @@ describe('LimitOrderModule', () => {
         fields.execution_price = xdr.ScVal.scvVoid();
       }
       if (filledAt !== undefined) {
-        fields.filled_at = xdr.ScVal.scvU64(new xdr.Uint64(filledAt));
+        fields.filled_at = xdr.ScVal.scvU64(xdr.Uint64(filledAt));
       } else {
         fields.filled_at = xdr.ScVal.scvVoid();
       }
@@ -662,6 +663,32 @@ describe('LimitOrderModule', () => {
       ).rejects.toThrow(ValidationError);
     });
 
+    it('throws ValidationError for negative amountIn', async () => {
+      await expect(
+        module.placeLimitOrder({ ...validParams, amountIn: -100n }),
+      ).rejects.toThrow(ValidationError);
+    });
+
+    it('throws ValidationError for same-token swaps', async () => {
+      await expect(
+        module.placeLimitOrder({ ...validParams, tokenOut: TOKEN_IN }),
+      ).rejects.toThrow(ValidationError);
+    });
+
+    it('throws ValidationError when pair address does not exist on-chain', async () => {
+      mockClient.getPairAddress = jest.fn().mockResolvedValue(null);
+      await expect(
+        module.placeLimitOrder(validParams),
+      ).rejects.toThrow(ValidationError);
+    });
+
+    it('throws ValidationError when pair address does not match on-chain pair', async () => {
+      mockClient.getPairAddress = jest.fn().mockResolvedValue('CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM');
+      await expect(
+        module.placeLimitOrder(validParams),
+      ).rejects.toThrow(ValidationError);
+    });
+
     it('throws when simulation fails', async () => {
       mockServer.simulateTransaction.mockResolvedValue({
         latestLedger: 0,
@@ -705,7 +732,7 @@ describe('LimitOrderModule', () => {
         fill_percent: xdr.ScVal.scvU32(fillPercent),
         amount_filled: nativeToScVal(amountFilled, { type: 'i128' }),
         amount_remaining: nativeToScVal(amountRemaining, { type: 'i128' }),
-        created_at: xdr.ScVal.scvU64(new xdr.Uint64(createdAt)),
+        created_at: xdr.ScVal.scvU64(xdr.Uint64(createdAt)),
       };
       if (executionPrice !== undefined) {
         fields.execution_price = xdr.ScVal.scvU32(executionPrice);
@@ -713,7 +740,7 @@ describe('LimitOrderModule', () => {
         fields.execution_price = xdr.ScVal.scvVoid();
       }
       if (filledAt !== undefined) {
-        fields.filled_at = xdr.ScVal.scvU64(new xdr.Uint64(filledAt));
+        fields.filled_at = xdr.ScVal.scvU64(xdr.Uint64(filledAt));
       } else {
         fields.filled_at = xdr.ScVal.scvVoid();
       }
@@ -769,7 +796,7 @@ describe('LimitOrderModule', () => {
         fill_percent: xdr.ScVal.scvU32(fillPercent),
         amount_filled: nativeToScVal(amountFilled, { type: 'i128' }),
         amount_remaining: nativeToScVal(amountRemaining, { type: 'i128' }),
-        created_at: xdr.ScVal.scvU64(new xdr.Uint64(createdAt)),
+        created_at: xdr.ScVal.scvU64(xdr.Uint64(createdAt)),
         execution_price: xdr.ScVal.scvVoid(),
         filled_at: xdr.ScVal.scvVoid(),
       };
@@ -810,6 +837,356 @@ describe('LimitOrderModule', () => {
 
     it('throws for invalid address', async () => {
       await expect(module.getOpenOrders('')).rejects.toThrow();
+    });
+  });
+
+  describe('cancelAndReplaceLimitOrder', () => {
+    const TOKEN_IN = 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM';
+    const TOKEN_OUT = 'GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFSHONUCEOASW7QC7OX2H';
+    const PAIR_ADDR = 'CAAQEAYEAUDAOCAJBIFQYDIOB4IBCEQTCQKRMFYYDENBWHA5DYPSBFLM';
+
+    const newParams = {
+      tokenIn: TOKEN_IN,
+      tokenOut: TOKEN_OUT,
+      amountIn: 1000n,
+      targetPrice: 1.75,
+      expiry: Math.floor(Date.now() / 1000) + 3600,
+      pairAddress: PAIR_ADDR,
+    };
+
+    beforeEach(() => {
+      mockClient.config = { retryDelayMs: 0 };
+      mockClient.submitTransaction = jest.fn();
+    });
+
+    it('cancels and places the replacement as a single atomic transaction', async () => {
+      mockServer.simulateTransaction
+        .mockResolvedValueOnce(mockSimulationResult(makeOrderVal('open', 0)))
+        .mockResolvedValueOnce(mockSimulationResult(
+          makeScMap({
+            refunded_amount: nativeToScVal(1000n, { type: 'i128' }),
+            filled_amount: nativeToScVal(0n, { type: 'i128' }),
+          }),
+        ))
+        .mockResolvedValueOnce(mockSimulationResult(xdr.ScVal.scvString('replacement-order')));
+      mockClient.submitTransaction.mockResolvedValue({
+        success: true,
+        data: { txHash: '0xatomic', ledger: 99999 },
+      });
+
+      const result = await module.cancelAndReplaceLimitOrder('order-open', newParams);
+
+      expect(result.refundedAmount).toBe(1000n);
+      expect(result.filledAmount).toBe(0n);
+      expect(result.orderId).toBe('replacement-order');
+      expect(result.refundTxHash).toBe('0xatomic');
+
+      // Both operations are submitted together, exactly once.
+      expect(mockClient.submitTransaction).toHaveBeenCalledTimes(1);
+      const [operations] = mockClient.submitTransaction.mock.calls[0];
+      expect(operations).toHaveLength(2);
+    });
+
+    it('leaves the original order untouched when the composed transaction fails outright', async () => {
+      mockServer.simulateTransaction
+        .mockResolvedValueOnce(mockSimulationResult(makeOrderVal('open', 0)))
+        .mockResolvedValueOnce(mockSimulationResult(
+          makeScMap({
+            refunded_amount: nativeToScVal(1000n, { type: 'i128' }),
+            filled_amount: nativeToScVal(0n, { type: 'i128' }),
+          }),
+        ))
+        .mockResolvedValueOnce(mockSimulationResult(xdr.ScVal.scvString('replacement-order')));
+      // A failure with no txHash never reached the network -- nothing to
+      // reconcile, so it must not be resubmitted.
+      mockClient.submitTransaction.mockResolvedValue({
+        success: false,
+        error: { code: 'TX_FAILED', message: 'Replacement rejected on-chain' },
+      });
+
+      await expect(
+        module.cancelAndReplaceLimitOrder('order-open', newParams),
+      ).rejects.toThrow('Replacement rejected on-chain');
+
+      // A single failed atomic submission -- no partial cancel-only transaction exists.
+      expect(mockClient.submitTransaction).toHaveBeenCalledTimes(1);
+    });
+
+    it('throws OrderNotFoundError without attempting to place the replacement', async () => {
+      mockServer.simulateTransaction.mockResolvedValue(
+        mockSimulationResult(makeOrderVal('cancelled', 0)),
+      );
+
+      await expect(
+        module.cancelAndReplaceLimitOrder('order-cancelled', newParams),
+      ).rejects.toThrow(OrderNotFoundError);
+
+      expect(mockClient.submitTransaction).not.toHaveBeenCalled();
+    });
+
+    it('throws InvalidOperationError for an already-filled order', async () => {
+      mockServer.simulateTransaction.mockResolvedValue(
+        mockSimulationResult(makeOrderVal('filled', 100, 110, 2000000)),
+      );
+
+      await expect(
+        module.cancelAndReplaceLimitOrder('order-filled', newParams),
+      ).rejects.toThrow(InvalidOperationError);
+    });
+
+    it('throws ValidationError for invalid replacement params, without submitting', async () => {
+      mockServer.simulateTransaction
+        .mockResolvedValueOnce(mockSimulationResult(makeOrderVal('open', 0)))
+        .mockResolvedValueOnce(mockSimulationResult(
+          makeScMap({
+            refunded_amount: nativeToScVal(1000n, { type: 'i128' }),
+            filled_amount: nativeToScVal(0n, { type: 'i128' }),
+          }),
+        ));
+
+      await expect(
+        module.cancelAndReplaceLimitOrder('order-open', { ...newParams, targetPrice: 0 }),
+      ).rejects.toThrow(ValidationError);
+
+      // The cancel leg was simulated but never submitted -- nothing was
+      // actually cancelled since the composed transaction never went out.
+      expect(mockClient.submitTransaction).not.toHaveBeenCalled();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Idempotent resubmission (#467)
+  //
+  // A submission timeout is ambiguous: the transaction may have landed and
+  // only its confirmation lost. Both placement and cancellation move real
+  // funds, so each must verify on-chain state before resubmitting.
+  // -------------------------------------------------------------------------
+  describe('idempotent resubmission (#467)', () => {
+    const validParams = {
+      tokenIn: 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM',
+      tokenOut: 'GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFSHONUCEOASW7QC7OX2H',
+      amountIn: 1000n,
+      targetPrice: 1.5,
+      expiry: Math.floor(Date.now() / 1000) + 3600,
+      pairAddress: 'CAAQEAYEAUDAOCAJBIFQYDIOB4IBCEQTCQKRMFYYDENBWHA5DYPSBFLM',
+    };
+
+    /** A timeout is retryable — exactly the ambiguous case being guarded. */
+    const timeoutFailure = {
+      success: false,
+      error: { code: 'UNEXPECTED_ERROR', message: 'request timeout waiting for confirmation' },
+    };
+
+    /** Simulation response for an order the contract does not know about. */
+    const missingOrderSimulation = { error: 'order not found', latestLedger: 12345 };
+
+    beforeEach(() => {
+      // retryDelayMs 0 keeps the post-timeout settle pause out of the test clock.
+      mockClient.config = { retryDelayMs: 0 };
+      mockClient.submitTransaction = jest.fn();
+      mockClient.getPairAddress = jest.fn().mockResolvedValue(validParams.pairAddress);
+      module = new LimitOrderModule(mockClient);
+    });
+
+    describe('placeLimitOrder', () => {
+      it('does not resubmit when the timed-out placement already landed', async () => {
+        mockServer.simulateTransaction
+          // create_order simulation → order id
+          .mockResolvedValueOnce(mockSimulationResult(xdr.ScVal.scvString('landed-order')))
+          // post-timeout status check → the order exists on-chain
+          .mockResolvedValueOnce(mockSimulationResult(makeOrderVal('open', 0)));
+        mockClient.submitTransaction.mockResolvedValue(timeoutFailure);
+
+        const result = await module.placeLimitOrder(validParams);
+
+        expect(result.orderId).toBe('landed-order');
+        expect(mockClient.submitTransaction).toHaveBeenCalledTimes(1);
+      });
+
+      it('treats a cancelled order as landed rather than placing it again', async () => {
+        mockServer.simulateTransaction
+          .mockResolvedValueOnce(mockSimulationResult(xdr.ScVal.scvString('landed-then-cancelled')))
+          .mockResolvedValueOnce(mockSimulationResult(makeOrderVal('cancelled', 0)));
+        mockClient.submitTransaction.mockResolvedValue(timeoutFailure);
+
+        const result = await module.placeLimitOrder(validParams);
+
+        expect(result.orderId).toBe('landed-then-cancelled');
+        expect(mockClient.submitTransaction).toHaveBeenCalledTimes(1);
+      });
+
+      it('resubmits when the status check proves the placement did not land', async () => {
+        mockServer.simulateTransaction
+          .mockResolvedValueOnce(mockSimulationResult(xdr.ScVal.scvString('lost-order')))
+          // status check → contract has no such order
+          .mockResolvedValueOnce(missingOrderSimulation);
+        mockClient.submitTransaction
+          .mockResolvedValueOnce(timeoutFailure)
+          .mockResolvedValueOnce({ success: true, data: { txHash: '0xretry', ledger: 42 } });
+
+        const result = await module.placeLimitOrder(validParams);
+
+        expect(result.orderId).toBe('lost-order');
+        expect(mockClient.submitTransaction).toHaveBeenCalledTimes(2);
+      });
+
+      it('refuses to resubmit when the real state cannot be determined', async () => {
+        mockServer.simulateTransaction
+          .mockResolvedValueOnce(mockSimulationResult(xdr.ScVal.scvString('unknown-order')))
+          // status check itself fails → state unknown
+          .mockRejectedValue(new Error('rpc unavailable'));
+        mockClient.submitTransaction.mockResolvedValue(timeoutFailure);
+
+        // The status error propagates rather than being swallowed into a
+        // retry: an unknown state must never lead to a second escrow.
+        await expect(module.placeLimitOrder(validParams)).rejects.toThrow(/rpc unavailable/);
+        expect(mockClient.submitTransaction).toHaveBeenCalledTimes(1);
+      });
+
+      it('gives up after the final attempt when the order never lands', async () => {
+        mockServer.simulateTransaction
+          .mockResolvedValueOnce(mockSimulationResult(xdr.ScVal.scvString('never-lands')))
+          .mockResolvedValue(missingOrderSimulation);
+        mockClient.submitTransaction.mockResolvedValue(timeoutFailure);
+
+        await expect(module.placeLimitOrder(validParams)).rejects.toThrow(
+          /Failed to place limit order/,
+        );
+        // Initial attempt plus MAX_IDEMPOTENT_RESUBMISSIONS resubmissions.
+        expect(mockClient.submitTransaction).toHaveBeenCalledTimes(3);
+      });
+
+      it('submits exactly once on the happy path', async () => {
+        mockServer.simulateTransaction.mockResolvedValueOnce(
+          mockSimulationResult(xdr.ScVal.scvString('happy-order')),
+        );
+        mockClient.submitTransaction.mockResolvedValue({
+          success: true,
+          data: { txHash: '0xok', ledger: 7 },
+        });
+
+        const result = await module.placeLimitOrder(validParams);
+
+        expect(result.orderId).toBe('happy-order');
+        expect(mockClient.submitTransaction).toHaveBeenCalledTimes(1);
+      });
+    });
+
+    describe('cancelLimitOrder', () => {
+      const cancelResultVal = makeScMap({
+        refunded_amount: nativeToScVal(700n, { type: 'i128' }),
+        filled_amount: nativeToScVal(300n, { type: 'i128' }),
+      });
+
+      it('does not resubmit when the timed-out cancellation already landed', async () => {
+        mockServer.simulateTransaction
+          // pre-flight status → order is cancellable
+          .mockResolvedValueOnce(mockSimulationResult(makeOrderVal('partial', 30)))
+          // cancel simulation → refund/fill amounts
+          .mockResolvedValueOnce(mockSimulationResult(cancelResultVal))
+          // post-timeout status check → the cancellation landed
+          .mockResolvedValueOnce(mockSimulationResult(makeOrderVal('cancelled', 30)));
+        mockClient.submitTransaction.mockResolvedValue(timeoutFailure);
+
+        const result = await module.cancelLimitOrder('order-landed');
+
+        expect(result.refundedAmount).toBe(700n);
+        expect(result.filledAmount).toBe(300n);
+        // Recovered from chain state, so no confirmed transaction hash exists.
+        expect(result.refundTxHash).toBe('');
+        expect(mockClient.submitTransaction).toHaveBeenCalledTimes(1);
+      });
+
+      it('resubmits when the order is still open after a timeout', async () => {
+        mockServer.simulateTransaction
+          .mockResolvedValueOnce(mockSimulationResult(makeOrderVal('open', 0)))
+          .mockResolvedValueOnce(mockSimulationResult(cancelResultVal))
+          // status check → still open, so the cancellation did not land
+          .mockResolvedValueOnce(mockSimulationResult(makeOrderVal('open', 0)));
+        mockClient.submitTransaction
+          .mockResolvedValueOnce(timeoutFailure)
+          .mockResolvedValueOnce({ success: true, data: { txHash: '0xretry', ledger: 43 } });
+
+        const result = await module.cancelLimitOrder('order-still-open');
+
+        expect(result.refundTxHash).toBe('0xretry');
+        expect(mockClient.submitTransaction).toHaveBeenCalledTimes(2);
+      });
+
+      it('refuses to resubmit when the real state cannot be determined', async () => {
+        mockServer.simulateTransaction
+          .mockResolvedValueOnce(mockSimulationResult(makeOrderVal('open', 0)))
+          .mockResolvedValueOnce(mockSimulationResult(cancelResultVal))
+          .mockRejectedValue(new Error('rpc unavailable'));
+        mockClient.submitTransaction.mockResolvedValue(timeoutFailure);
+
+        await expect(module.cancelLimitOrder('order-unknown')).rejects.toThrow(/rpc unavailable/);
+        expect(mockClient.submitTransaction).toHaveBeenCalledTimes(1);
+      });
+
+      it('trusts a SUCCESS transaction status over the reported failure', async () => {
+        mockServer.simulateTransaction
+          .mockResolvedValueOnce(mockSimulationResult(makeOrderVal('partial', 30)))
+          .mockResolvedValueOnce(mockSimulationResult(cancelResultVal));
+        // The submission timed out client-side but the transaction landed.
+        mockClient.submitTransaction.mockResolvedValue({
+          ...timeoutFailure,
+          txHash: '0xlanded',
+        });
+        mockServer.getTransaction.mockResolvedValue({ status: 'SUCCESS', ledger: 99 });
+
+        const result = await module.cancelLimitOrder('order-hash-landed');
+
+        expect(mockServer.getTransaction).toHaveBeenCalledWith('0xlanded');
+        expect(result.refundedAmount).toBe(700n);
+        expect(mockClient.submitTransaction).toHaveBeenCalledTimes(1);
+      });
+
+      it('does not resubmit a transaction that already failed on-chain', async () => {
+        mockServer.simulateTransaction
+          .mockResolvedValueOnce(mockSimulationResult(makeOrderVal('partial', 30)))
+          .mockResolvedValueOnce(mockSimulationResult(cancelResultVal));
+        mockClient.submitTransaction.mockResolvedValue({
+          ...timeoutFailure,
+          txHash: '0xreverted',
+        });
+        mockServer.getTransaction.mockResolvedValue({ status: 'FAILED', ledger: 99 });
+
+        await expect(module.cancelLimitOrder('order-reverted')).rejects.toThrow(
+          /Failed to cancel order/,
+        );
+        expect(mockClient.submitTransaction).toHaveBeenCalledTimes(1);
+      });
+
+      it('resubmits when the transaction status proves it never landed', async () => {
+        mockServer.simulateTransaction
+          .mockResolvedValueOnce(mockSimulationResult(makeOrderVal('partial', 30)))
+          .mockResolvedValueOnce(mockSimulationResult(cancelResultVal));
+        mockClient.submitTransaction
+          .mockResolvedValueOnce({ ...timeoutFailure, txHash: '0xlost' })
+          .mockResolvedValueOnce({ success: true, data: { txHash: '0xretry', ledger: 44 } });
+        mockServer.getTransaction.mockResolvedValue({ status: 'NOT_FOUND' });
+
+        const result = await module.cancelLimitOrder('order-never-landed');
+
+        expect(result.refundTxHash).toBe('0xretry');
+        expect(mockClient.submitTransaction).toHaveBeenCalledTimes(2);
+      });
+
+      it('does not check status for a non-retryable submission failure', async () => {
+        mockServer.simulateTransaction
+          .mockResolvedValueOnce(mockSimulationResult(makeOrderVal('open', 0)))
+          .mockResolvedValueOnce(mockSimulationResult(cancelResultVal));
+        mockClient.submitTransaction.mockResolvedValue({
+          success: false,
+          error: { code: 'SUBMIT_FAILED', message: 'insufficient fee' },
+        });
+
+        await expect(module.cancelLimitOrder('order-bad-fee')).rejects.toThrow(/insufficient fee/);
+        // Two simulations only: pre-flight status + cancel. No status re-check.
+        expect(mockServer.simulateTransaction).toHaveBeenCalledTimes(2);
+        expect(mockClient.submitTransaction).toHaveBeenCalledTimes(1);
+      });
     });
   });
 });

@@ -2,6 +2,8 @@
 
 TypeScript SDK for the CoralSwap Protocol -- a V2 AMM on Stellar/Soroban with dynamic fees and flash loans.
 
+> **Upgrading from v1?** See the [Migration Guide](./MIGRATION.md) for breaking changes, before/after examples, and step-by-step instructions.
+
 ## Architecture
 
 **Contract-first, API-optional.** This SDK interacts directly with CoralSwap's Soroban smart contracts through Soroban RPC. No centralized API gateway, no API keys, no single points of failure.
@@ -287,6 +289,7 @@ import {
   sortTokens,
   isValidAddress,
   withRetry,
+  DeadlineError,
 } from "@coralswap/sdk";
 
 // Amount conversions
@@ -303,6 +306,29 @@ const result = await withRetry(() => client.factory.getAllPairs(), {
   maxRetries: 5,
   baseDelayMs: 500,
 });
+
+// Bound the total time spent on a single RPC call (including retries).
+// Once the deadline elapses, retries stop and a DeadlineError is thrown —
+// useful for hard latency caps on user-facing requests.
+const bounded = await withRetry(() => client.factory.getAllPairs(), {
+  maxRetries: 5,
+  baseDelayMs: 500,
+});
+
+// Or set it once on the client so every RPC call shares the bound.
+const client = new CoralSwapClient({
+  network: Network.TESTNET,
+  secretKey: "S...",
+  deadlineMs: 5000, // give up after 5 seconds total, DeadlineError is thrown
+});
+
+try {
+  const healthy = await client.isHealthy();
+} catch (err) {
+  if (err instanceof DeadlineError) {
+    console.log("RPC retries exceeded the 5s deadline");
+  }
+}
 ```
 
 ## Error Handling
@@ -336,6 +362,10 @@ try {
   }
 }
 ```
+
+## Performance
+
+High-throughput integrations (trading bots, aggregators, dashboards) should tune caching, RPC failover, and connection pooling. See **[docs/PERFORMANCE.md](docs/PERFORMANCE.md)** for use-case profiles, TTL guidance, benchmark numbers, and copy-paste configuration examples.
 
 ## Design Principles
 
@@ -386,6 +416,16 @@ Add the following secrets to your repository (Settings → Secrets → Actions):
 | `TEST_KEYPAIR` | Funded testnet secret key |
 | `TEST_TOKEN_A` | Testnet token A contract address |
 | `TEST_TOKEN_B` | Testnet token B contract address |
+
+## Architecture Decision Records
+
+- [ADR-001 Module Boundary Decisions](docs/adr/ADR-001-module-boundaries.md)
+- [ADR-002 Error Handling Strategy](docs/adr/ADR-002-error-handling.md)
+- [ADR-003 Caching Approach](docs/adr/ADR-003-caching-approach.md)
+
+
+| `TEST_RWA_POOL`    | Deployed RWA pool contract address on testnet |
+| `TEST_NAV_FEED_ID` | RedStone NAV feed id for the pool's underlying asset |
 
 ## License
 
