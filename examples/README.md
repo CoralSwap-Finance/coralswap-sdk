@@ -127,6 +127,39 @@ The example simulates both a happy path (within deviation) and a failure case (s
 
 ---
 
+### `serialized-submission-bot.ts` ← **New**
+
+**Run:** `npm run examples:serialized-submission-bot`
+
+A canonical long-running bot that submits CoralSwap swaps safely. It demonstrates the three guardrails every production bot should inherit:
+
+1. **Quota-limited** — a sliding-window limiter caps submissions (including retries) per minute so the bot never floods the RPC endpoint.
+2. **Sequence-serialized** — a per-account async mutex (the *sequence mutex*) guarantees only one `submitTransaction()` is in flight at a time. Each submission re-reads the account sequence number, so concurrent submissions can never race on the same sequence and get rejected with `tx_bad_seq`.
+3. **Retry-with-status-check loop** — after each submission the bot probes the transaction status on-chain before deciding what to do. A locally timed-out transaction that already landed is *not* re-submitted (which would double-execute); safe retries rebuild the transaction and naturally pick up a fresh sequence number.
+
+The bot dispatches `N` swap jobs concurrently to show the mutex in action: all jobs race, but submissions are serialized per account. By default it runs against **testnet**; set `CORALSWAP_BOT_DRY_RUN=true` to only simulate.
+
+**Configuration**
+
+| Variable | Description | Default |
+|---|---|---|
+| `CORALSWAP_SECRET_KEY` | Stellar secret key (`S...`) for the bot account | — |
+| `CORALSWAP_PUBLIC_KEY` | Public key of the bot account (`G...`) | — |
+| `CORALSWAP_RPC_URL` | Custom Soroban RPC URL (optional) | testnet default |
+| `CORALSWAP_NETWORK` | `testnet` (default) or `mainnet` | `testnet` |
+| `CORALSWAP_FACTORY_ADDRESS` | CoralSwap factory contract address | — |
+| `CORALSWAP_ROUTER_ADDRESS` | CoralSwap router contract address | — |
+| `CORALSWAP_TOKEN_A` | Input token contract address | USDC (testnet) |
+| `CORALSWAP_TOKEN_B` | Output token contract address | deJTRSY (testnet) |
+| `CORALSWAP_SWAP_AMOUNT` | Swap amount in token units (7 dp) | `100000000` (10 USDC) |
+| `CORALSWAP_BOT_ITERATIONS` | Number of swap jobs to dispatch | `3` |
+| `CORALSWAP_BOT_MAX_PER_MINUTE` | Submission quota per minute (incl. retries) | `4` |
+| `CORALSWAP_BOT_MAX_RETRIES` | Max retry attempts per job | `3` |
+| `CORALSWAP_BOT_RETRY_BACKOFF_MS` | Base backoff between retries | `5000` |
+| `CORALSWAP_BOT_DRY_RUN` | Simulate jobs instead of submitting | `false` |
+
+---
+
 ## Common environment variables
 
 All examples share these base variables:
