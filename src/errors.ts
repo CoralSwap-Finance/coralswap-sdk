@@ -37,6 +37,45 @@ export class CoralSwapSDKError extends Error {
 }
 
 /**
+ * Defines the recommended retry behavior for an error.
+ */
+export type RetryPolicy = "retry-with-backoff" | "fail-fast" | "none";
+
+/**
+ * Single source of truth for SDK error mapping.
+ * Documents the taxonomy mapping Class -> Code -> RetryPolicy.
+ */
+export const ERROR_TAXONOMY: Array<{ class: string; code: string; retryPolicy: RetryPolicy }> = [
+  { class: "NetworkError", code: "NETWORK_ERROR", retryPolicy: "retry-with-backoff" },
+  { class: "RpcError", code: "RPC_ERROR", retryPolicy: "retry-with-backoff" },
+  { class: "SimulationError", code: "SIMULATION_ERROR", retryPolicy: "fail-fast" },
+  { class: "TransactionError", code: "TRANSACTION_ERROR", retryPolicy: "fail-fast" },
+  { class: "DeadlineError", code: "DEADLINE_EXCEEDED", retryPolicy: "fail-fast" },
+  { class: "SlippageError", code: "SLIPPAGE_EXCEEDED", retryPolicy: "fail-fast" },
+  { class: "InsufficientLiquidityError", code: "INSUFFICIENT_LIQUIDITY", retryPolicy: "fail-fast" },
+  { class: "PairNotFoundError", code: "PAIR_NOT_FOUND", retryPolicy: "fail-fast" },
+  { class: "WebhookDeliveryError", code: "WEBHOOK_DELIVERY_FAILED", retryPolicy: "retry-with-backoff" },
+  { class: "ValidationError", code: "VALIDATION_ERROR", retryPolicy: "fail-fast" },
+  { class: "InvalidThresholdError", code: "VALIDATION_ERROR", retryPolicy: "fail-fast" },
+  { class: "FlashLoanError", code: "FLASH_LOAN_ERROR", retryPolicy: "fail-fast" },
+  { class: "FlashLoanFailedError", code: "FLASH_LOAN_ERROR", retryPolicy: "fail-fast" },
+  { class: "CrossChainError", code: "CROSS_CHAIN_ERROR", retryPolicy: "fail-fast" },
+  { class: "CircuitBreakerError", code: "CIRCUIT_BREAKER", retryPolicy: "fail-fast" },
+  { class: "PriceDeviationError", code: "PRICE_DEVIATION_TOO_HIGH", retryPolicy: "fail-fast" },
+  { class: "StaleOracleError", code: "STALE_ORACLE_PAYLOAD", retryPolicy: "fail-fast" },
+  { class: "SignerError", code: "NO_SIGNER", retryPolicy: "fail-fast" },
+  { class: "OrderNotFoundError", code: "ORDER_NOT_FOUND", retryPolicy: "fail-fast" },
+  { class: "InvalidOperationError", code: "INVALID_OPERATION", retryPolicy: "fail-fast" },
+  { class: "StakingError", code: "STAKING_ERROR", retryPolicy: "fail-fast" },
+  { class: "CooldownError", code: "COOLDOWN_ERROR", retryPolicy: "fail-fast" },
+  { class: "MissingPriceFeedError", code: "MISSING_PRICE_FEED", retryPolicy: "fail-fast" },
+  { class: "WebhookError", code: "WEBHOOK_ERROR", retryPolicy: "fail-fast" },
+  { class: "AddressNotFoundError", code: "ADDRESS_NOT_FOUND", retryPolicy: "fail-fast" },
+  { class: "PortfolioCalculationError", code: "PORTFOLIO_CALCULATION_ERROR", retryPolicy: "fail-fast" },
+  { class: "WebhookDisabledError", code: "WEBHOOK_DISABLED", retryPolicy: "fail-fast" },
+];
+
+/**
  * Network or RPC connection errors.
  */
 export class NetworkError extends CoralSwapSDKError {

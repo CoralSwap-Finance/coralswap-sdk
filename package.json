@@ -40,6 +40,7 @@
     "examples:rwa-pool": "ts-node examples/rwa-pool.ts",
     "examples:governance-vote": "ts-node examples/governance-vote.ts",
     "docs": "typedoc",
+    "docs:errors": "ts-node scripts/generate-error-doc.ts",
     "fuzz": "jest --testPathPattern=fuzz --no-coverage",
     "benchmark": "ts-node benchmarks/run.ts",
     "load-test": "ts-node benchmarks/load-test.ts",
