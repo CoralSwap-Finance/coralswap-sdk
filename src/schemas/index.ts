@@ -34,3 +34,4 @@
 
 export { validateWithSchema } from './helpers';
 export * from './order-book';
+export * from './monitoring';

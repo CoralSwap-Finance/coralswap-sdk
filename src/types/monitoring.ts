@@ -1,3 +1,19 @@
+/** Rolling window for system-level metric queries. */
+export type MonitoringPeriod = '24h' | '7d' | '30d';
+
+/** Aggregated protocol metrics for a requested monitoring period. */
+export interface SystemMetrics {
+  period: MonitoringPeriod;
+  healthy: boolean;
+  poolCount: number;
+  activePairCount: number;
+  totalTVLUSD: number;
+  volume24hUSD: number;
+  fees24hUSD: number;
+  rpcLatencyMs: number;
+  timestamp: string;
+}
+
 export type MetricCategory =
   | 'liquidity'
   | 'volume'
