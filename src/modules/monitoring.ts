@@ -17,11 +17,14 @@ import {
   MetricGranularity,
   MetricQueryOptions,
   MonitoringDashboard,
+  MonitoringPeriod,
+  SystemMetrics,
   ProtocolMetrics,
   PoolMetrics,
 } from '@/types/monitoring';
 import { ValidationError } from '@/errors';
 import { validateAddress } from '@/utils/validation';
+import { MonitoringPeriodSchema, validateWithSchema } from '@/schemas';
 import { TreasuryModule, TreasuryModuleOptions } from '@/modules/treasury';
 import { SwapModule } from '@/modules/swap';
 
@@ -418,6 +421,36 @@ export class MonitoringModule {
       activePairCount: active.length,
       totalLPHolders: 0,
       timestamp: new Date().toISOString(),
+    };
+  }
+
+  /**
+   * Return aggregated system metrics for a supported rolling window.
+   *
+   * @param period - Metrics window: `24h`, `7d`, or `30d` (default `24h`).
+   * @throws {ValidationError} If `period` is not supported.
+   */
+  async getSystemMetrics(period: MonitoringPeriod = '24h'): Promise<SystemMetrics> {
+    const validatedPeriod = validateWithSchema(
+      MonitoringPeriodSchema,
+      period,
+      `system metrics period (${String(period)})`,
+    );
+    const [health, summary] = await Promise.all([
+      this.checkSystemHealth(),
+      this.getProtocolSummary(),
+    ]);
+
+    return {
+      period: validatedPeriod,
+      healthy: health.healthy,
+      poolCount: summary.poolCount,
+      activePairCount: summary.activePairCount,
+      totalTVLUSD: summary.totalTVLUSD,
+      volume24hUSD: summary.volume24hUSD,
+      fees24hUSD: summary.fees24hUSD,
+      rpcLatencyMs: health.rpc.latencyMs,
+      timestamp: summary.timestamp,
     };
   }
 
