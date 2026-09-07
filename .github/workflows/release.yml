@@ -40,3 +40,5 @@ jobs:
           echo "🚀 Release created!"
           echo "  Tag: ${{ steps.release.outputs.tag_name }}"
           echo "  Version: ${{ steps.release.outputs.version }}"
+
+          ENTRY="## [${NEW_VERSION}] - ${DATE}\n\n${COMMITS}\n"
