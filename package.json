@@ -36,7 +36,8 @@
     "examples:governance-vote": "ts-node examples/governance-vote.ts",
     "examples:serialized-submission-bot": "ts-node examples/serialized-submission-bot.ts",
     "docs": "typedoc",
-    "examples:tax-reporting": "ts-node examples/tax-reporting.ts",
+    "examples:tax-reporting": "ts-node examples/tax-reporting.ts"
+  },
   "keywords": [
     "coralswap",
     "stellar",
@@ -58,9 +59,11 @@
     "zod": "^4.5.4"
   },
   "devDependencies": {
-    "@types/jest": "^29.5.0",
     "@types/jest": "^30.0.0",
     "jest": "^30.5.1",
+    "ts-node": "^10.9.2",
+    "tsconfig-paths": "^4.2.0",
+    "typescript": "^7.0.2"
   },
   "engines": {
     "node": ">=20.0.0"

@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+
+jobs:
   changelog:
     name: CHANGELOG entry required when src/ changes
     runs-on: ubuntu-latest
@@ -20,7 +22,6 @@ on:
       - name: Validate CHANGELOG entry under [Unreleased]
         run: npm run check:changelog
 
-jobs:
   lint:
     name: ESLint
     runs-on: ubuntu-latest
