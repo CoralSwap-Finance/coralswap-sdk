@@ -41,6 +41,7 @@
     "examples:governance-vote": "ts-node examples/governance-vote.ts",
     "examples:serialized-submission-bot": "ts-node examples/serialized-submission-bot.ts",
     "docs": "typedoc",
+    "docs:errors": "ts-node scripts/generate-error-doc.ts",
     "fuzz": "jest --testPathPattern=fuzz --no-coverage",
     "benchmark": "ts-node benchmarks/run.ts",
     "load-test": "ts-node benchmarks/load-test.ts",
