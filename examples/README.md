@@ -10,6 +10,24 @@ cp .env.example .env   # then edit .env with your keys and addresses
 
 ## Examples
 
+### `signer.ts`
+
+**Run:** `npm run examples:signer`
+
+Shows the recommended `KeypairSigner` wiring for a Stellar Testnet client. The example derives the public key from the signer, uses the network's exact passphrase, and fails early with an actionable message when a passphrase for another network is configured. It performs a harmless Soroban RPC health check by default.
+
+When an application has multiple transactions to submit, use the exported `submitSequentially(client, operations)` helper. It awaits each confirmation before starting the next transaction. `CoralSwapClient.submitTransaction` also serializes its complete account sequence lifecycle internally, so concurrent callers cannot build transactions with the same nonce.
+
+Required environment variable:
+
+```bash
+CORALSWAP_SECRET_KEY=S... npm run examples:signer
+```
+
+Optional variables are `CORALSWAP_NETWORK` (`testnet` by default), `CORALSWAP_RPC_URL`, and `CORALSWAP_NETWORK_PASSPHRASE` (which must match the selected network).
+
+---
+
 ### `simple-swap.ts`
 
 **Run:** `npm run examples:simple-swap`
