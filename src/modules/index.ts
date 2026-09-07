@@ -1,11 +1,5 @@
 export { SwapModule } from './swap';
-export { LiquidityModule } from './liquidity';
-export { FlashLoanModule } from './flash-loan';
-export { FeeModule } from './fees';
-export { OracleModule, TWAPObservation, TWAPResult, MIN_TWAP_WINDOW_SECONDS } from './oracle';
-export { PortfolioModule } from './portfolio';
-export { RiskMetricsModule } from './risk-metrics';
-export { TokenListModule } from './tokens';
+export { OracleModule, TWAPObservation, TWAPResult, MIN_TWAP_WINDOW_SECONDS, MAX_OBSERVATIONS } from './oracle';
 export { FactoryModule } from './factory';
 export {
   HealthCheckModule,

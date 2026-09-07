@@ -85,13 +85,7 @@ export {
   DCAModule,
   LimitOrderModule,
   SquidModule,
-  BlendModule,
-} from "@/modules";
-export type { OptimalPath } from "@/modules/router";
-export type { FeeEstimates } from "@/types/fee-estimates";
-export type { TWAPObservation, TWAPResult, TraderRanking, GetTopTradersOptions } from "@/modules";
-export type { FeeEstimates } from "@/types/fee-estimates";
-export { MIN_TWAP_WINDOW_SECONDS } from "@/modules";
+export { MIN_TWAP_WINDOW_SECONDS, MAX_OBSERVATIONS } from "@/modules";
 export type { TreasuryModuleOptions, LeaderboardEntry, LeaderboardOptions } from "@/modules";
 export type { FeeEstimates } from "@/types/fee-estimates";
 
