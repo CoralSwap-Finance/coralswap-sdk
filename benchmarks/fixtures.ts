@@ -7,6 +7,7 @@ import { FeeModule } from '../src/modules/fees';
 import { OracleModule } from '../src/modules/oracle';
 import { LiquidityModule } from '../src/modules/liquidity';
 import { FactoryModule } from '../src/modules/factory';
+import { TreasuryModule } from '../src/modules/treasury';
 import { Network } from '../src/types/common';
 import { LatencyMockProvider } from './latency-mock-provider';
 
@@ -20,10 +21,34 @@ export const TOKEN_B =
   'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4';
 export const TOKEN_C =
   'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M';
+export const TOKEN_D =
+  'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAJG3M';
+export const TOKEN_E =
+  'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAKL3M';
+export const TOKEN_F =
+  'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMP3M';
+export const TOKEN_G =
+  'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAANQ3M';
 export const PAIR_AB =
   'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC';
 export const PAIR_BC =
   'CBQHNAXSI55GX2GN6D67GK7BHVPSLJUGZQEU7WJ5LKR5PNUCGLIMAO4K';
+export const PAIR_AD =
+  'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSD';
+export const PAIR_BE =
+  'CBQHNAXSI55GX2GN6D67GK7BHVPSLJUGZQEU7WJ5LKR5PNUCGLIMAO4L';
+export const PAIR_CF =
+  'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSE';
+export const PAIR_DG =
+  'CBQHNAXSI55GX2GN6D67GK7BHVPSLJUGZQEU7WJ5LKR5PNUCGLIMAO4M';
+export const PAIR_EG =
+  'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSF';
+export const PAIR_FG =
+  'CBQHNAXSI55GX2GN6D67GK7BHVPSLJUGZQEU7WJ5LKR5PNUCGLIMAO4N';
+export const PAIR_AF =
+  'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSG';
+export const PAIR_BD =
+  'CBQHNAXSI55GX2GN6D67GK7BHVPSLJUGZQEU7WJ5LKR5PNUCGLIMAO4P';
 export const LP_TOKEN =
   'CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WRTP5AP5WOJVRY3WNT';
 export const OWNER =
@@ -87,6 +112,62 @@ const PAIR_GRAPH: Record<
     token0: TOKEN_B,
     token1: TOKEN_C,
   },
+  [pairKey(TOKEN_A, TOKEN_D)]: {
+    reserve0: RESERVE,
+    reserve1: RESERVE,
+    feeBps: FEE_BPS,
+    token0: TOKEN_A,
+    token1: TOKEN_D,
+  },
+  [pairKey(TOKEN_B, TOKEN_E)]: {
+    reserve0: RESERVE,
+    reserve1: RESERVE,
+    feeBps: FEE_BPS,
+    token0: TOKEN_B,
+    token1: TOKEN_E,
+  },
+  [pairKey(TOKEN_C, TOKEN_F)]: {
+    reserve0: RESERVE,
+    reserve1: RESERVE,
+    feeBps: FEE_BPS,
+    token0: TOKEN_C,
+    token1: TOKEN_F,
+  },
+  [pairKey(TOKEN_D, TOKEN_G)]: {
+    reserve0: RESERVE,
+    reserve1: RESERVE,
+    feeBps: FEE_BPS,
+    token0: TOKEN_D,
+    token1: TOKEN_G,
+  },
+  [pairKey(TOKEN_E, TOKEN_G)]: {
+    reserve0: RESERVE,
+    reserve1: RESERVE,
+    feeBps: FEE_BPS,
+    token0: TOKEN_E,
+    token1: TOKEN_G,
+  },
+  [pairKey(TOKEN_F, TOKEN_G)]: {
+    reserve0: RESERVE,
+    reserve1: RESERVE,
+    feeBps: FEE_BPS,
+    token0: TOKEN_F,
+    token1: TOKEN_G,
+  },
+  [pairKey(TOKEN_A, TOKEN_F)]: {
+    reserve0: RESERVE,
+    reserve1: RESERVE,
+    feeBps: FEE_BPS,
+    token0: TOKEN_A,
+    token1: TOKEN_F,
+  },
+  [pairKey(TOKEN_B, TOKEN_D)]: {
+    reserve0: RESERVE,
+    reserve1: RESERVE,
+    feeBps: FEE_BPS,
+    token0: TOKEN_B,
+    token1: TOKEN_D,
+  },
 };
 
 function mockPair(
@@ -139,6 +220,7 @@ export interface BenchmarkModules {
   oracle: OracleModule;
   liquidity: LiquidityModule;
   factoryModule: FactoryModule;
+  treasury: TreasuryModule;
 }
 
 /**
@@ -185,10 +267,34 @@ export function createModuleContext(latencyMs: number): BenchmarkModules {
   };
 
   const mockFactory = {
-    getAllPairs: withLatency(async () => [PAIR_AB, PAIR_BC], latencyMs),
+    getAllPairs: withLatency(
+      async () => [
+        PAIR_AB,
+        PAIR_BC,
+        PAIR_AD,
+        PAIR_BE,
+        PAIR_CF,
+        PAIR_DG,
+        PAIR_EG,
+        PAIR_FG,
+        PAIR_AF,
+        PAIR_BD,
+      ],
+      latencyMs,
+    ),
     getPair: withLatency(async (tokenA: string, tokenB: string) => {
       const key = pairKey(tokenA, tokenB);
-      return key in PAIR_GRAPH ? (key === pairKey(TOKEN_A, TOKEN_B) ? PAIR_AB : PAIR_BC) : null;
+      if (key === pairKey(TOKEN_A, TOKEN_B)) return PAIR_AB;
+      if (key === pairKey(TOKEN_B, TOKEN_C)) return PAIR_BC;
+      if (key === pairKey(TOKEN_A, TOKEN_D)) return PAIR_AD;
+      if (key === pairKey(TOKEN_B, TOKEN_E)) return PAIR_BE;
+      if (key === pairKey(TOKEN_C, TOKEN_F)) return PAIR_CF;
+      if (key === pairKey(TOKEN_D, TOKEN_G)) return PAIR_DG;
+      if (key === pairKey(TOKEN_E, TOKEN_G)) return PAIR_EG;
+      if (key === pairKey(TOKEN_F, TOKEN_G)) return PAIR_FG;
+      if (key === pairKey(TOKEN_A, TOKEN_F)) return PAIR_AF;
+      if (key === pairKey(TOKEN_B, TOKEN_D)) return PAIR_BD;
+      return null;
     }, latencyMs),
   };
 
@@ -207,11 +313,27 @@ export function createModuleContext(latencyMs: number): BenchmarkModules {
       const key = pairKey(tokenA, tokenB);
       if (key === pairKey(TOKEN_A, TOKEN_B)) return PAIR_AB;
       if (key === pairKey(TOKEN_B, TOKEN_C)) return PAIR_BC;
+      if (key === pairKey(TOKEN_A, TOKEN_D)) return PAIR_AD;
+      if (key === pairKey(TOKEN_B, TOKEN_E)) return PAIR_BE;
+      if (key === pairKey(TOKEN_C, TOKEN_F)) return PAIR_CF;
+      if (key === pairKey(TOKEN_D, TOKEN_G)) return PAIR_DG;
+      if (key === pairKey(TOKEN_E, TOKEN_G)) return PAIR_EG;
+      if (key === pairKey(TOKEN_F, TOKEN_G)) return PAIR_FG;
+      if (key === pairKey(TOKEN_A, TOKEN_F)) return PAIR_AF;
+      if (key === pairKey(TOKEN_B, TOKEN_D)) return PAIR_BD;
       return null;
     }, latencyMs),
     pair: (addr: string) => {
       if (addr === PAIR_AB) return pairInstances[pairKey(TOKEN_A, TOKEN_B)];
       if (addr === PAIR_BC) return pairInstances[pairKey(TOKEN_B, TOKEN_C)];
+      if (addr === PAIR_AD) return pairInstances[pairKey(TOKEN_A, TOKEN_D)];
+      if (addr === PAIR_BE) return pairInstances[pairKey(TOKEN_B, TOKEN_E)];
+      if (addr === PAIR_CF) return pairInstances[pairKey(TOKEN_C, TOKEN_F)];
+      if (addr === PAIR_DG) return pairInstances[pairKey(TOKEN_D, TOKEN_G)];
+      if (addr === PAIR_EG) return pairInstances[pairKey(TOKEN_E, TOKEN_G)];
+      if (addr === PAIR_FG) return pairInstances[pairKey(TOKEN_F, TOKEN_G)];
+      if (addr === PAIR_AF) return pairInstances[pairKey(TOKEN_A, TOKEN_F)];
+      if (addr === PAIR_BD) return pairInstances[pairKey(TOKEN_B, TOKEN_D)];
       return pairInstances[pairKey(TOKEN_A, TOKEN_B)];
     },
     lpToken: () => mockLpToken,
@@ -229,6 +351,9 @@ export function createModuleContext(latencyMs: number): BenchmarkModules {
     oracle: new OracleModule(client),
     liquidity: new LiquidityModule(client),
     factoryModule: new FactoryModule(client),
+    treasury: new TreasuryModule(client, {
+      stableAddresses: [TOKEN_A, TOKEN_B],
+    }),
   };
 }
 
