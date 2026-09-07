@@ -88,16 +88,22 @@ export type { RateLimiterOptions } from './rate-limiter';
 export { estimateGas } from './gas';
 export type { SimulateFn } from './gas';
 
-export { waitNextLedger } from './ledger';
-export type { WaitNextLedgerOptions } from './ledger';
+export { waitNextLedger, ledgerToApproxTime, LEDGER_CLOSE_INTERVAL_SECONDS } from './ledger';
+export type { WaitNextLedgerOptions, LedgerHead } from './ledger';
 
 export {
   EventParser,
   EVENT_TOPICS,
   decodeEvents,
   decodeEventsFromXdr,
-export { EventCursor, TypedEventCursor, decodeEventTopic, MIN_START_LEDGER } from './event-cursor';
-export type { EventCursorOptions, TypedEventScanParams } from './event-cursor';
+} from './events';
+export type { DecodeEventsOptions } from './events';
+
+export { EventCursor, decodeEventTopic, MIN_START_LEDGER } from './event-cursor';
+export type { EventCursorOptions } from './event-cursor';
+export { ConnectionPool } from './connection-pool';
+
+export {
   getVotingPower,
   getVotingPowerAtLedger,
   setVotingPowerQueryProvider,

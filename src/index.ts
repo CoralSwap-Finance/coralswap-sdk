@@ -46,6 +46,7 @@ export {
 // Type exports
 export * from "@/types";
 export type { Logger } from "@/types/common";
+export type { FeeEstimates } from "@/types/fee-estimates";
 
 // Contract clients
 export {
@@ -87,9 +88,12 @@ export {
   BlendModule,
 } from "@/modules";
 export type { OptimalPath } from "@/modules/router";
+export type { FeeEstimates } from "@/types/fee-estimates";
 export type { TWAPObservation, TWAPResult, TraderRanking, GetTopTradersOptions } from "@/modules";
+export type { FeeEstimates } from "@/types/fee-estimates";
 export { MIN_TWAP_WINDOW_SECONDS } from "@/modules";
 export type { TreasuryModuleOptions, LeaderboardEntry, LeaderboardOptions } from "@/modules";
+export type { FeeEstimates } from "@/types/fee-estimates";
 
 // Utilities
 export {
@@ -138,21 +142,12 @@ export {
   decodeEvents,
   decodeEventsFromXdr,
   EventCursor,
-  TypedEventCursor,
   decodeEventTopic,
-  MIN_START_LEDGER,
-  batchCall,
-  batchCallSequential,
-  batchRequest,
-  batchRequestOrThrow,
-  DEFAULT_BATCH_CONCURRENCY,
+  ledgerToApproxTime,
+  LEDGER_CLOSE_INTERVAL_SECONDS,
   ConnectionPool,
 } from './utils';
-
-
-export type {
-  RetryConfig,
-  SimulationResult,
+  LedgerHead,
   SimulationResourceEstimate,
   WaitNextLedgerOptions,
   DecodeEventsOptions,
@@ -162,7 +157,6 @@ export type {
   TransactionStatus,
   RetryDecision,
   EventCursorOptions,
-  TypedEventScanParams,
 } from "./utils";
 
 // Schema validation
