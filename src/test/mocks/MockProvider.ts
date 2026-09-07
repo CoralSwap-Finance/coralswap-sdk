@@ -13,6 +13,7 @@
  *   mock.queueTransaction({ hash: 'abc123', status: 'SUCCESS', resultMetaXdr: '...' });
  *   mock.queueTransaction({ hash: 'def456', status: 'FAILED', errorResult: '...' });
  *   mock.setLatestLedger(1500);
+ *   mock.script('getContractData', () => { throw new NotConfiguredError(...); });
  *   mock.reset();
  *
  * Design notes
@@ -21,9 +22,12 @@
  *    send→poll lifecycle and making retry-logic tests straightforward.
  *  - getLedgerEntries returns an empty entries array (not an error) when
  *    nothing is registered, matching real RPC behaviour.
- *  - All methods not relevant to the SDK surface reject with a loud
- *    "not implemented" error so mis-configured tests fail immediately
- *    instead of silently passing with undefined.
+ *  - Methods not relevant to the core SDK surface (getContractData,
+ *    getEvents, getNetwork, etc. -- see StubMethodName) reject with a loud
+ *    "not implemented" error by default, so mis-configured tests fail
+ *    immediately instead of silently passing with undefined. Call
+ *    script(method, response) to configure a canned value, a thrown error
+ *    (including a typed subclass), or a per-call function for any of them.
  */
 
 import {
@@ -99,6 +103,47 @@ function ledgerKeyId(key: xdr.LedgerKey): string {
 const DEFAULT_LEDGER_SEQUENCE = 1000;
 
 // ---------------------------------------------------------------------------
+// Scriptable stub methods
+// ---------------------------------------------------------------------------
+
+/**
+ * The rpc.Server methods this mock loud-fails on by default (see the "stub
+ * methods" section below) and that {@link MockProvider.script} can be used
+ * to configure instead.
+ */
+export type StubMethodName =
+  | 'getContractData'
+  | 'getContractWasmByContractId'
+  | 'getContractWasmByHash'
+  | '_getLedgerEntries'
+  | '_getTransaction'
+  | 'getTransactions'
+  | 'getEvents'
+  | '_getEvents'
+  | 'getNetwork'
+  | '_simulateTransaction'
+  | 'prepareTransaction'
+  | '_sendTransaction'
+  | 'requestAirdrop'
+  | 'getFeeStats'
+  | 'getVersionInfo';
+
+/**
+ * A scripted response for {@link MockProvider.script}:
+ *  - a plain value, returned as-is (resolved) on every call;
+ *  - an `Error` instance (including a typed subclass), thrown (rejected) on
+ *    every call -- this is how a test proves a typed failure propagates
+ *    correctly through the SDK;
+ *  - a function, invoked with the call's arguments on each call -- for
+ *    responses that vary by argument or by call count.
+ */
+export type ScriptedResponse =
+  | unknown
+  | Error
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  | ((...args: any[]) => unknown | Promise<unknown>);
+
+// ---------------------------------------------------------------------------
 // MockProvider
 // ---------------------------------------------------------------------------
 
@@ -139,6 +184,9 @@ export class MockProvider {
 
   /** Configured ledger sequence returned by getLatestLedger(). */
   private _latestLedgerSequence = DEFAULT_LEDGER_SEQUENCE;
+
+  /** Scripted responses registered via script(), keyed by method name. */
+  private _scripts = new Map<StubMethodName, ScriptedResponse>();
 
   // -------------------------------------------------------------------------
   // Expose serverURL so the class structurally satisfies rpc.Server
@@ -198,7 +246,57 @@ export class MockProvider {
   }
 
   /**
-   * Reset all staged state.
+   * Script a canned response (or error) for one of the rpc.Server methods
+   * this mock otherwise loud-fails on by default -- e.g. getContractData,
+   * getEvents, getNetwork. See {@link ScriptedResponse} for the accepted
+   * shapes.
+   *
+   * Scripted responses persist until reset() or clearScript() is called.
+   * A method with no script still loud-fails exactly as before, so a test
+   * that forgets to script a method it actually calls fails immediately
+   * with a clear message rather than silently returning undefined.
+   *
+   * @example
+   * // Static value:
+   * mock.script('getNetwork', { passphrase: 'Test SDF Network ; September 2015' });
+   *
+   * @example
+   * // Typed failure, once NotConfiguredError/DecodeError land (#662, #676):
+   * mock.script('getContractData', new NotConfiguredError('router not set'));
+   *
+   * @example
+   * // Argument- or call-count-aware response:
+   * mock.script('getContractData', (contract, key) => { ... });
+   */
+  script(method: StubMethodName, response: ScriptedResponse): void {
+    this._scripts.set(method, response);
+  }
+
+  /** Remove a previously-scripted response, reverting the method to loud-fail. */
+  clearScript(method: StubMethodName): void {
+    this._scripts.delete(method);
+  }
+
+  /**
+   * Resolve a scripted response for `method`, or loud-fail if none was
+   * configured. Shared by every stub method below.
+   */
+  private async _resolveScripted(method: StubMethodName, args: unknown[]): Promise<unknown> {
+    if (!this._scripts.has(method)) {
+      return MockProvider._notImplemented(method);
+    }
+    const scripted = this._scripts.get(method);
+    if (scripted instanceof Error) {
+      throw scripted;
+    }
+    if (typeof scripted === 'function') {
+      return (scripted as (...a: unknown[]) => unknown | Promise<unknown>)(...args);
+    }
+    return scripted;
+  }
+
+  /**
+   * Reset all staged state, including scripted responses.
    *
    * Call this in afterEach() / beforeEach() to guarantee test isolation.
    */
@@ -208,6 +306,7 @@ export class MockProvider {
     this._txQueue = [];
     this._txResults.clear();
     this._latestLedgerSequence = DEFAULT_LEDGER_SEQUENCE;
+    this._scripts.clear();
   }
 
   // =========================================================================
@@ -482,95 +581,111 @@ export class MockProvider {
     return Promise.reject(
       new Error(
         `MockProvider: ${methodName}() is not implemented. ` +
-          'If your test needs this method, override it on the mock instance.',
+          `If your test needs this method, configure a response with ` +
+          `mock.script('${methodName}', ...) (see MockProvider.script), or ` +
+          'override it directly on the mock instance.',
       ),
     );
   }
 
   async getContractData(
-    _contract: string | Address | Contract,
-    _key: xdr.ScVal,
-    _durability?: rpc.Durability,
+    contract: string | Address | Contract,
+    key: xdr.ScVal,
+    durability?: rpc.Durability,
   ): Promise<rpc.Api.LedgerEntryResult> {
-    return MockProvider._notImplemented('getContractData');
+    return this._resolveScripted('getContractData', [contract, key, durability]) as Promise<
+      rpc.Api.LedgerEntryResult
+    >;
   }
 
-  async getContractWasmByContractId(_contractId: string): Promise<Buffer> {
-    return MockProvider._notImplemented('getContractWasmByContractId');
+  async getContractWasmByContractId(contractId: string): Promise<Buffer> {
+    return this._resolveScripted('getContractWasmByContractId', [contractId]) as Promise<Buffer>;
   }
 
   async getContractWasmByHash(
-    _wasmHash: Buffer | string,
-    _format?: undefined | 'hex' | 'base64',
+    wasmHash: Buffer | string,
+    format?: undefined | 'hex' | 'base64',
   ): Promise<Buffer> {
-    return MockProvider._notImplemented('getContractWasmByHash');
+    return this._resolveScripted('getContractWasmByHash', [wasmHash, format]) as Promise<Buffer>;
   }
 
   async _getLedgerEntries(
-    ..._keys: xdr.LedgerKey[]
+    ...keys: xdr.LedgerKey[]
   ): Promise<rpc.Api.RawGetLedgerEntriesResponse> {
-    return MockProvider._notImplemented('_getLedgerEntries');
+    return this._resolveScripted('_getLedgerEntries', keys) as Promise<
+      rpc.Api.RawGetLedgerEntriesResponse
+    >;
   }
 
   async _getTransaction(
-    _hash: string,
+    hash: string,
   ): Promise<rpc.Api.RawGetTransactionResponse> {
-    return MockProvider._notImplemented('_getTransaction');
+    return this._resolveScripted('_getTransaction', [hash]) as Promise<
+      rpc.Api.RawGetTransactionResponse
+    >;
   }
 
   async getTransactions(
-    _request: rpc.Api.GetTransactionsRequest,
+    request: rpc.Api.GetTransactionsRequest,
   ): Promise<rpc.Api.GetTransactionsResponse> {
-    return MockProvider._notImplemented('getTransactions');
+    return this._resolveScripted('getTransactions', [request]) as Promise<
+      rpc.Api.GetTransactionsResponse
+    >;
   }
 
   async getEvents(
-    _request: rpc.Server.GetEventsRequest,
+    request: rpc.Server.GetEventsRequest,
   ): Promise<rpc.Api.GetEventsResponse> {
-    return MockProvider._notImplemented('getEvents');
+    return this._resolveScripted('getEvents', [request]) as Promise<rpc.Api.GetEventsResponse>;
   }
 
   async _getEvents(
-    _request: rpc.Server.GetEventsRequest,
+    request: rpc.Server.GetEventsRequest,
   ): Promise<rpc.Api.RawGetEventsResponse> {
-    return MockProvider._notImplemented('_getEvents');
+    return this._resolveScripted('_getEvents', [request]) as Promise<
+      rpc.Api.RawGetEventsResponse
+    >;
   }
 
   async getNetwork(): Promise<rpc.Api.GetNetworkResponse> {
-    return MockProvider._notImplemented('getNetwork');
+    return this._resolveScripted('getNetwork', []) as Promise<rpc.Api.GetNetworkResponse>;
   }
 
   async _simulateTransaction(
-    _transaction: Transaction | FeeBumpTransaction,
-    _addlResources?: rpc.Server.ResourceLeeway,
+    transaction: Transaction | FeeBumpTransaction,
+    addlResources?: rpc.Server.ResourceLeeway,
   ): Promise<rpc.Api.RawSimulateTransactionResponse> {
-    return MockProvider._notImplemented('_simulateTransaction');
+    return this._resolveScripted('_simulateTransaction', [transaction, addlResources]) as Promise<
+      rpc.Api.RawSimulateTransactionResponse
+    >;
   }
 
   async prepareTransaction(
-    _tx: Transaction | FeeBumpTransaction,
+    tx: Transaction | FeeBumpTransaction,
   ): Promise<Transaction> {
-    return MockProvider._notImplemented('prepareTransaction');
+    return this._resolveScripted('prepareTransaction', [tx]) as Promise<Transaction>;
   }
 
   async _sendTransaction(
-    _transaction: Transaction | FeeBumpTransaction,
+    transaction: Transaction | FeeBumpTransaction,
   ): Promise<rpc.Api.RawSendTransactionResponse> {
-    return MockProvider._notImplemented('_sendTransaction');
+    return this._resolveScripted('_sendTransaction', [transaction]) as Promise<
+      rpc.Api.RawSendTransactionResponse
+    >;
   }
 
   async requestAirdrop(
-    _address: string | Pick<Account, 'accountId'>,
-    _friendbotUrl?: string,
+    address: string | Pick<Account, 'accountId'>,
+    friendbotUrl?: string,
   ): Promise<Account> {
-    return MockProvider._notImplemented('requestAirdrop');
+    return this._resolveScripted('requestAirdrop', [address, friendbotUrl]) as Promise<Account>;
   }
 
   async getFeeStats(): Promise<rpc.Api.GetFeeStatsResponse> {
-    return MockProvider._notImplemented('getFeeStats');
+    return this._resolveScripted('getFeeStats', []) as Promise<rpc.Api.GetFeeStatsResponse>;
   }
 
   async getVersionInfo(): Promise<rpc.Api.GetVersionInfoResponse> {
-    return MockProvider._notImplemented('getVersionInfo');
+    return this._resolveScripted('getVersionInfo', []) as Promise<rpc.Api.GetVersionInfoResponse>;
   }
 }
