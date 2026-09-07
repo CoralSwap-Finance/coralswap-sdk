@@ -15,6 +15,13 @@ import { validateAddress } from '@/utils/validation';
  * impermanent loss risk, and liquidity depth concerns. Returns a scored
  * assessment with actionable risk factor breakdowns.
  *
+ * **Not a price oracle.** All risk scores, USD values, and volatility
+ * estimates in this module are derived from on-chain reserves, position
+ * balances, and caller-supplied stablecoin anchor prices. They are
+ * **not** attested by an oracle and should not be used as the sole basis
+ * for settlement, liquidation, or trading decisions. For manipulation-
+ * resistant pricing, use the TWAP Oracle (`src/modules/oracle.ts`).
+ *
  * @example
  * const riskMetrics = new RiskMetricsModule(client);
  * const risk = await riskMetrics.getPortfolioRisk('G...');

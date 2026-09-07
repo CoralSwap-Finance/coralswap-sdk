@@ -167,6 +167,18 @@ const DEFAULT_GRANULARITY: MetricGranularity = '1h';
  * const dashboard = await monitor.getDashboard();
  * ```
  *
+ * ### Not a price oracle
+ *
+ * **All USD values, spot prices, and TVL figures returned by this module are
+ * derived from on-chain reserve ratios using static stablecoin anchor prices
+ * supplied by the caller. They are NOT attested oracle prices and must not
+ * be used as the sole reference for settlement, liquidation, or pricing
+ * decisions.** RedStone integration (see `utils/redstone.ts`) provides signed
+ * per-swap price *guards*, but the monitoring module does not consume RedStone
+ * feeds and offers no manipulation-resistant price stream. For reliable,
+ * signed price data, use the TWAP Oracle (`src/modules/oracle.ts`) or a
+ * dedicated oracle provider.
+ *
  * ### USD pricing note
  * `getProtocolMetrics()`/`getPoolMetrics()` price reserves and swap volume in
  * USD using the same stablecoin-anchored spot pricing as
