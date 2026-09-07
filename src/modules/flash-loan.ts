@@ -9,6 +9,7 @@ import {
 } from "@/types/flash-loan";
 import { FlashLoanConfig } from "@/types/pool";
 import { GasEstimate } from "@/types/gas";
+import { FlashLoanContractEvent } from "@/types/events";
 import {
   calculateRepayment,
   validateFeeFloor,
@@ -309,14 +310,17 @@ export class FlashLoanModule {
             );
 
             // Look for FlashLoanExecuted or FlashLoanFailed events
-            const flashLoanEvent = events.find((e) => e.type === "flash_loan");
-            if (flashLoanEvent && flashLoanEvent.type === "flash_loan") {
+            const flashLoanEvent = events.find(
+              (e): e is FlashLoanContractEvent => e.type === "flash_loan",
+            );
+            if (flashLoanEvent) {
               event = {
                 type: "FlashLoanExecuted",
                 borrowedAmount: flashLoanEvent.amount,
                 feePaid: flashLoanEvent.fee,
                 callbackAddress: flashLoanEvent.borrower,
                 token: request.token,
+                decodeStatus: flashLoanEvent.decodeStatus,
               };
             }
           } catch {
@@ -325,24 +329,26 @@ export class FlashLoanModule {
 
           if (!event && hasRawEvents) {
             // Fallback: raw event accessor existed (older contract) but no match;
-            // synthesise an event from request values.
+            // synthesise an event from request values with explicit partial decodeStatus.
             event = {
               type: "FlashLoanExecuted",
               borrowedAmount: request.amount,
               feePaid: feeEstimate.feeAmount,
               callbackAddress: request.receiverAddress,
               token: request.token,
+              decodeStatus: "partial",
             };
           }
         }
       } else {
-        // Non-SUCCESS status: provide fallback event from request values
+        // Non-SUCCESS status: provide fallback event from request values with explicit partial decodeStatus
         event = {
           type: "FlashLoanExecuted",
           borrowedAmount: request.amount,
           feePaid: feeEstimate.feeAmount,
           callbackAddress: request.receiverAddress,
           token: request.token,
+          decodeStatus: "partial",
         };
       }
     } catch (err) {
@@ -453,14 +459,17 @@ export class FlashLoanModule {
         const events = decodeEvents(txResult, {
           contractId: request.pairAddress,
         });
-        const flashLoanEvent = events.find((e) => e.type === "flash_loan");
-        if (flashLoanEvent && flashLoanEvent.type === "flash_loan") {
+        const flashLoanEvent = events.find(
+          (e): e is FlashLoanContractEvent => e.type === "flash_loan",
+        );
+        if (flashLoanEvent) {
           return {
             type: "FlashLoanExecuted",
             borrowedAmount: flashLoanEvent.amount,
             feePaid: flashLoanEvent.fee,
             callbackAddress: flashLoanEvent.borrower,
             token: request.token,
+            decodeStatus: flashLoanEvent.decodeStatus,
           };
         }
       } catch {
@@ -523,6 +532,7 @@ export class FlashLoanModule {
               "",
           ),
           token: String(data["token"] ?? ""),
+          decodeStatus: "complete",
         };
       } catch {
         continue;
@@ -560,6 +570,7 @@ export class FlashLoanModule {
           reason: String(
             data["reason"] ?? data["error"] ?? "callback reverted",
           ),
+          decodeStatus: "complete",
         };
       } catch {
         continue;

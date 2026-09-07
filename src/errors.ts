@@ -37,6 +37,45 @@ export class CoralSwapSDKError extends Error {
 }
 
 /**
+ * Defines the recommended retry behavior for an error.
+ */
+export type RetryPolicy = "retry-with-backoff" | "fail-fast" | "none";
+
+/**
+ * Single source of truth for SDK error mapping.
+ * Documents the taxonomy mapping Class -> Code -> RetryPolicy.
+ */
+export const ERROR_TAXONOMY: Array<{ class: string; code: string; retryPolicy: RetryPolicy }> = [
+  { class: "NetworkError", code: "NETWORK_ERROR", retryPolicy: "retry-with-backoff" },
+  { class: "RpcError", code: "RPC_ERROR", retryPolicy: "retry-with-backoff" },
+  { class: "SimulationError", code: "SIMULATION_ERROR", retryPolicy: "fail-fast" },
+  { class: "TransactionError", code: "TRANSACTION_ERROR", retryPolicy: "fail-fast" },
+  { class: "DeadlineError", code: "DEADLINE_EXCEEDED", retryPolicy: "fail-fast" },
+  { class: "SlippageError", code: "SLIPPAGE_EXCEEDED", retryPolicy: "fail-fast" },
+  { class: "InsufficientLiquidityError", code: "INSUFFICIENT_LIQUIDITY", retryPolicy: "fail-fast" },
+  { class: "PairNotFoundError", code: "PAIR_NOT_FOUND", retryPolicy: "fail-fast" },
+  { class: "WebhookDeliveryError", code: "WEBHOOK_DELIVERY_FAILED", retryPolicy: "retry-with-backoff" },
+  { class: "ValidationError", code: "VALIDATION_ERROR", retryPolicy: "fail-fast" },
+  { class: "InvalidThresholdError", code: "VALIDATION_ERROR", retryPolicy: "fail-fast" },
+  { class: "FlashLoanError", code: "FLASH_LOAN_ERROR", retryPolicy: "fail-fast" },
+  { class: "FlashLoanFailedError", code: "FLASH_LOAN_ERROR", retryPolicy: "fail-fast" },
+  { class: "CrossChainError", code: "CROSS_CHAIN_ERROR", retryPolicy: "fail-fast" },
+  { class: "CircuitBreakerError", code: "CIRCUIT_BREAKER", retryPolicy: "fail-fast" },
+  { class: "PriceDeviationError", code: "PRICE_DEVIATION_TOO_HIGH", retryPolicy: "fail-fast" },
+  { class: "StaleOracleError", code: "STALE_ORACLE_PAYLOAD", retryPolicy: "fail-fast" },
+  { class: "SignerError", code: "NO_SIGNER", retryPolicy: "fail-fast" },
+  { class: "OrderNotFoundError", code: "ORDER_NOT_FOUND", retryPolicy: "fail-fast" },
+  { class: "InvalidOperationError", code: "INVALID_OPERATION", retryPolicy: "fail-fast" },
+  { class: "StakingError", code: "STAKING_ERROR", retryPolicy: "fail-fast" },
+  { class: "CooldownError", code: "COOLDOWN_ERROR", retryPolicy: "fail-fast" },
+  { class: "MissingPriceFeedError", code: "MISSING_PRICE_FEED", retryPolicy: "fail-fast" },
+  { class: "WebhookError", code: "WEBHOOK_ERROR", retryPolicy: "fail-fast" },
+  { class: "AddressNotFoundError", code: "ADDRESS_NOT_FOUND", retryPolicy: "fail-fast" },
+  { class: "PortfolioCalculationError", code: "PORTFOLIO_CALCULATION_ERROR", retryPolicy: "fail-fast" },
+  { class: "WebhookDisabledError", code: "WEBHOOK_DISABLED", retryPolicy: "fail-fast" },
+];
+
+/**
  * Network or RPC connection errors.
  */
 export class NetworkError extends CoralSwapSDKError {
@@ -197,6 +236,13 @@ export class InvalidThresholdError extends ValidationError {
  * manually parsing XDR.
  */
 export class FlashLoanError extends TransactionError {
+  /** The amount that was attempted to be borrowed. */
+  readonly borrowedAmount?: bigint;
+  /** Address of the borrowed token. */
+  readonly token?: string;
+  /** Human-readable reason the flash loan failed. */
+  readonly reason?: string;
+
   constructor(message: string, details?: Record<string, unknown>, txHash?: string) {
     super(message, txHash, details, "FLASH_LOAN_ERROR");
     this.name = "FlashLoanError";
@@ -631,6 +677,44 @@ export function mapError(err: unknown): CoralSwapSDKError {
     if (mappedError) return mappedError;
   }
 
+  // -----------------------------------------------------------------------
+  // Soroban host-level error strings (no numeric contract code)
+  //
+  // The Soroban runtime and RPC return these when the contract itself did
+  // not emit an #[contracterror]. Normalize them early so downstream
+  // consumers get a stable, typed error class instead of UNKNOWN_ERROR.
+  // -----------------------------------------------------------------------
+
+  // Authentication failures — missing/bad signature, wrong source, etc.
+  if (
+    normalizedMessage.includes("badauth") ||
+    normalizedMessage.includes("bad auth") ||
+    normalizedMessage.includes("unauthorized") && normalizedMessage.includes("sign")
+  ) {
+    return new SignerError();
+  }
+
+  // Resource-budget exhaustion (compute, memory, instructions)
+  if (
+    normalizedMessage.includes("budget") ||
+    normalizedMessage.includes("exceededbudget") ||
+    normalizedMessage.includes("resource exhausted") ||
+    normalizedMessage.includes("exceeded resource")
+  ) {
+    return new RpcError(
+      `Soroban resource budget exceeded: ${message}`,
+      { sorobanError: message },
+    );
+  }
+
+  // Generic Soroban simulation / execution failures
+  if (
+    normalizedMessage.includes("hosterror") ||
+    /failed/.test(normalizedMessage) && !normalizedMessage.includes("flash loan")
+  ) {
+    return new SimulationError(message);
+  }
+
   // Extract deadline value from message - improved regex
   const deadlineMatch = message.match(/deadline[:\s]*[a-z]*[:\s]*(\d+)/i);
   if (message.includes("EXPIRED") || normalizedMessage.includes("deadline")) {
@@ -685,6 +769,43 @@ export function mapError(err: unknown): CoralSwapSDKError {
     message.includes("429")
   ) {
     return new RpcError(message);
+  }
+
+  // Soroban auth / signing failures are distinct from generic validation errors.
+  if (
+    normalizedMessage.includes("auth") ||
+    normalizedMessage.includes("authorization") ||
+    normalizedMessage.includes("require_auth") ||
+    normalizedMessage.includes("missing auth") ||
+    normalizedMessage.includes("missing authorization")
+  ) {
+    return new SignerError();
+  }
+
+  // Budget / resource exhaustion during simulation or execution.
+  if (
+    normalizedMessage.includes("out of budget") ||
+    normalizedMessage.includes("budget exceeded") ||
+    normalizedMessage.includes("budget exhausted") ||
+    normalizedMessage.includes("resource limit") ||
+    normalizedMessage.includes("instruction limit") ||
+    normalizedMessage.includes("insufficient budget") ||
+    normalizedMessage.includes("max instructions")
+  ) {
+    return new SimulationError(message, { reason: 'budget_exceeded' });
+  }
+
+  // Sequence mismatch / stale account sequence numbers on submission.
+  if (
+    normalizedMessage.includes("bad seq") ||
+    normalizedMessage.includes("bad_seq") ||
+    normalizedMessage.includes("bad sequence") ||
+    normalizedMessage.includes("sequence number") ||
+    normalizedMessage.includes("sequence is too low") ||
+    message.includes("TX_BAD_SEQ") ||
+    message.includes("BAD_SEQ")
+  ) {
+    return new TransactionError(message);
   }
 
   // Signer errors

@@ -634,7 +634,7 @@ function makeDiagnosticEvent(
 
   const contractEvent = new xdr.ContractEvent({
     ext: xdr.ExtensionPoint.v0() as xdr.ExtensionPoint,
-    contractId: contractBuf,
+    contractId: contractBuf ? new xdr.ContractId(contractBuf) : null,
     type: xdr.ContractEventType.contract,
     body,
   });

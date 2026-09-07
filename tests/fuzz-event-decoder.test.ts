@@ -32,7 +32,7 @@ function symbolVal(s: string): xdr.ScVal {
 function makeDiagnosticEvent(
   topic: string,
   data: xdr.ScVal,
-  contractBuf: Buffer = CONTRACT_BUF,
+  contractBuf: Buffer | Uint8Array = CONTRACT_BUF,
 ): xdr.DiagnosticEvent {
   const topics = [symbolVal(topic)];
   const bodyV0 = new xdr.ContractEventV0({ topics, data });
@@ -40,7 +40,7 @@ function makeDiagnosticEvent(
 
   const contractEvent = new xdr.ContractEvent({
     ext: xdr.ExtensionPoint.v0() as xdr.ExtensionPoint,
-    contractId: contractBuf,
+    contractId: contractBuf ? new xdr.ContractId(contractBuf) : null,
     type: xdr.ContractEventType.contract,
     body,
   });
@@ -374,7 +374,7 @@ describe("A3 – Unexpected XDR type tags", () => {
         const body = xdr.ContractEventBody.v0(bodyV0) as xdr.ContractEventBody;
         const contractEvent = new xdr.ContractEvent({
           ext: xdr.ExtensionPoint.v0() as xdr.ExtensionPoint,
-          contractId: CONTRACT_BUF,
+          contractId: new xdr.ContractId(CONTRACT_BUF),
           type: xdr.ContractEventType.contract,
           body,
         });

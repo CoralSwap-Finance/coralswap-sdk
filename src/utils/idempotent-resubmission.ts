@@ -66,10 +66,14 @@ export interface RetryDecision {
  *   outcome. Resubmitting would either duplicate the effect (SUCCESS) or
  *   is pointless (FAILED); either way, do not retry.
  * - `NOT_FOUND` -- the network never saw it land, so it is safe to retry.
- * - `ERROR` -- the status check itself failed. We can't confirm the
- *   transaction didn't land, but favor availability over blocking forever;
- *   callers combining this with other status sources (e.g. an external
- *   bridge API) should prefer the more conservative of the two signals.
+ * - `ERROR` -- the status check itself failed, so the real on-chain outcome
+ *   is *indeterminate*. We cannot confirm the transaction didn't land, so we
+ *   conservatively block resubmission: resubmitting on an unknown state risks
+ *   double-executing the operation. This is the safe default even when two
+ *   callers race on the same hash -- both see the same block signal, so
+ *   neither proceeds to a second submission. Callers that can consult an
+ *   independent status source may override this once they positively confirm
+ *   the transaction never landed.
  */
 export function shouldRetrySubmission(status: TransactionStatus): RetryDecision {
   switch (status.status) {
@@ -80,6 +84,9 @@ export function shouldRetrySubmission(status: TransactionStatus): RetryDecision 
     case 'NOT_FOUND':
       return { shouldRetry: true };
     case 'ERROR':
-      return { shouldRetry: true, reason: 'Status check failed, allowing retry' };
+      return {
+        shouldRetry: false,
+        reason: 'Status indeterminate; blocking resubmission to avoid double execution',
+      };
   }
 }

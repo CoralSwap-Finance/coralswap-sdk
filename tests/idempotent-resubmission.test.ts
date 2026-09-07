@@ -97,10 +97,11 @@ describe('idempotent-resubmission', () => {
       expect(decision.shouldRetry).toBe(true);
     });
 
-    it('allows a retry when the status check itself errors', () => {
+    it('blocks a retry when the status check itself errors (indeterminate)', () => {
       const status: TransactionStatus = { status: 'ERROR', message: 'Network error' };
       const decision = shouldRetrySubmission(status);
-      expect(decision.shouldRetry).toBe(true);
+      expect(decision.shouldRetry).toBe(false);
+      expect(decision.reason).toContain('indeterminate');
     });
   });
 });

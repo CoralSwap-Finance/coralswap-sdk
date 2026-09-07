@@ -4,6 +4,7 @@ import {
   getResourceEstimate,
   getSimulationReturnValue,
   isSimulationSuccess,
+  decodeDiagnosticEvents,
 } from '../src/utils/simulation';
 
 type SimResponse = SorobanRpc.Api.SimulateTransactionResponse;
@@ -147,5 +148,16 @@ describe('Simulation Utilities', () => {
       data: true,
       error: 'Simulation failed',
     });
+  });
+
+  it('decodes diagnostic events from both raw strings and SDK object values', () => {
+    const eventLike = { toXdr: () => 'AQAAAA==' } as any;
+    const base64Event = 'AQAAAA==' as const;
+
+    const decoded = decodeDiagnosticEvents([base64Event, eventLike]);
+
+    expect(decoded).toHaveLength(2);
+    expect(decoded[0].xdr).toBe(base64Event);
+    expect(decoded[1].decoded).toBe(eventLike);
   });
 });

@@ -1,4 +1,5 @@
 import { xdr, rpc as SorobanRpc } from "@stellar/stellar-sdk";
+import { ValidationError } from "@/errors";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -9,6 +10,9 @@ import { xdr, rpc as SorobanRpc } from "@stellar/stellar-sdk";
  * Ledger 0 does not exist, so anchoring must never clamp below this.
  */
 export const MIN_START_LEDGER = 1;
+
+/** Maximum number of events that can be requested in a single scan call. */
+export const MAX_EVENT_LIMIT = 10_000;
 
 /**
  * Decode a topic segment from a `getEvents` **response** back to its symbol.
@@ -330,10 +334,26 @@ export class EventCursor {
     fromLedger?: number;
     toLedger?: number;
     limit?: number;
-  } = {}): Promise<SorobanRpc.Api.EventResponse[]> {
+  } = {}): Promise<Array<SorobanRpc.Api.EventResponse> & {
+    pageInfo?: {
+      startLedger?: number;
+      endLedger?: number;
+      limit?: number;
+      hasMore?: boolean;
+      nextCursor?: string | null;
+      [key: string]: unknown;
+    };
+    truncated?: boolean;
+  }> {
     await this.anchorIfNeeded();
 
     const limit = params.limit ?? this.defaultLimit;
+    if (!Number.isInteger(limit) || limit < 1 || limit > MAX_EVENT_LIMIT) {
+      throw new ValidationError(
+        `limit must be an integer between 1 and ${MAX_EVENT_LIMIT}, got ${limit}`,
+        { field: "limit", constraint: `integer 1-${MAX_EVENT_LIMIT}`, actual: limit },
+      );
+    }
     const toLedger = params.toLedger; // may be undefined -> will be treated as open
 
     let startLedger = params.fromLedger ?? this.cursor!;
@@ -341,6 +361,20 @@ export class EventCursor {
     const topics = this.encodeTopics(params.topics);
 
     const allEvents: SorobanRpc.Api.EventResponse[] = [];
+    let pageInfo: {
+      startLedger?: number;
+      endLedger?: number;
+      limit?: number;
+      hasMore?: boolean;
+      nextCursor?: string | null;
+      [key: string]: unknown;
+    } = {
+      startLedger,
+      endLedger: startLedger,
+      limit,
+      hasMore: false,
+      nextCursor: null,
+    };
 
     while (true) {
       const request: SorobanRpc.Api.GetEventsRequest = {
@@ -366,24 +400,40 @@ export class EventCursor {
       allEvents.push(...(events as SorobanRpc.Api.EventResponse[]));
 
       // Determine last seen ledger to advance the cursor and next startLedger
+      const lastEvent = events[events.length - 1] as any;
       const lastLedger =
-        (events[events.length - 1] as any).ledger ??
+        lastEvent?.ledger ??
         (typeof res.latestLedger === "number" ? res.latestLedger : undefined);
+
+      if (lastLedger !== undefined) {
+        pageInfo = {
+          startLedger,
+          endLedger: lastLedger,
+          limit,
+          hasMore: events.length >= limit,
+          nextCursor:
+            typeof res?.cursor === "string" && res.cursor.length > 0
+              ? res.cursor
+              : null,
+        };
+      }
 
       if (lastLedger === undefined) break;
 
-      // Advance to the ledger after the last event to avoid duplicates
       startLedger = lastLedger + 1;
       this.cursor = startLedger;
 
-      // Stop if we've reached an explicit toLedger
       if (toLedger !== undefined && startLedger > toLedger) break;
-
-      // If fewer than limit results returned, no more pages
       if (events.length < limit) break;
     }
 
-    return allEvents;
+    const pagedEvents = allEvents as typeof allEvents & {
+      pageInfo?: typeof pageInfo;
+      truncated?: boolean;
+    };
+    pagedEvents.pageInfo = pageInfo;
+    pagedEvents.truncated = (pageInfo.hasMore ?? false) || allEvents.length >= limit;
+    return pagedEvents;
   }
 }
 
