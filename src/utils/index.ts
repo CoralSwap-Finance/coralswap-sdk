@@ -96,14 +96,8 @@ export {
   EVENT_TOPICS,
   decodeEvents,
   decodeEventsFromXdr,
-} from './events';
-export type { DecodeEventsOptions } from './events';
-
-export { EventCursor, decodeEventTopic, MIN_START_LEDGER, MAX_EVENT_LIMIT } from './event-cursor';
-export type { EventCursorOptions } from './event-cursor';
-export { ConnectionPool } from './connection-pool';
-
-export {
+export { EventCursor, TypedEventCursor, decodeEventTopic, MIN_START_LEDGER } from './event-cursor';
+export type { EventCursorOptions, TypedEventScanParams } from './event-cursor';
   getVotingPower,
   getVotingPowerAtLedger,
   setVotingPowerQueryProvider,
