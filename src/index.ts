@@ -85,13 +85,7 @@ export {
   DCAModule,
   LimitOrderModule,
   SquidModule,
-  BlendModule,
-} from "@/modules";
-export type { OptimalPath } from "@/modules/router";
-export type { FeeEstimates } from "@/types/fee-estimates";
-export type { TWAPObservation, TWAPResult, TraderRanking, GetTopTradersOptions } from "@/modules";
-export type { FeeEstimates } from "@/types/fee-estimates";
-export { MIN_TWAP_WINDOW_SECONDS } from "@/modules";
+export { MIN_TWAP_WINDOW_SECONDS, MAX_OBSERVATIONS } from "@/modules";
 export type { TreasuryModuleOptions, LeaderboardEntry, LeaderboardOptions } from "@/modules";
 export type { FeeEstimates } from "@/types/fee-estimates";
 
@@ -149,20 +143,11 @@ export {
   batchRequest,
   batchRequestOrThrow,
   DEFAULT_BATCH_CONCURRENCY,
-  ConnectionPool,
-} from './utils';
-
-
-export type {
-export type { FeeEstimates } from "@/types/fee-estimates";
+  ledgerToApproxTime,
+  LEDGER_CLOSE_INTERVAL_SECONDS,
   RetryConfig,
   SimulationResult,
-  SimulationResourceEstimate,
-  WaitNextLedgerOptions,
-  DecodeEventsOptions,
-  SimulateFn,
-  BatchRequestOptions,
-  BatchResult,
+  LedgerHead,
   TransactionStatus,
   RetryDecision,
   EventCursorOptions,

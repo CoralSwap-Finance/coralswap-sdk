@@ -1,5 +1,7 @@
 import { xdr, rpc as SorobanRpc } from "@stellar/stellar-sdk";
 import { ValidationError } from "@/errors";
+import { CoralSwapEvent } from "@/types/events";
+import { EventParser } from "./events";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -434,6 +436,68 @@ export class EventCursor {
     pagedEvents.pageInfo = pageInfo;
     pagedEvents.truncated = (pageInfo.hasMore ?? false) || allEvents.length >= limit;
     return pagedEvents;
+  }
+}
+
+/** Per-scan overrides for a {@link TypedEventCursor}. */
+export interface TypedEventScanParams {
+  fromLedger?: number;
+  toLedger?: number;
+  limit?: number;
+}
+
+/**
+ * A contract/topic-filtered cursor that decodes raw RPC events into
+ * {@link CoralSwapEvent} values.
+ */
+export class TypedEventCursor {
+  private readonly cursor: EventCursor;
+  private readonly parser: EventParser;
+  private readonly contractId?: string;
+  private readonly topicFilters?: string[];
+
+  constructor(
+    server: SorobanRpc.Server,
+    contractId?: string,
+    filters?: string[],
+    options: EventCursorOptions = {},
+  ) {
+    this.cursor = new EventCursor(server, options);
+    this.parser = new EventParser(contractId ? [contractId] : []);
+    this.contractId = contractId;
+    this.topicFilters = filters;
+  }
+
+  reset(): void {
+    this.cursor.reset();
+  }
+
+  async scan(params: TypedEventScanParams = {}): Promise<CoralSwapEvent[]> {
+    const raw = await this.cursor.scan({
+      contractIds: this.contractId ? [this.contractId] : [],
+      topics: this.topicFilters,
+      fromLedger: params.fromLedger,
+      toLedger: params.toLedger,
+      limit: params.limit,
+    });
+    return this.decode(raw);
+  }
+
+  async *stream(
+    params: TypedEventScanParams = {},
+  ): AsyncGenerator<CoralSwapEvent, void, unknown> {
+    for (const event of await this.scan(params)) {
+      yield event;
+    }
+  }
+
+  private decode(raw: SorobanRpc.Api.EventResponse[]): CoralSwapEvent[] {
+    const decoded: CoralSwapEvent[] = [];
+    for (const event of raw) {
+      const typed = this.parser.fromEventResponse(event);
+      if (typed) decoded.push(typed);
+    }
+    return decoded;
   }
 }
 

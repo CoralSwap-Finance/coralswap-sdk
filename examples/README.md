@@ -132,12 +132,14 @@ Demonstrates how to fetch a RedStone price attestation using a custom `price-fee
 3. **Attach & Submit**: If the price is within the acceptable threshold, it attaches the payload and submits the guarded swap to the Stellar Testnet.
 
 The example simulates both a happy path (within deviation) and a failure case (simulated bad price).
+### `tax-reporting.ts` ← **New**
+
+**Run:** `npm run examples:tax-reporting`
+
+Demonstrates a portfolio reconciliation workflow that ingests a fixture history, groups trades by month, and produces a tax summary per period with pagination-friendly export rows. The example stays fully offline so it can run in CI without requiring a live Stellar RPC endpoint.
 
 ---
 
-### `alert-setup.ts` ← **New**
-
-**Run:** `npm run examples:alert-setup`
 
 End-to-end reference for builders wiring up off-chain monitoring on top of CoralSwap: define price and impermanent-loss alert rules, register a signed delivery webhook, and verify the full trigger → dispatch → acknowledgement pipeline.
 

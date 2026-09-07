@@ -88,8 +88,12 @@ export type { RateLimiterOptions } from './rate-limiter';
 export { estimateGas } from './gas';
 export type { SimulateFn } from './gas';
 
-export { waitNextLedger } from './ledger';
-export type { WaitNextLedgerOptions } from './ledger';
+export {
+  waitNextLedger,
+  ledgerToApproxTime,
+  LEDGER_CLOSE_INTERVAL_SECONDS,
+} from './ledger';
+export type { WaitNextLedgerOptions, LedgerHead } from './ledger';
 
 export {
   EventParser,
@@ -101,12 +105,17 @@ export type { DecodeEventsOptions } from './events';
 
 export {
   EventCursor,
+  TypedEventCursor,
   decodeEventTopic,
   MIN_START_LEDGER,
   MAX_EVENT_LIMIT,
   encodeTopicForFilter,
 } from './event-cursor';
-export type { EventCursorOptions, EventCursorPage } from './event-cursor';
+export type {
+  EventCursorOptions,
+  EventCursorPage,
+  TypedEventScanParams,
+} from './event-cursor';
 export { ConnectionPool } from './connection-pool';
 
 export {
