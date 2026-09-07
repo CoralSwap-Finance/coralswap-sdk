@@ -143,20 +143,11 @@ export {
   decodeEventsFromXdr,
   EventCursor,
   decodeEventTopic,
-  MIN_START_LEDGER,
-  batchCall,
-  batchCallSequential,
-  batchRequest,
-  batchRequestOrThrow,
-  DEFAULT_BATCH_CONCURRENCY,
+  ledgerToApproxTime,
+  LEDGER_CLOSE_INTERVAL_SECONDS,
   ConnectionPool,
 } from './utils';
-
-
-export type {
-export type { FeeEstimates } from "@/types/fee-estimates";
-  RetryConfig,
-  SimulationResult,
+  LedgerHead,
   SimulationResourceEstimate,
   WaitNextLedgerOptions,
   DecodeEventsOptions,
