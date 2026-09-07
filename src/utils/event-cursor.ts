@@ -1,10 +1,14 @@
 import { xdr, rpc } from "@stellar/stellar-sdk";
+import { ValidationError } from "@/errors";
 
 /**
  * Lowest ledger sequence that can legally be passed as `startLedger`.
  * Ledger 0 does not exist, so anchoring must never clamp below this.
  */
 export const MIN_START_LEDGER = 1;
+
+/** Maximum number of events that can be requested in a single scan call. */
+export const MAX_EVENT_LIMIT = 10_000;
 
 /**
  * Decode a topic segment from a `getEvents` **response** back to its symbol.
@@ -134,6 +138,12 @@ export class EventCursor {
     await this.anchorIfNeeded();
 
     const limit = params.limit ?? this.defaultLimit;
+    if (!Number.isInteger(limit) || limit < 1 || limit > MAX_EVENT_LIMIT) {
+      throw new ValidationError(
+        `limit must be an integer between 1 and ${MAX_EVENT_LIMIT}, got ${limit}`,
+        { field: "limit", constraint: `integer 1-${MAX_EVENT_LIMIT}`, actual: limit },
+      );
+    }
     const toLedger = params.toLedger; // may be undefined -> will be treated as open
 
     let startLedger = params.fromLedger ?? this.cursor!;
