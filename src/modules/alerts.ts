@@ -38,6 +38,7 @@ import {
 
 const PRICE_SCALE = 1_000_000_000_000_000_000n;
 const PRICE_SCALE_SQRT = 1_000_000_000n;
+const USD_SCALE = 100_000_000n;
 const BPS = 10_000n;
 const DEFAULT_COOLDOWN_SECONDS = 900;
 const MAX_ALERTS_PER_USER = 50;
@@ -1095,7 +1096,7 @@ export class AlertModule {
 
     // Fall back to spot price from pair if available
     if (pairAddress) {
-      return await this.fetchSpotPriceFromPair(pairAddress);
+      return await this.fetchSpotPriceFromPair(pairAddress, tokenAddress);
     }
 
     throw new ValidationError(
@@ -1130,19 +1131,30 @@ export class AlertModule {
    * Fetch spot price from a pair contract as fallback.
    *
    * @param pairAddress - Pair address to fetch spot price from
-   * @returns Approximate USD price (scaled)
+   * @param tokenAddress - Token address to quote the price for
+   * @returns Approximate USD price (scaled by 10^8)
    */
-  private async fetchSpotPriceFromPair(pairAddress: string): Promise<bigint> {
+  private async fetchSpotPriceFromPair(
+    pairAddress: string,
+    tokenAddress: string,
+  ): Promise<bigint> {
     const pair = this.client.pair(pairAddress);
+    const tokens = await pair.getTokens();
     const { reserve0, reserve1 } = await pair.getReserves();
 
     if (reserve0 === 0n || reserve1 === 0n) {
       throw new InsufficientLiquidityError('Pool has no liquidity');
     }
 
-    // Return a simple price ratio as fallback
-    // Note: This is not a true USD price, but serves as fallback for testing
-    return (reserve1 * PRICE_SCALE) / reserve0;
+    const isTokenToken0 = tokens.token0 === tokenAddress;
+    const otherToken = isTokenToken0 ? tokens.token1 : tokens.token0;
+    this.validatePairTokens(tokens, tokenAddress, otherToken);
+
+    const reserveToken = isTokenToken0 ? reserve0 : reserve1;
+    const reserveQuote = isTokenToken0 ? reserve1 : reserve0;
+
+    // Return price of tokenAddress in its paired token, using USD canonical scale
+    return (reserveQuote * USD_SCALE) / reserveToken;
   }
 
   /**
