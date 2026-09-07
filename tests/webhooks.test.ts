@@ -228,6 +228,29 @@ describe('WebhookModule', () => {
       }
     });
 
+    it('preserves the exact original payload bytes across redelivery attempts', async () => {
+      jest.useFakeTimers();
+      const mock = installFetchMock([
+        () => responseWithStatus(503),
+        () => responseWithStatus(200),
+      ]);
+      try {
+        const webhooks = new WebhookModule({ logger: silentLogger });
+        const endpointId = await webhooks.registerEndpoint({ url: VALID_URL, method: 'POST' });
+        const payload = { order: 42, nested: { values: [3, 2, 1], flag: true }, note: 'redeliver-me' };
+
+        const deliveryPromise = webhooks.deliver(endpointId, payload);
+        await jest.advanceTimersByTimeAsync(1000);
+        await expect(deliveryPromise).resolves.toMatchObject({ status: 'success' });
+
+        expect(mock.calls).toHaveLength(2);
+        expect(mock.calls[1].init.body).toBe(mock.calls[0].init.body);
+      } finally {
+        jest.useRealTimers();
+        mock.restore();
+      }
+    });
+
     it('returns delivered=false on a 4xx response and does NOT retry', async () => {
       const mock = installFetchMock([() => responseWithStatus(401)]);
       try {
