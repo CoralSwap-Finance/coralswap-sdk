@@ -85,14 +85,8 @@ export type { BatchRequestOptions, BatchResult } from './batch-request';
 export { parseChangelog } from './changelog';
 export { RateLimiter } from './rate-limiter';
 export type { RateLimiterOptions } from './rate-limiter';
-export { estimateGas } from './gas';
-export type { SimulateFn } from './gas';
-
-export { waitNextLedger } from './ledger';
-export type { WaitNextLedgerOptions } from './ledger';
-
-export {
-  EventParser,
+export { waitNextLedger, ledgerToApproxTime, LEDGER_CLOSE_INTERVAL_SECONDS } from './ledger';
+export type { WaitNextLedgerOptions, LedgerHead } from './ledger';
   EVENT_TOPICS,
   decodeEvents,
   decodeEventsFromXdr,

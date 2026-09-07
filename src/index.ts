@@ -143,20 +143,11 @@ export {
   batchRequest,
   batchRequestOrThrow,
   DEFAULT_BATCH_CONCURRENCY,
-  ConnectionPool,
-} from './utils';
-
-
-export type {
-export type { FeeEstimates } from "@/types/fee-estimates";
+  ledgerToApproxTime,
+  LEDGER_CLOSE_INTERVAL_SECONDS,
   RetryConfig,
   SimulationResult,
-  SimulationResourceEstimate,
-  WaitNextLedgerOptions,
-  DecodeEventsOptions,
-  SimulateFn,
-  BatchRequestOptions,
-  BatchResult,
+  LedgerHead,
   TransactionStatus,
   RetryDecision,
   EventCursorOptions,
