@@ -1,5 +1,15 @@
 import { ErrorParser } from '../src/errors/parser';
-import { mapError, InsufficientLiquidityError, ValidationError, SlippageError, DeadlineError, FlashLoanError } from '../src/errors';
+import {
+    mapError,
+    InsufficientLiquidityError,
+    ValidationError,
+    SlippageError,
+    DeadlineError,
+    FlashLoanError,
+    SimulationError,
+    TransactionError,
+    SignerError,
+} from '../src/errors';
 
 describe('ErrorParser', () => {
     describe('extractErrorCode', () => {
@@ -79,5 +89,22 @@ describe('SDK Error Mapping Integration', () => {
     it('maps Error(Contract, #111) to ValidationError (Invalid recipient)', () => {
         const err = mapError('Error(Contract, #111)');
         expect(err).toBeInstanceOf(ValidationError);
+    });
+
+    it('maps Soroban auth failure strings to SignerError', () => {
+        expect(mapError('tx auth failed: missing authorization')).toBeInstanceOf(SignerError);
+        expect(mapError('HostError: auth required')).toBeInstanceOf(SignerError);
+    });
+
+    it('maps Soroban budget exhaustion to SimulationError', () => {
+        const err = mapError('simulation failed: out of budget');
+        expect(err).toBeInstanceOf(SimulationError);
+        expect(err.message).toContain('out of budget');
+    });
+
+    it('maps Soroban bad sequence strings to TransactionError', () => {
+        const err = mapError('Transaction failed: tx_bad_seq');
+        expect(err).toBeInstanceOf(TransactionError);
+        expect(err.message).toContain('tx_bad_seq');
     });
 });
