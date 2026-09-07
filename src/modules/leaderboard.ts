@@ -128,16 +128,17 @@ export class LeaderboardModule extends TreasuryModule {
 
     const topic = type === "trader" ? "swap" : "add_liquidity";
 
-    // The shared cursor encodes the topic as a base64 XDR ScVal symbol; a raw
-    // string filter is silently ignored by a real RPC node.
-    const cursor = new EventCursor(this.leaderboardClient.server);
-    const events = await cursor.scan({
+    // Use the shared EventCursor utility so topic filters are encoded as
+    // ScVal symbols (raw-string topics silently miss real on-chain events).
+    const cursor = new EventCursor({
+      server: this.leaderboardClient.server,
       contractIds: options.pairAddress ? [options.pairAddress] : [],
       topics: [topic],
-      fromLedger: startLedger,
-      toLedger: endLedger,
+      startLedger,
       limit: MAX_LEADERBOARD_EVENTS,
     });
+
+    const events = await cursor.fetchAll(MAX_LEADERBOARD_EVENTS);
     if (events.length === 0) return [];
 
     const currentMap = new Map<string, bigint>();
