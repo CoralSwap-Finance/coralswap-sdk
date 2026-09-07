@@ -85,11 +85,6 @@ function trend(current: number, previous: number): Trend {
   return delta > 0 ? '↑' : '↓';
 }
 
-function trendBigInt(current: bigint, previous: bigint): Trend {
-  if (current === previous) return '→';
-  return current > previous ? '↑' : '↓';
-}
-
 function colorTrend(t: Trend): string {
   if (t === '↑') return `\x1b[32m${t}\x1b[0m`; // green
   if (t === '↓') return `\x1b[31m${t}\x1b[0m`; // red
@@ -180,7 +175,6 @@ function renderDashboard(current: ProtocolMetrics, previous: ProtocolMetrics | n
 
   for (const pool of current.pools) {
     const prevPool = previous?.pools.find((p) => p.address === pool.address) ?? null;
-    const tvlArrow  = prevPool ? colorTrend(trend(pool.tvlUSD, prevPool.tvlUSD)) : colorTrend('→');
     const feeArrow  = prevPool ? colorTrend(trend(pool.feeBps, prevPool.feeBps)) : colorTrend('→');
     const staleStr  = pool.isFeeStalse ? `${DIM}stale${RESET}` : `\x1b[32mlive\x1b[0m`;
 

@@ -36,7 +36,7 @@ import {
 import { Network } from '../src/types/common';
 import { CoralSwapClient } from '../src/client';
 import { LPTokenClient } from '../src/contracts/lp-token';
-import { fromSorobanAmount, formatAmount } from '../src/utils/amounts';
+import { formatAmount } from '../src/utils/amounts';
 import { withRetry, RetryOptions } from '../src/utils/retry';
 
 // ---------------------------------------------------------------------------
