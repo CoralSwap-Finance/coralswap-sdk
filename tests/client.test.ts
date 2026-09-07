@@ -597,6 +597,68 @@ describe('executeWithFallback', () => {
     createRpcServerSpy.mockRestore();
   });
 
+  it('rebuilds factory/router singletons after endpoint rotation and leaves networkConfig untouched', async () => {
+    const rpcUrls = [
+      'https://rpc1.example.com',
+      'https://rpc2.example.com',
+    ];
+
+    const client = new CoralSwapClient({
+      network: Network.TESTNET,
+      secretKey: TEST_SECRET,
+      rpcUrl: rpcUrls,
+      maxRetries: 0,
+      retryDelayMs: 0,
+    });
+
+    // Snapshot original networkConfig values
+    const originalRpcUrl = client.networkConfig.rpcUrl;
+    const originalPassphrase = client.networkConfig.networkPassphrase;
+
+    // Seed valid contract addresses so factory/router singletons can be created
+    (client as any).networkConfig.factoryAddress = 'CBLBMYODT37R3GJZLEFCGCYWOOVEUZ3MMTVR2QCOKOK2UPKSI3CXZBNB';
+    (client as any).networkConfig.routerAddress = 'CCDQYZKX5AUI7KSWXIFI7AFRQMWCZMOOUJXIDWEJ4IYX7XE7PHCMCBAF';
+
+    // Capture factory/router before rotation
+    const factoryBefore = client.factory;
+    const routerBefore = client.router;
+
+    // Fake servers: first always fails (503), second always succeeds
+    const retryableError = Object.assign(
+      new Error('503 Service Unavailable'),
+      { response: { status: 503 } },
+    );
+    const mockServerFail = { getHealth: jest.fn().mockRejectedValue(retryableError) } as any;
+    const mockServerOk   = { getHealth: jest.fn().mockResolvedValue({ status: 'healthy' }) } as any;
+
+    // Inject the failing server as the initial server (bypasses real network)
+    client.server = mockServerFail;
+
+    // When rotation happens, createRpcServer is called — return the healthy server
+    const createRpcServerSpy = jest
+      .spyOn(client as any, 'createRpcServer')
+      .mockReturnValue(mockServerOk);
+
+    const result = await client.isHealthy();
+
+    // Rotation honoured — first endpoint failed, second succeeded
+    expect(result).toBe(true);
+    expect(mockServerFail.getHealth).toHaveBeenCalledTimes(1);
+    expect(mockServerOk.getHealth).toHaveBeenCalledTimes(1);
+
+    // networkConfig must remain untouched after failover rotation
+    expect(client.networkConfig.rpcUrl).toBe(originalRpcUrl);
+    expect(client.networkConfig.networkPassphrase).toBe(originalPassphrase);
+
+    // Factory/router singletons must have been nulled and rebuilt with the new server
+    const factoryAfter = client.factory;
+    const routerAfter = client.router;
+    expect(factoryAfter).not.toBe(factoryBefore);
+    expect(routerAfter).not.toBe(routerBefore);
+
+    createRpcServerSpy.mockRestore();
+  });
+
   it('stops retrying once the configured deadlineMs is exceeded and throws DeadlineError', async () => {
     jest.useFakeTimers();
     jest.setSystemTime(new Date('2020-01-01T00:00:00.000Z'));
