@@ -1,6 +1,7 @@
 import { CoralSwapClient } from "@/client";
 import { PRECISION } from "@/config";
 import { ValidationError, InsufficientLiquidityError } from "@/errors";
+import { validateAddress } from "@/utils/validation";
 
 /**
  * Minimum time window (in seconds) for TWAP to resist single-block manipulation.
@@ -98,6 +99,7 @@ export class OracleModule {
    * const obs = await client.oracle.observe('C...');
    */
   async observe(pairAddress: string): Promise<TWAPObservation> {
+    validateAddress(pairAddress, "pairAddress");
     const pair = this.client.pair(pairAddress);
     const prices = await pair.getCumulativePrices();
 
@@ -210,6 +212,7 @@ export class OracleModule {
     options: { enforceMinWindow?: boolean } = {},
   ): Promise<TWAPResult | null> {
     const { enforceMinWindow = true } = options;
+    validateAddress(pairAddress, "pairAddress");
 
     // Take a fresh observation
     await this.observe(pairAddress);
@@ -264,6 +267,7 @@ export class OracleModule {
     price0Per1: bigint;
     price1Per0: bigint;
   }> {
+    validateAddress(pairAddress, "pairAddress");
     const pair = this.client.pair(pairAddress);
     const { reserve0, reserve1 } = await pair.getReserves();
 
@@ -300,6 +304,7 @@ export class OracleModule {
     spotPrice0: bigint;
     spotPrice1: bigint;
   } | null> {
+    validateAddress(pairAddress, "pairAddress");
     // Get TWAP price (manipulation-resistant)
     const twapResult = await this.getTWAP(pairAddress);
     if (!twapResult) {
@@ -374,6 +379,7 @@ export class OracleModule {
    * const count = client.oracle.getObservationCount('C...');
    */
   getObservationCount(pairAddress: string): number {
+    validateAddress(pairAddress, "pairAddress");
     return this.observationCache.get(pairAddress)?.length ?? 0;
   }
 
@@ -384,6 +390,7 @@ export class OracleModule {
    * @returns A cloned array of cached observations.
    */
   getObservationSeries(pairAddress: string): TWAPObservation[] {
+    validateAddress(pairAddress, "pairAddress");
     return this.observationCache.get(pairAddress)?.slice() ?? [];
   }
 }
