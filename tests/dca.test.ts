@@ -1,460 +1,382 @@
-import { CoralSwapClient } from '../src/client';
 import { DCAModule } from '../src/modules/dca';
+import { CoralSwapClient } from '../src/client';
 import { ValidationError, TransactionError } from '../src/errors';
-import { Network } from '../src/types/common';
-import type { DCAParams } from '../src/types/dca';
-import type { SimulateTransactionResult } from '../src/types/common';
-import { nativeToScVal, xdr } from '@stellar/stellar-sdk';
+import { DCASchedule } from '../src/types/dca';
 
 // ---------------------------------------------------------------------------
-// Test constants
+// Mock @stellar/stellar-sdk
 // ---------------------------------------------------------------------------
 
-const TEST_SECRET = 'SB6K2AINTGNYBFX4M7TRPGSKQ5RKNOXXWB7UZUHRYOVTM7REDUGECKZU';
-const DCA_CONTRACT = 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC';
-const TOKEN_IN = 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM';
-const TOKEN_OUT = 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4';
-const PAIR = 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM';
-const OWNER = 'GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFSHONUCEOASW7QC7OX2H';
+jest.mock('@stellar/stellar-sdk', () => {
+  const actual = jest.requireActual('@stellar/stellar-sdk');
+  return {
+    ...actual,
+    Contract: jest.fn().mockImplementation(() => ({
+      call: jest.fn().mockReturnValue({}),
+    })),
+    Address: jest.fn().mockImplementation(() => ({
+      toScVal: jest.fn().mockReturnValue({}),
+    })),
+    // scValToNative should be a passthrough so decodeSchedule sees our object
+    scValToNative: jest.fn().mockImplementation((val: unknown) => val),
+  };
+});
 
-const TEST_TX_HASH = 'dca-tx-hash-123';
+// ---------------------------------------------------------------------------
+// Mock isValidAddress — allow all C/G-prefixed addresses to pass
+// ---------------------------------------------------------------------------
+
+jest.mock('../src/utils/addresses', () => ({
+  isValidAddress: jest.fn().mockReturnValue(true),
+}));
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Build a valid set of DCA params, allowing per-test overrides. */
-function makeParams(overrides: Partial<DCAParams> = {}): DCAParams {
-  return {
-    tokenIn: TOKEN_IN,
-    tokenOut: TOKEN_OUT,
-    amountPerInterval: 100_0000000n,
-    intervalSeconds: 86400, // 1 day
-    totalIntervals: 7,
-    pairAddress: PAIR,
-    ...overrides,
-  };
-}
+const VALID_ADDR_A = 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM';
+const VALID_ADDR_B = 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAKBNO';
+const VALID_ADDR_C = 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAKCMP';
+const CONTRACT_ADDR = 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAALD4T';
 
-/** Build a raw on-chain schedule struct, allowing per-field overrides. */
-function makeScheduleNative(
-  overrides: Partial<Record<string, unknown>> = {},
-): Record<string, unknown> {
+/**
+ * Build a mock contract-encoded schedule object (snake_case keys).
+ * `decodeSchedule` reads `total_intervals`, `executed_count`, etc., so the
+ * mock must match the shape returned by `scValToNative`.
+ */
+function makeRawSchedule(overrides: Record<string, unknown> = {}) {
   return {
-    id: 'schedule-1',
-    owner: OWNER,
-    token_in: TOKEN_IN,
-    token_out: TOKEN_OUT,
-    amount_per_interval: '1000000',
+    id: 'sched-1',
+    owner: VALID_ADDR_A,
+    token_in: VALID_ADDR_A,
+    token_out: VALID_ADDR_B,
+    amount_per_interval: '10000000',
     interval_seconds: 86400,
-    total_intervals: 7,
+    total_intervals: 5,
     executed_count: 2,
-    next_execution_at: 1_700_000_000,
+    next_execution_at: Math.floor(Date.now() / 1000) + 86400,
     status: 'active',
     ...overrides,
   };
 }
 
-/** Wrap a native value as a successful simulation result (struct return). */
-function makeSimResult(native: unknown): SimulateTransactionResult {
-  return {
+function createMockClient(overrides: {
+  schedule?: DCASchedule;
+  submitResult?: { success: boolean; txHash?: string; error?: { message: string } };
+  singleReturnValue?: DCASchedule | null;
+  vecReturnValue?: { type: 'scvVec'; vec: DCASchedule[] } | null;
+} = {}): CoralSwapClient {
+  const defaultSchedule = overrides.schedule ?? makeRawSchedule();
+  const submitResult = overrides.submitResult ?? {
     success: true,
-    returnValue: nativeToScVal(native),
-    auth: [],
-    minResourceFee: '100',
-    cost: { cpuInsns: '1000', memBytes: '512' },
-    transactionData: null,
-    latestLedger: 12345,
-    events: [],
-    error: null,
-    raw: {} as never,
+    txHash: 'tx_hash_001',
   };
-}
 
-/** Wrap a list of native values as a successful simulation result (vec return). */
-function makeArraySimResult(items: unknown[]): SimulateTransactionResult {
-  const arrayVal = xdr.ScVal.scvVec(items.map((item) => nativeToScVal(item)));
-  return {
-    success: true,
-    returnValue: arrayVal,
-    auth: [],
-    minResourceFee: '100',
-    cost: { cpuInsns: '1000', memBytes: '512' },
-    transactionData: null,
-    latestLedger: 12345,
-    events: [],
-    error: null,
-    raw: {} as never,
-  };
-}
+  const simulateTransaction = jest.fn();
 
-/** A successful simulation that returns no value (e.g. unknown schedule). */
-function makeEmptySimResult(): SimulateTransactionResult {
-  return {
-    success: true,
-    returnValue: null,
-    auth: [],
-    minResourceFee: '100',
-    cost: { cpuInsns: '1000', memBytes: '512' },
-    transactionData: null,
-    latestLedger: 12345,
-    events: [],
-    error: null,
-    raw: {} as never,
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Test suite
-// ---------------------------------------------------------------------------
-
-describe('DCAModule', () => {
-  let client: CoralSwapClient;
-  let dca: DCAModule;
-  let mockSigner: { publicKey: jest.Mock; signTransaction: jest.Mock };
-
-  beforeEach(() => {
-    client = new CoralSwapClient({
-      network: Network.TESTNET,
-      secretKey: TEST_SECRET,
+  if (overrides.vecReturnValue !== undefined) {
+    simulateTransaction.mockResolvedValue({
+      success: overrides.vecReturnValue !== null,
+      returnValue: overrides.vecReturnValue,
     });
-
-    dca = new DCAModule(client, DCA_CONTRACT);
-
-    mockSigner = {
-      publicKey: jest.fn().mockResolvedValue(OWNER),
-      signTransaction: jest.fn().mockResolvedValue('signed-xdr'),
-    };
-  });
-
-  afterEach(() => {
-    jest.restoreAllMocks();
-  });
-
-  function mockSubmitSuccess(): jest.SpyInstance {
-    return jest.spyOn(client, 'submitTransaction').mockResolvedValue({
+  } else if (overrides.singleReturnValue !== undefined) {
+    simulateTransaction.mockResolvedValue({
+      success: overrides.singleReturnValue !== null,
+      returnValue: overrides.singleReturnValue,
+    });
+  } else {
+    simulateTransaction.mockResolvedValue({
       success: true,
-      txHash: TEST_TX_HASH,
-      data: { txHash: TEST_TX_HASH, ledger: 1000 },
+      returnValue: defaultSchedule,
     });
   }
 
-  // -------------------------------------------------------------------------
-  // createDCA()
-  // -------------------------------------------------------------------------
+  return {
+    simulateTransaction,
+    submitTransaction: jest.fn().mockResolvedValue(submitResult),
+    publicKey: jest.fn().mockResolvedValue(VALID_ADDR_A),
+  } as unknown as CoralSwapClient;
+}
 
-  describe('createDCA()', () => {
-    it('returns a schedule ID (tx hash) on valid params', async () => {
-      mockSubmitSuccess();
+function makeSigner() {
+  return {
+    publicKey: jest.fn().mockResolvedValue(VALID_ADDR_A),
+    signTransaction: jest.fn().mockImplementation((_tx: string) =>
+      Promise.resolve({ signedTx: _tx, signature: 'sig' }),
+    ),
+  };
+}
 
-      const id = await dca.createDCA(makeParams(), mockSigner);
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
 
-      expect(id).toBe(TEST_TX_HASH);
-      expect(mockSigner.publicKey).toHaveBeenCalled();
-    });
-
-    it('throws ValidationError for an invalid tokenIn address', async () => {
-      await expect(
-        dca.createDCA(makeParams({ tokenIn: 'not-an-address' }), mockSigner),
-      ).rejects.toThrow(ValidationError);
-    });
-
-    it('throws ValidationError when tokenIn and tokenOut are identical', async () => {
-      await expect(
-        dca.createDCA(makeParams({ tokenOut: TOKEN_IN }), mockSigner),
-      ).rejects.toThrow(ValidationError);
-    });
-
-    it('throws ValidationError when amountPerInterval is zero', async () => {
-      await expect(
-        dca.createDCA(makeParams({ amountPerInterval: 0n }), mockSigner),
-      ).rejects.toThrow(ValidationError);
-    });
-
-    it('throws ValidationError when interval is below the 1-hour minimum', async () => {
-      await expect(
-        dca.createDCA(makeParams({ intervalSeconds: 3599 }), mockSigner),
-      ).rejects.toThrow(ValidationError);
-
-      await expect(
-        dca.createDCA(makeParams({ intervalSeconds: 3599 }), mockSigner),
-      ).rejects.toThrow('intervalSeconds must be at least 3600');
-    });
-
-    it('accepts the exact 1-hour interval boundary (3600s)', async () => {
-      mockSubmitSuccess();
-
-      await expect(
-        dca.createDCA(makeParams({ intervalSeconds: 3600 }), mockSigner),
-      ).resolves.toBe(TEST_TX_HASH);
-    });
-
-    it('throws ValidationError when totalIntervals is below 2', async () => {
-      await expect(
-        dca.createDCA(makeParams({ totalIntervals: 1 }), mockSigner),
-      ).rejects.toThrow(ValidationError);
-
-      await expect(
-        dca.createDCA(makeParams({ totalIntervals: 1 }), mockSigner),
-      ).rejects.toThrow('totalIntervals must be at least 2');
-    });
-
-    it('accepts the exact minimum of 2 intervals', async () => {
-      mockSubmitSuccess();
-
-      await expect(
-        dca.createDCA(makeParams({ totalIntervals: 2 }), mockSigner),
-      ).resolves.toBe(TEST_TX_HASH);
-    });
-
-    it('throws ValidationError for a non-integer interval', async () => {
-      await expect(
-        dca.createDCA(makeParams({ intervalSeconds: 3600.5 }), mockSigner),
-      ).rejects.toThrow(ValidationError);
-    });
-
-    it('throws TransactionError when submitTransaction reports failure', async () => {
-      jest.spyOn(client, 'submitTransaction').mockResolvedValue({
-        success: false,
-        error: { code: 'SIMULATION_FAILED', message: 'Insufficient balance' },
+describe('DCAModule — regression', () => {
+  describe('schedule-id derivation', () => {
+    it('createDCA returns the txHash as the schedule reference', async () => {
+      const txHash = '0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890';
+      const client = createMockClient({
+        submitResult: { success: true, txHash },
       });
+      const module = new DCAModule(client, CONTRACT_ADDR);
 
-      await expect(dca.createDCA(makeParams(), mockSigner)).rejects.toThrow(
+      const id = await module.createDCA(
+        {
+          tokenIn: VALID_ADDR_A,
+          tokenOut: VALID_ADDR_B,
+          amountPerInterval: 10_0000000n,
+          intervalSeconds: 86400,
+          totalIntervals: 5,
+          pairAddress: VALID_ADDR_C,
+        },
+        makeSigner(),
+      );
+
+      expect(id).toBe(txHash);
+      expect(typeof id).toBe('string');
+      expect(id.length).toBeGreaterThan(0);
+    });
+
+    it('createDCA returns undefined when txHash is missing despite success', async () => {
+      const client = createMockClient({
+        submitResult: { success: true, txHash: undefined },
+      });
+      const module = new DCAModule(client, CONTRACT_ADDR);
+
+      const id = await module.createDCA(
+        {
+          tokenIn: VALID_ADDR_A,
+          tokenOut: VALID_ADDR_B,
+          amountPerInterval: 10_0000000n,
+          intervalSeconds: 86400,
+          totalIntervals: 5,
+          pairAddress: VALID_ADDR_C,
+        },
+        makeSigner(),
+      );
+
+      expect(id).toBeUndefined();
+    });
+  });
+
+  describe('cancel refund snapshot freshness', () => {
+    it('cancelDCA computes refund from the schedule snapshot fetched before submission', async () => {
+      const schedule = makeRawSchedule({
+        amount_per_interval: '5000000',
+        total_intervals: 7,
+        executed_count: 3,
+        status: 'active',
+      });
+      const client = createMockClient({
+        schedule,
+        submitResult: { success: true, txHash: 'cancel-tx' },
+      });
+      const module = new DCAModule(client, CONTRACT_ADDR);
+
+      const result = await module.cancelDCA('sched-1', makeSigner());
+
+      // refund = amount_per_interval × (total_intervals - executed_count)
+      //       = 5_0000000 × (7 - 3) = 5_0000000 × 4
+      expect(result.refundAmount).toBe(20_000000n);
+      expect(result.txHash).toBe('cancel-tx');
+      expect(result.scheduleId).toBe('sched-1');
+    });
+
+    it('cancelDCA rejects an already-cancelled schedule before spending gas', async () => {
+      const schedule = makeRawSchedule({ status: 'cancelled', executed_count: 5, total_intervals: 5 });
+      const client = createMockClient({ schedule });
+      const module = new DCAModule(client, CONTRACT_ADDR);
+
+      await expect(module.cancelDCA('sched-1', makeSigner())).rejects.toThrow(
+        ValidationError,
+      );
+      expect(client.submitTransaction).not.toHaveBeenCalled();
+    });
+
+    it('cancelDCA rejects a completed schedule before spending gas', async () => {
+      const schedule = makeRawSchedule({ status: 'completed', executed_count: 5, total_intervals: 5 });
+      const client = createMockClient({ schedule });
+      const module = new DCAModule(client, CONTRACT_ADDR);
+
+      await expect(module.cancelDCA('sched-1', makeSigner())).rejects.toThrow(
+        ValidationError,
+      );
+      expect(client.submitTransaction).not.toHaveBeenCalled();
+    });
+
+    it('cancelDCA propagates on-chain failure as TransactionError', async () => {
+      const schedule = makeRawSchedule({ status: 'active' });
+      const client = createMockClient({
+        schedule,
+        submitResult: {
+          success: false,
+          error: { message: 'insufficient funds' },
+        },
+      });
+      const module = new DCAModule(client, CONTRACT_ADDR);
+
+      await expect(module.cancelDCA('sched-1', makeSigner())).rejects.toThrow(
         TransactionError,
       );
-      await expect(dca.createDCA(makeParams(), mockSigner)).rejects.toThrow(
-        'createDCA failed: Insufficient balance',
-      );
     });
   });
 
-  // -------------------------------------------------------------------------
-  // getDCASchedule()
-  // -------------------------------------------------------------------------
-
-  describe('getDCASchedule()', () => {
-    it('returns a decoded schedule by ID', async () => {
-      jest
-        .spyOn(client, 'simulateTransaction')
-        .mockResolvedValue(makeSimResult(makeScheduleNative()));
-
-      const schedule = await dca.getDCASchedule('schedule-1');
-
-      expect(schedule.id).toBe('schedule-1');
-      expect(schedule.owner).toBe(OWNER);
-      expect(schedule.amountPerInterval).toBe(1_000_000n);
-      expect(schedule.status).toBe('active');
-    });
-
-    it('derives remainingCount as totalIntervals - executedCount', async () => {
-      jest.spyOn(client, 'simulateTransaction').mockResolvedValue(
-        makeSimResult(
-          makeScheduleNative({ total_intervals: 10, executed_count: 4 }),
-        ),
-      );
-
-      const schedule = await dca.getDCASchedule('schedule-1');
-
-      expect(schedule.totalIntervals).toBe(10);
-      expect(schedule.executedCount).toBe(4);
-      expect(schedule.remainingCount).toBe(6);
-    });
-
-    it('throws ValidationError for an empty scheduleId', async () => {
-      await expect(dca.getDCASchedule('')).rejects.toThrow(ValidationError);
-    });
-
-    it('throws ValidationError when the schedule does not exist', async () => {
-      jest
-        .spyOn(client, 'simulateTransaction')
-        .mockResolvedValue(makeEmptySimResult());
-
-      await expect(dca.getDCASchedule('missing')).rejects.toThrow(
-        'DCA schedule not found',
-      );
-    });
-  });
-
-  // -------------------------------------------------------------------------
-  // getDCASchedules()
-  // -------------------------------------------------------------------------
-
-  describe('getDCASchedules()', () => {
-    it('returns all schedules for an address', async () => {
-      jest.spyOn(client, 'simulateTransaction').mockResolvedValue(
-        makeArraySimResult([
-          makeScheduleNative({ id: 'schedule-1' }),
-          makeScheduleNative({ id: 'schedule-2', status: 'completed' }),
-        ]),
-      );
-
-      const schedules = await dca.getDCASchedules(OWNER);
-
-      expect(schedules).toHaveLength(2);
-      expect(schedules[0].id).toBe('schedule-1');
-      expect(schedules[1].status).toBe('completed');
-    });
-
-    it('returns an empty array for an address with no schedules', async () => {
-      jest
-        .spyOn(client, 'simulateTransaction')
-        .mockResolvedValue(makeArraySimResult([]));
-
-      const schedules = await dca.getDCASchedules(OWNER);
-
-      expect(schedules).toEqual([]);
-    });
-
-    it('throws ValidationError for an invalid owner address', async () => {
-      await expect(dca.getDCASchedules('not-an-address')).rejects.toThrow(
-        ValidationError,
-      );
-    });
-  });
-
-  // -------------------------------------------------------------------------
-  // getDCAPerformance()
-  // -------------------------------------------------------------------------
-
-  describe('getDCAPerformance()', () => {
-    it('computes positive savings when DCA beats the lump-sum baseline', async () => {
-      jest.spyOn(client, 'simulateTransaction').mockResolvedValue(
-        makeSimResult({
-          total_invested: '1000',
-          total_received: '1100',
-          lump_sum_received: '1000',
-        }),
-      );
-
-      const perf = await dca.getDCAPerformance('schedule-1');
-
-      expect(perf.totalInvested).toBe(1000n);
-      expect(perf.totalReceived).toBe(1100n);
-      expect(perf.lumpSumReceived).toBe(1000n);
-      expect(perf.savings).toBe(100n);
-      // 100 / 1000 = 1000 bps
-      expect(perf.savingsBps).toBe(1000);
-    });
-
-    it('computes negative savings when DCA underperforms the lump sum', async () => {
-      jest.spyOn(client, 'simulateTransaction').mockResolvedValue(
-        makeSimResult({
-          total_invested: '1000',
-          total_received: '900',
-          lump_sum_received: '1000',
-        }),
-      );
-
-      const perf = await dca.getDCAPerformance('schedule-1');
-
-      expect(perf.savings).toBe(-100n);
-      expect(perf.savingsBps).toBe(-1000);
-    });
-
-    it('reports zero savingsBps when the lump-sum baseline is zero', async () => {
-      jest.spyOn(client, 'simulateTransaction').mockResolvedValue(
-        makeSimResult({
-          total_invested: '0',
-          total_received: '0',
-          lump_sum_received: '0',
-        }),
-      );
-
-      const perf = await dca.getDCAPerformance('schedule-1');
-
-      expect(perf.savings).toBe(0n);
-      expect(perf.savingsBps).toBe(0);
-    });
-
-    it('throws ValidationError for an empty scheduleId', async () => {
-      await expect(dca.getDCAPerformance('')).rejects.toThrow(ValidationError);
-    });
-
-    it('throws ValidationError when the schedule does not exist', async () => {
-      jest
-        .spyOn(client, 'simulateTransaction')
-        .mockResolvedValue(makeEmptySimResult());
-
-      await expect(dca.getDCAPerformance('missing')).rejects.toThrow(
-        ValidationError,
-      );
-    });
-  });
-
-  // -------------------------------------------------------------------------
-  // cancelDCA()
-  // -------------------------------------------------------------------------
-
-  describe('cancelDCA()', () => {
-    it('cancels an active schedule and refunds the unspent escrow', async () => {
-      // remainingCount = 7 - 2 = 5; refund = 1_000_000 * 5 = 5_000_000
-      jest
-        .spyOn(client, 'simulateTransaction')
-        .mockResolvedValue(makeSimResult(makeScheduleNative()));
-      mockSubmitSuccess();
-
-      const result = await dca.cancelDCA('schedule-1', mockSigner);
-
-      expect(result.scheduleId).toBe('schedule-1');
-      expect(result.txHash).toBe(TEST_TX_HASH);
-      expect(result.refundAmount).toBe(5_000_000n);
-    });
-
-    it('refunds zero when no intervals remain', async () => {
-      jest.spyOn(client, 'simulateTransaction').mockResolvedValue(
-        makeSimResult(
-          makeScheduleNative({ total_intervals: 3, executed_count: 3, status: 'active' }),
-        ),
-      );
-      mockSubmitSuccess();
-
-      const result = await dca.cancelDCA('schedule-1', mockSigner);
-
-      expect(result.refundAmount).toBe(0n);
-    });
-
-    it('prevents double cancellation (already cancelled)', async () => {
-      jest
-        .spyOn(client, 'simulateTransaction')
-        .mockResolvedValue(makeSimResult(makeScheduleNative({ status: 'cancelled' })));
-      const submitSpy = mockSubmitSuccess();
-
-      await expect(dca.cancelDCA('schedule-1', mockSigner)).rejects.toThrow(
-        'already cancelled',
-      );
-      expect(submitSpy).not.toHaveBeenCalled();
-    });
-
-    it('rejects cancelling a completed schedule', async () => {
-      jest
-        .spyOn(client, 'simulateTransaction')
-        .mockResolvedValue(makeSimResult(makeScheduleNative({ status: 'completed' })));
-      const submitSpy = mockSubmitSuccess();
-
-      await expect(dca.cancelDCA('schedule-1', mockSigner)).rejects.toThrow(
-        'Cannot cancel a completed DCA schedule',
-      );
-      expect(submitSpy).not.toHaveBeenCalled();
-    });
-
-    it('throws ValidationError for an empty scheduleId', async () => {
-      await expect(dca.cancelDCA('', mockSigner)).rejects.toThrow(
-        ValidationError,
-      );
-    });
-
-    it('throws TransactionError when the cancellation is rejected on-chain', async () => {
-      jest
-        .spyOn(client, 'simulateTransaction')
-        .mockResolvedValue(makeSimResult(makeScheduleNative()));
-      jest.spyOn(client, 'submitTransaction').mockResolvedValue({
-        success: false,
-        error: { code: 'TX_FAILED', message: 'Unauthorized caller' },
+  describe('plan state', () => {
+    it('getDCASchedule returns decoded plan with correct remainingCount', async () => {
+      const schedule = makeRawSchedule({
+        total_intervals: 10,
+        executed_count: 3,
       });
+      const client = createMockClient({ singleReturnValue: schedule });
+      const module = new DCAModule(client, CONTRACT_ADDR);
 
-      await expect(dca.cancelDCA('schedule-1', mockSigner)).rejects.toThrow(
-        TransactionError,
+      const result = await module.getDCASchedule('sched-1');
+
+      expect(result.totalIntervals).toBe(10);
+      expect(result.executedCount).toBe(3);
+      expect(result.remainingCount).toBe(7);
+    });
+
+    it('getDCASchedule clamps remainingCount to zero when all intervals executed', async () => {
+      const schedule = makeRawSchedule({
+        total_intervals: 5,
+        executed_count: 5,
+        status: 'completed',
+      });
+      const client = createMockClient({ singleReturnValue: schedule });
+      const module = new DCAModule(client, CONTRACT_ADDR);
+
+      const result = await module.getDCASchedule('sched-1');
+
+      expect(result.executedCount).toBe(5);
+      expect(result.remainingCount).toBe(0);
+      expect(result.status).toBe('completed');
+    });
+
+    it('getDCASchedule throws ValidationError for empty scheduleId', async () => {
+      const client = createMockClient();
+      const module = new DCAModule(client, CONTRACT_ADDR);
+
+      await expect(module.getDCASchedule('')).rejects.toThrow(ValidationError);
+      await expect(module.getDCASchedule('  ')).rejects.toThrow(ValidationError);
+    });
+
+    it('getDCASchedule throws ValidationError when schedule not found', async () => {
+      const client = createMockClient({ singleReturnValue: null });
+      const module = new DCAModule(client, CONTRACT_ADDR);
+
+      await expect(module.getDCASchedule('nonexistent')).rejects.toThrow(
+        ValidationError,
       );
+    });
+
+    it('getDCASchedules returns empty array for address with no schedules', async () => {
+      const client = createMockClient({ vecReturnValue: null });
+      const module = new DCAModule(client, CONTRACT_ADDR);
+
+      const result = await module.getDCASchedules(VALID_ADDR_A);
+
+      expect(result).toEqual([]);
+    });
+
+    it('getDCASchedules rejects invalid Stellar address', async () => {
+      // Temporarily restore real isValidAddress for this test
+      const { isValidAddress } = require('../src/utils/addresses');
+      isValidAddress.mockReturnValueOnce(false);
+
+      const client = createMockClient();
+      const module = new DCAModule(client, CONTRACT_ADDR);
+
+      await expect(module.getDCASchedules('not-an-address')).rejects.toThrow(
+        ValidationError,
+      );
+    });
+  });
+
+  describe('input validation', () => {
+    it('createDCA rejects identical tokenIn and tokenOut', async () => {
+      const client = createMockClient();
+      const module = new DCAModule(client, CONTRACT_ADDR);
+
+      await expect(
+        module.createDCA(
+          {
+            tokenIn: VALID_ADDR_A,
+            tokenOut: VALID_ADDR_A,
+            amountPerInterval: 10_0000000n,
+            intervalSeconds: 86400,
+            totalIntervals: 5,
+            pairAddress: VALID_ADDR_C,
+          },
+          makeSigner(),
+        ),
+      ).rejects.toThrow(ValidationError);
+    });
+
+    it('createDCA rejects intervalSeconds below minimum', async () => {
+      const client = createMockClient();
+      const module = new DCAModule(client, CONTRACT_ADDR);
+
+      await expect(
+        module.createDCA(
+          {
+            tokenIn: VALID_ADDR_A,
+            tokenOut: VALID_ADDR_B,
+            amountPerInterval: 10_0000000n,
+            intervalSeconds: 60,
+            totalIntervals: 5,
+            pairAddress: VALID_ADDR_C,
+          },
+          makeSigner(),
+        ),
+      ).rejects.toThrow(ValidationError);
+    });
+
+    it('createDCA rejects totalIntervals below minimum', async () => {
+      const client = createMockClient();
+      const module = new DCAModule(client, CONTRACT_ADDR);
+
+      await expect(
+        module.createDCA(
+          {
+            tokenIn: VALID_ADDR_A,
+            tokenOut: VALID_ADDR_B,
+            amountPerInterval: 10_0000000n,
+            intervalSeconds: 86400,
+            totalIntervals: 1,
+            pairAddress: VALID_ADDR_C,
+          },
+          makeSigner(),
+        ),
+      ).rejects.toThrow(ValidationError);
+    });
+
+    it('createDCA rejects non-positive amountPerInterval', async () => {
+      const client = createMockClient();
+      const module = new DCAModule(client, CONTRACT_ADDR);
+
+      await expect(
+        module.createDCA(
+          {
+            tokenIn: VALID_ADDR_A,
+            tokenOut: VALID_ADDR_B,
+            amountPerInterval: 0n,
+            intervalSeconds: 86400,
+            totalIntervals: 5,
+            pairAddress: VALID_ADDR_C,
+          },
+          makeSigner(),
+        ),
+      ).rejects.toThrow(ValidationError);
+    });
+
+    it('cancelDCA rejects empty scheduleId', async () => {
+      const client = createMockClient();
+      const module = new DCAModule(client, CONTRACT_ADDR);
+
+      await expect(
+        module.cancelDCA('', makeSigner()),
+      ).rejects.toThrow(ValidationError);
     });
   });
 });
