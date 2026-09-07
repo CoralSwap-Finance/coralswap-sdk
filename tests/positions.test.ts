@@ -137,6 +137,28 @@ describe("PositionsModule", () => {
       expect(summary.positions).toHaveLength(0);
       expect(summary.totalPools).toBe(0);
     });
+
+    it("supports cursor-based pagination and sets truncated on cap-bound pages", async () => {
+      const client = makeMockClient();
+      client.factory.getAllPairs.mockResolvedValue([
+        PAIR_ADDR,
+        PAIR_ADDR,
+        PAIR_ADDR,
+      ]);
+      const mod = new PositionsModule(client as never);
+
+      const summary = await mod.getPositions(OWNER, { limit: 1, cursor: "0" });
+
+      expect(summary.totalPools).toBe(3);
+      expect(summary.positions).toHaveLength(1);
+      expect(summary.truncated).toBe(true);
+      expect(summary.pageInfo).toMatchObject({
+        limit: 1,
+        cursor: "0",
+        nextCursor: "1",
+        hasNextPage: true,
+      });
+    });
   });
 
   describe("hasPosition", () => {
