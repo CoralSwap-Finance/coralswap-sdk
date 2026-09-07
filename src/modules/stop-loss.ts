@@ -7,7 +7,7 @@ import {
   StopLossStatus,
 } from '@/types/stop-loss';
 import { Signer } from '@/types/common';
-import { SwapRequest } from '@/types/swap';
+import { SwapRequest, TradeType } from '@/types/swap';
 import { GasEstimate } from '@/types/gas';
 import {
   ValidationError,
@@ -157,7 +157,9 @@ export class StopLossModule {
    *
    * @param swapModule - The client's {@link SwapModule}, used to price and
    *   build the swap leg
-   * @param swapRequest - The swap to execute before placing the stop-loss
+   * @param swapRequest - The swap to execute before placing the stop-loss.
+   *   Must include a slippage bound (`minAmountOut` for `TradeType.EXACT_IN`,
+   *   `maxAmountIn` for `TradeType.EXACT_OUT`) to prevent unbounded slippage.
    * @param stopLossParams - Parameters for the protective stop-loss order
    * @param signer - Wallet signer that owns and authorises both operations
    * @param options - Optional freshness guard for the oracle read used to
@@ -173,7 +175,7 @@ export class StopLossModule {
    * ```ts
    * const { txHash } = await stopLoss.swapAndCreateStopLoss(
    *   client.swap,
-   *   { tokenIn: 'CAAA...', tokenOut: 'CBBB...', amount: 1_000_0000000n, tradeType: TradeType.EXACT_IN },
+   *   { tokenIn: 'CAAA...', tokenOut: 'CBBB...', amount: 1_000_0000000n, minAmountOut: 990_0000000n, tradeType: TradeType.EXACT_IN },
    *   { tokenIn: 'CBBB...', tokenOut: 'CAAA...', amount: 950_0000000n, triggerPrice: 9_000_000n, pairAddress: 'CPPP...', oracleAsset: 'XLM' },
    *   mySigner,
    * );
@@ -187,6 +189,24 @@ export class StopLossModule {
     options: TriggerEvaluationOptions = {},
   ): Promise<{ txHash: string; ledger: number }> {
     const signerPublicKey = await signer.publicKey();
+
+    if (swapRequest.tradeType === TradeType.EXACT_IN) {
+      if (swapRequest.minAmountOut === undefined || swapRequest.minAmountOut <= 0n) {
+        throw new ValidationError(
+          'swapRequest.minAmountOut must be a positive amount for EXACT_IN swaps',
+        );
+      }
+    } else if (swapRequest.tradeType === TradeType.EXACT_OUT) {
+      if (swapRequest.maxAmountIn === undefined || swapRequest.maxAmountIn <= 0n) {
+        throw new ValidationError(
+          'swapRequest.maxAmountIn must be a positive amount for EXACT_OUT swaps',
+        );
+      }
+    } else {
+      throw new ValidationError(
+        'swapRequest.tradeType must be EXACT_IN or EXACT_OUT',
+      );
+    }
 
     const quote = await swapModule.getQuote(swapRequest);
     const swapOp = swapModule.buildSwapOperation(swapRequest, quote);

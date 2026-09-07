@@ -27,6 +27,17 @@ const MIN_TOTAL_INTERVALS = 2;
 /** Basis-points denominator used for savings calculations. */
 const BPS_DENOMINATOR = 10000n;
 
+/** Default slippage tolerance for DCA swap executions (1%). */
+const DEFAULT_SLIPPAGE_TOLERANCE_BPS = 100;
+
+/** Maximum allowed slippage tolerance for DCA swap executions (50%). */
+const MAX_SLIPPAGE_TOLERANCE_BPS = 5000;
+
+type CreateDCAParams = DCAParams & {
+  /** Slippage tolerance in basis points; defaults to 100 bps (1%). */
+  slippageToleranceBps?: number;
+};
+
 const DCAParamsSchema = z
   .object({
     tokenIn: z
@@ -72,6 +83,14 @@ const DCAParamsSchema = z
         }
       },
       ),
+    slippageToleranceBps: z
+      .number({ error: 'slippageToleranceBps must be a number' })
+      .int({ message: 'slippageToleranceBps must be an integer' })
+      .min(1, { message: 'slippageToleranceBps must be at least 1' })
+      .max(MAX_SLIPPAGE_TOLERANCE_BPS, {
+        message: `slippageToleranceBps must be at most ${MAX_SLIPPAGE_TOLERANCE_BPS}`,
+      })
+      .default(DEFAULT_SLIPPAGE_TOLERANCE_BPS),
   })
   .superRefine((params, ctx) => {
     if (params.tokenIn === params.tokenOut) {
@@ -134,22 +153,30 @@ export class DCAModule {
   /**
    * Create a new DCA schedule, escrowing the full budget up front.
    *
-   * @param params - Schedule parameters (tokens, amount, interval, count, pair)
+   * Slippage protection is applied to every execution. `slippageToleranceBps`
+   * defaults to 100 bps (1%) and must be between 1 and 5000 bps.
+   *
+   * @param params - Schedule parameters (tokens, amount, interval, count, pair,
+   *   and optional slippageToleranceBps)
    * @param signer - Wallet signer that funds and authorises the schedule
    * @returns The unique schedule ID assigned by the contract
    * @throws {ValidationError} If addresses are invalid, tokens are identical,
    *   the amount is non-positive, the interval is below one hour, or fewer
-   *   than two intervals are requested
+   *   than two intervals are requested, or slippageToleranceBps is outside
+   *   1..5000
    * @throws {TransactionError} If the transaction is rejected on-chain
    * @example
    * const id = await client.dca.createDCA({
    *   tokenIn: 'C...', tokenOut: 'C...', amountPerInterval: 100_0000000n,
    *   intervalSeconds: 86400, totalIntervals: 7, pairAddress: 'C...',
+   *   slippageToleranceBps: 100,
    * }, signer);
    */
-  async createDCA(params: DCAParams, signer: Signer): Promise<string> {
+  async createDCA(params: CreateDCAParams, signer: Signer): Promise<string> {
     validateCreateDCAParams(params);
 
+    const slippageToleranceBps =
+      params.slippageToleranceBps ?? DEFAULT_SLIPPAGE_TOLERANCE_BPS;
     const signerPublicKey = await signer.publicKey();
     const contract = new Contract(this.contractAddress);
 
@@ -161,6 +188,7 @@ export class DCAModule {
       nativeToScVal(params.intervalSeconds, { type: 'u32' }),
       nativeToScVal(params.totalIntervals, { type: 'u32' }),
       new Address(params.pairAddress).toScVal(),
+      nativeToScVal(slippageToleranceBps, { type: 'u32' }),
       new Address(signerPublicKey).toScVal(),
     );
 

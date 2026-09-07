@@ -237,6 +237,8 @@ export class PairClient {
    * @param tokenIn - The address of the token being sold.
    * @param amountIn - The exact amount of `tokenIn` to sell (i128).
    * @param amountOutMin - The minimum acceptable output amount (slippage guard).
+   *   Must be a positive BigInt. Zero is rejected because it would silently permit
+   *   unbounded/full slippage; pass an explicit quote-derived minimum.
    * @returns An XDR operation ready to be included in a transaction.
    */
   buildSwap(
@@ -245,6 +247,11 @@ export class PairClient {
     amountIn: bigint,
     amountOutMin: bigint,
   ): xdr.Operation {
+    if (typeof amountOutMin !== "bigint" || amountOutMin <= 0n) {
+      throw new Error(
+        "amountOutMin must be a positive BigInt; refusing to execute swap with unbounded slippage (0)",
+      );
+    }
     return this.contract.call(
       "swap",
       nativeToScVal(Address.fromString(sender), { type: "address" }),

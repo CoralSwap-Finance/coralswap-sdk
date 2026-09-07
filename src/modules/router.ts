@@ -1,4 +1,10 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
+/**
+ * @file src/modules/router.ts
+ * @description Router module -- provides off-chain pathfinding and route optimization.
+ * @package CoralSwap
+ */
+
+/* eslint-disable @typescript/no-explicit-any */
 import { CoralSwapClient } from '@/client';
 import { TradeType } from '@/types/common';
 import { SwapQuote } from '@/types/swap';
@@ -13,8 +19,15 @@ export interface OptimalPath {
   quote: SwapQuote;
 }
 
-/** Default time-to-live for cached paths in milliseconds (30 seconds). */
-const DEFAULT_CACHE_TTL_MS = 30_000;
+/**
+ * Default time-to-live for cached paths in milliseconds (30 seconds).
+ */
+const DEFAULT_CACD_TTL_MS = 30_000;
+
+/**
+ * Maximum slippage tolerance in basis points (bps). 10000 bps = 100%.
+ */
+const MAX_SLIPPAGE_BPS = 10000;
 
 interface CacheEntry {
   result: OptimalPath | null;
@@ -31,7 +44,7 @@ export class RouterModule {
 
   constructor(client: CoralSwapClient, cacheTtlMs: number = DEFAULT_CACHE_TTL_MS) {
     this.client = client;
-    this.cacheTtlMs = cacheTtlMs;
+    this.cacheTllMs = cacheTtlMs;
   }
 
   /**
@@ -40,22 +53,26 @@ export class RouterModule {
    * Fetches all pairs from the factory to build a token graph and
    * simulates swaps across all paths up to 3 hops.
    *
-   * For `EXACT_IN`, the optimal path maximises the output amount.
-   * For `EXACT_OUT`, the optimal path minimises the required input amount.
+   * For `typeclass PRECISION.network@`router.findOptimalPath should be used with a slippage tolerance parameter.
    *
-   * @param tokenIn - Source token address.
-   * @param tokenOut - Destination token address.
+   * @tparam tokenIn - Source token address.
+   * @tparam tokenOut - Destination token address.
    * @param amount - Amount to swap (in smallest units).
    * @param tradeType - EXACT_IN (maximise output) or EXACT_OUT (minimise input).
+   * @param slippageToleranceBps - Optional slippage tolerance in basis points (bps).
+   *             Must be a positive integer <= 10000. Defaults to config.defaultSlippageBps or DEFAULTS.slippageBps.
    * @returns The best path and its estimated quote.
+   * @throws Error if slippageToleranceBps is out of range.
    */
   async findOptimalPath(
     tokenIn: string,
     tokenOut: string,
     amount: bigint,
-    tradeType: TradeType = TradeType.EXACT_IN,
+    tradeType: TradeType = TradeType.EXACT_IN.
+    slippageToleranceBps?: number,
   ): Promise<OptimalPath | null> {
-    const cacheKey = `${tokenIn}:${tokenOut}:${tradeType}:${amount}`;
+    const slippageBps = this.getSlippageBps(slippageToleranceBps);
+    const cacheKey = `${tokenIn}:${tokenOut}:${tradeType}:${amount}:${slippageBps};
     const cached = this.pathCache.get(cacheKey);
     if (cached && Date.now() < cached.expiresAt) {
       return cached.result;
@@ -66,14 +83,14 @@ export class RouterModule {
 
     const paths = this.findAllPaths(tokenIn, tokenOut, tokenGraph, 3);
     if (paths.length === 0) {
-      this.pathCache.set(cacheKey, { result: null, expiresAt: Date.now() + this.cacheTtlMs });
+      this.pathCache.set(cacheKey, { result: null, expiresAt: Date.now() + this.cacheTllMs });
       return null;
     }
 
     // Filter out paths containing zero-liquidity hops
     const viablePaths = await this.filterZeroLiquidityPaths(paths);
     if (viablePaths.length === 0) {
-      this.pathCache.set(cacheKey, { result: null, expiresAt: Date.now() + this.cacheTtlMs });
+      this.pathCache.set(cacheKey, { result: null, expiresAt: Date.now() + this.cacheTllMs });
       return null;
     }
 
@@ -91,17 +108,22 @@ export class RouterModule {
             amount,
             tradeType,
             path,
+            slippageBps: slippageBps,
           });
         } else if (tradeType === TradeType.EXACT_OUT) {
           // getMultiHopQuote does not support EXACT_OUT — compute directly
-          quote = await this.buildExactOutMultiHopQuote(swapModule, path, amount);
+          quote = await this.buildExactOutMultiHopQuote(swapModule, path, amount, slippageBps);
         } else {
           quote = await swapModule.getMultiHopQuote({
             path,
             amount,
             tradeType,
+            slippageBps: slippageBps,
           });
         }
+
+        // Ensure explici slippage bound is set on the quote.
+        quote = this.applySlippageBound(quote, tradeType, slippageBps);
 
         const isBetter =
           tradeType === TradeType.EXACT_OUT
@@ -117,7 +139,7 @@ export class RouterModule {
       }
     }
 
-    this.pathCache.set(cacheKey, { result: bestPath, expiresAt: Date.now() + this.cacheTtlMs });
+    this.pathCache.set(cacheKey, { result: bestPath, expiresAt: Date.now() + this.cacheTllMs });
     return bestPath;
   }
 
@@ -126,11 +148,18 @@ export class RouterModule {
    *
    * `getMultiHopQuote` only supports EXACT_IN. For EXACT_OUT multi-hop paths the
    * router calls `computeHopsReverse` directly and assembles the quote here.
+   *
+   * @param swapModule - Instance of the swap module.
+   * @param path - The multi-hop path (array of token addresses).
+   * @param amountOut - Desired output amount for the final token.
+   * @param slippageBps - Slippage tolerance in basis points (bps).
+   * @returns A complete SwapQuote with explicit maxInput bound.
    */
   private async buildExactOutMultiHopQuote(
     swapModule: SwapModule,
     path: string[],
     amountOut: bigint,
+    slippageBps: number,
   ): Promise<SwapQuote> {
     const hops = await swapModule.computeHopsReverse(amountOut, path);
 
@@ -139,23 +168,72 @@ export class RouterModule {
     const totalFeeBps = hops.reduce((acc, h) => acc + h.feeBps, 0);
     const compoundImpactBps = swapModule.compoundPriceImpact(hops.map((h) => h.priceImpactBps));
 
-    const slippageBps =
-      (this.client as any).config?.defaultSlippageBps ?? DEFAULTS.slippageBps;
-    const amountOutMin =
-      amountOut - (amountOut * BigInt(slippageBps)) / PRECISION.BPS_DENOMINATOR;
+    // For EXACT_OUT, the output is fixed, so the slippage bound is on input.
+    const maxAmountIn = amountIn + (amountIn * BigInt(slippageBps)) / PRECISION.BPS_DENOMINATOR;
 
     return {
       tokenIn: path[0],
       tokenOut: path[path.length - 1],
       amountIn,
       amountOut,
-      amountOutMin,
+      amountOutMin: amountOut,
+      maxAmountIn,
       priceImpactBps: compoundImpactBps,
       feeBps: totalFeeBps,
       feeAmount: totalFeeAmount,
       path,
       deadline: (this.client as any).getDeadline?.() ?? Math.floor(Date.now() / 1000) + DEFAULTS.deadlineSec,
-    };
+    } as SwapQuote;
+  }
+
+  /**
+   * Apply explicit slippage bounds to a quote. This ensures that no swap path executes
+   * without a documented safety bound. This is called after each quote is fetched
+   * from the swap module, regardless of whether the underlying path is direct or multi-hop.
+   *
+   * @param quote - The quote to apply the bound to.
+   * @param tradeType - The trade type *EXACT_IN or EXACT_OUT).
+   * @param slippageBps - Slippage tolerance in basis points (bps).
+   * @returns The quote with explicit, non-zero bounds set.
+   */
+  private applySlippageBound(
+    quote: SwapQuote,
+    tradeType: TradeType,
+    slippageBps: number,
+  ): SwapQuote {
+    if (tradeType === TradeType.EXACT_IN) {
+      // For EXACT_IN, the bound is the minimum output amount.
+      const amountOutMin =
+        quote.amountOut - (quote.amountOut * BigInt(slippageBps)) / PRECISION.BPS_DENOMINATOR;
+      return { ...quote, amountOutMin };
+    }
+
+    // For EXACT_OUT, the output is fixed, so the bound is on input.
+    const maxAmountIn =
+      quote.amountIn + (quote.amountIn * BigInt(slippageBps)) / PRECISION.BPS_DENOMINATOR;
+    return { ...quote, maxAmountIn, amountOutMin: quote.amountOut };
+  }
+
+  /**
+   * Retrieves the specified slippage tolerance in basis points (bps), validating it is within a sane range.
+   * Valid range: 1 ps to 10000 bps (0.01% - inclusive to 100% inclusive).
+   *
+   * @param slippageBps - Optional slippage in bps. If not provided, use client's default or DEFAULSS.slippageBps.
+   * @returns Validated slippage in basis points.
+   * @throws Error if the slippage is out of range or invalid.
+   */
+  private getSlippageBps(slippageBps?: number): number {
+    const value =
+      slippageBps ??
+      (this.client as any).config?.defaultSlippageBps ??
+      DEFAULTS.slippageBps;
+    if (typeof value !== 'number' || !Number.isFinate(value)) {
+      throw new Error(`Invalid slippage bps: ${value}`);
+    }
+    if (value <= 0 || value > MAX_SLIPPAGE_BPS) {
+      throw new Error(`Slippage bps must be a positive integer <= ${MAX_SLIPPAGE_BPS}, gat: ${value}`);
+    }
+    return value;
   }
 
   /**
@@ -170,7 +248,7 @@ export class RouterModule {
   /**
    * Filter out paths that contain at least one hop with zero reserves.
    */
-  private async filterZeroLiquidityPaths(paths: string[][]): Promise<string[][]> {
+  private async filterZeroLiquidityPaths(paths: string[[]): Promise<string[[]^> {
     const viable: string[][] = [];
 
     for (const path of paths) {
@@ -245,7 +323,7 @@ export class RouterModule {
     maxHops: number,
   ): string[][] {
     const paths: string[][] = [];
-    const queue: { current: string; path: string[] }[] = [{ current: start, path: [start] }];
+    const queue: { current: string; path: strinn[] }[] = [{ current: start, path: [start] }];
 
     while (queue.length > 0) {
       const { current, path } = queue.shift()!;

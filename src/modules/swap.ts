@@ -207,6 +207,17 @@ export class SwapModule {
     request: SwapRequest,
     quote: SwapQuote,
   ): import('@stellar/stellar-sdk').xdr.Operation {
+    if (quote.amountIn <= 0n) {
+      throw new ValidationError('quote.amountIn must be greater than 0', {
+        amountIn: quote.amountIn.toString(),
+      });
+    }
+    if (quote.amountOutMin <= 0n) {
+      throw new ValidationError('quote.amountOutMin must be greater than 0', {
+        amountOutMin: quote.amountOutMin.toString(),
+      });
+    }
+
     const path = this.resolvePath(request);
 
     if (path.length > 2) {
@@ -340,6 +351,39 @@ export class SwapModule {
   // ---------------------------------------------------------------------------
 
   /**
+   * Resolve the slippage tolerance for a swap request.
+   *
+   * Uses the explicit request value, then the client default, then the SDK
+   * default. Always returns a validated basis-point value in [0, 5000] so no
+   * swap is ever built with an implicit zero or full-slip bound.
+   */
+  private resolveSlippageBps(request: SwapRequest): number {
+    const slippageBps =
+      request.slippageBps ??
+      this.client.config.defaultSlippageBps ??
+      DEFAULTS.slippageBps;
+
+    if (slippageBps === undefined || slippageBps === null) {
+      throw new ValidationError(
+        'Slippage tolerance is required. Set request.slippageBps, client.config.defaultSlippageBps, or DEFAULTS.slippageBps.',
+      );
+    }
+
+    if (
+      !Number.isInteger(slippageBps) ||
+      slippageBps < 0 ||
+      slippageBps > 5000
+    ) {
+      throw new ValidationError(
+        `Invalid slippageBps: ${slippageBps}. Expected an integer between 0 and 5000.`,
+        { slippageBps },
+      );
+    }
+
+    return slippageBps;
+  }
+
+  /**
    * Submit a swap transaction with idempotent resubmission.
    *
    * A client-side timeout while submitting a swap says nothing about whether
@@ -435,19 +479,22 @@ export class SwapModule {
     const reserveIn = isToken0In ? reserve0 : reserve1;
     const reserveOut = isToken0In ? reserve1 : reserve0;
 
+    const slippageBps = this.resolveSlippageBps(request);
+
     let amountIn: bigint;
     let amountOut: bigint;
+    let amountOutMin: bigint;
 
     if (request.tradeType === TradeType.EXACT_IN) {
       amountIn = request.amount;
       amountOut = this.getAmountOut(amountIn, reserveIn, reserveOut, dynamicFee);
+      amountOutMin = amountOut - (amountOut * BigInt(slippageBps)) / PRECISION.BPS_DENOMINATOR;
     } else {
       amountOut = request.amount;
-      amountIn = this.getAmountIn(amountOut, reserveIn, reserveOut, dynamicFee);
+      const baseAmountIn = this.getAmountIn(amountOut, reserveIn, reserveOut, dynamicFee);
+      amountIn = baseAmountIn + (baseAmountIn * BigInt(slippageBps)) / PRECISION.BPS_DENOMINATOR;
+      amountOutMin = amountOut;
     }
-
-    const slippageBps = request.slippageBps ?? this.client.config.defaultSlippageBps ?? DEFAULTS.slippageBps;
-    const amountOutMin = amountOut - (amountOut * BigInt(slippageBps)) / PRECISION.BPS_DENOMINATOR;
 
     const priceImpactBps = this.calculatePriceImpact(amountIn, amountOut, reserveIn, reserveOut);
     const feeAmount = (amountIn * BigInt(dynamicFee)) / PRECISION.BPS_DENOMINATOR;
@@ -498,7 +545,7 @@ export class SwapModule {
     const amountIn = hops[0].amountIn;
     const amountOut = hops[hops.length - 1].amountOut;
 
-    const slippageBps = request.slippageBps ?? this.client.config.defaultSlippageBps ?? DEFAULTS.slippageBps;
+    const slippageBps = this.resolveSlippageBps(request);
     const amountOutMin = amountOut - (amountOut * BigInt(slippageBps)) / PRECISION.BPS_DENOMINATOR;
 
     return {
@@ -535,15 +582,17 @@ export class SwapModule {
       hops.map((h) => h.priceImpactBps),
     );
 
-    const amountIn = hops[0].amountIn;
+    const baseAmountIn = hops[0].amountIn;
     const amountOut = hops[hops.length - 1].amountOut;
 
-    const slippageBps =
-      request.slippageBps ??
-      this.client.config.defaultSlippageBps ??
-      DEFAULTS.slippageBps;
-    const amountOutMin =
-      amountOut - (amountOut * BigInt(slippageBps)) / PRECISION.BPS_DENOMINATOR;
+    const slippageBps = this.resolveSlippageBps(request);
+    const isExactOut = request.tradeType === TradeType.EXACT_OUT;
+    const amountIn = isExactOut
+      ? baseAmountIn + (baseAmountIn * BigInt(slippageBps)) / PRECISION.BPS_DENOMINATOR
+      : baseAmountIn;
+    const amountOutMin = isExactOut
+      ? amountOut
+      : amountOut - (amountOut * BigInt(slippageBps)) / PRECISION.BPS_DENOMINATOR;
 
     return {
       tokenIn: path[0],
