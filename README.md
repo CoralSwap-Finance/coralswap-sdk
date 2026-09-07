@@ -33,7 +33,6 @@ npm install @coralswap/sdk
 ```
 
 ### Basic Setup
-
 ```typescript
 import { CoralSwapClient, Network } from "@coralswap/sdk";
 
@@ -48,6 +47,64 @@ const client = new CoralSwapClient({
 const healthy = await client.isHealthy();
 console.log("RPC healthy:", healthy);
 ```
+
+## Network & Passphrase Configuration
+
+The `network` enum selects a built-in **preset** that supplies the RPC URL, Stellar network passphrase, and deployed contract addresses.
+
+| Preset | Enum value | Passphrase | Contract addresses | RPC URL |
+|--------|-----------|-----------|-------------------|---------|
+| Testnet | `Network.TESTNET` | `Test SDF Network ; September 2015` | ✅ Populated | `soroban-testnet.stellar.org` |
+| Mainnet | `Network.MAINNET` | `Public Global Stellar Network ; September 2015` | ⚠️ Empty (not yet deployed) | `soroban.stellar.org` |
+| Staging | `Network.STAGING` | `Test SDF Network ; September 2015` | ✅ Same as testnet | `soroban-testnet.stellar.org` |
+
+### ⚠️ Staging ≡ Testnet
+
+`STAGING` and `TESTNET` share the **same passphrase and contract addresses**. Transactions signed for one network are valid on the other. Use `STAGING` only when the backend or infrastructure team explicitly designates it; otherwise prefer `TESTNET` for clarity.
+
+### Passphrase and signer pairing
+
+The Stellar **network passphrase** is baked into every transaction envelope. A signer must receive the correct passphrase so that the signed XDR is valid on the target network.
+
+```typescript
+import { CoralSwapClient, Network } from "@coralswap/sdk";
+
+// KeypairSigner (built-in) — passphrase is set automatically from the preset
+const client = new CoralSwapClient({
+  network: Network.TESTNET,
+  secretKey: "S...",
+});
+
+// Custom Signer (e.g. Freighter) — the SDK passes the preset passphrase to
+// TransactionBuilder automatically; the wallet handles it.
+const clientWithWallet = new CoralSwapClient({
+  network: Network.TESTNET,
+  signer: freighterSigner, // implements the Signer interface
+});
+```
+
+If you call `setNetwork()` at runtime, the passphrase used for signing updates automatically:
+
+```typescript
+client.setNetwork(Network.MAINNET); // passphrase now = "Public Global Stellar Network ; September 2015"
+```
+
+### Custom RPC URL(s)
+
+Override the built-in RPC endpoint with a single URL or a list of fallback URLs:
+
+```typescript
+const client = new CoralSwapClient({
+  network: Network.TESTNET,
+  rpcUrl: ["https://my-rpc.example.com", "https://soroban-testnet.stellar.org"],
+});
+```
+
+### Mainnet caveats
+
+- **Contract addresses are empty.** The `factoryAddress` and `routerAddress` for `Network.MAINNET` are placeholders until CoralSwap contracts are deployed to public Stellar. Operations that depend on them (`client.factory`, `client.router`) will throw.
+- **Use real funds carefully.** Mainnet transactions are irreversible. Always test on testnet first.
+- **RPC rate limits.** The public `soroban.stellar.org` endpoint enforces rate limits. Consider supplying a dedicated RPC URL via `rpcUrl` and/or a `RateLimiter` for production traffic.
 
 ### Swap Tokens
 
