@@ -314,6 +314,44 @@ if (twap) {
 }
 ```
 
+### Webhook Endpoints
+
+```typescript
+import { WebhookModule } from "@coralswap/sdk";
+
+const webhooks = new WebhookModule();
+
+// 1. Register: must be https://, needs at least one subscribed event.
+const id = await webhooks.registerWebhook(
+  "https://hooks.example.com/coralswap",
+  ["swap", "il"],
+  "shared-secret", // optional: signs every delivery with HMAC-SHA256
+);
+
+// 2. Verify: posts a signed challenge and records the outcome.
+const handshake = await webhooks.verifyWebhook(id);
+console.log("verified:", handshake.verified, "status:", handshake.statusCode);
+
+// 3. Update: change the url, the event subscription, or rotate the secret.
+//    A new url resets `verified` (the old handshake proved nothing) and
+//    clears the failure counter.
+await webhooks.updateWebhook(id, { events: ["swap", "il", "flash-loan"] });
+
+// 4. List: configuration plus live delivery state.
+const [webhook] = webhooks.listWebhooks();
+console.log(webhook.id, webhook.url, webhook.verified, webhook.failCount);
+
+// Events filter deliveries: a webhook only fires for what it subscribed to.
+// `filtered: true` means nothing was sent and no attempt was recorded.
+const result = await webhooks.sendWebhook(id, { pair, amount }, { event: "swap" });
+```
+
+Webhooks that fail `5` consecutive deliveries are auto-disabled — `sendWebhook()`
+then throws `WebhookDisabledError` until the endpoint recovers and you call
+`enableWebhook()`. A verification handshake that does not return `2xx` marks the
+webhook `verified: false`, so `isWebhookVerified()`/`listWebhooks()` always show
+the state of the last handshake.
+
 ## Native XLM
 
 The SDK supports the native Stellar asset (XLM) via the Stellar Asset Contract (SAC). You can pass `"XLM"` or `"native"` as a token identifier in swap and multi-hop methods; it is resolved to the network’s XLM SAC address automatically.

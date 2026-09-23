@@ -3,6 +3,12 @@
 ## [Unreleased]
 
 ### Added
+- Webhook endpoint verification for the SDK webhook module:
+  - `verifyWebhook(webhookId)` posts a signed challenge payload and records the result — a `2xx` marks the endpoint `verified: true`, a failed handshake (non-`2xx`, network error or timeout) marks it `verified: false`
+  - `updateWebhook(webhookId, updates)` changes a registered webhook's `url`, `events` and/or `secret` with the same validation as `registerWebhook()`; changing the url resets `verified` and clears the failure counter, re-enabling a webhook that was auto-disabled
+  - `listWebhooks()` now returns `Webhook[]` views carrying `verified`, `failCount` and `lastDelivery` alongside the configuration, and `getWebhook()` returns the same view; `isWebhookVerified()` and `listWebhooksForEvent()` expose the verification state and event subscription directly
+  - `sendWebhook(webhookId, payload, { event })` honours the webhook's event subscription: an event the endpoint did not subscribe to is skipped without an HTTP request (`filtered: true`)
+- `Webhook` and `WebhookUpdate` types for the above
 - CI check requiring a CHANGELOG entry under `[Unreleased]` for PRs that change `src/`
 
 ### Fixed
