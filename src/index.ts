@@ -119,6 +119,7 @@ export {
   EVENT_TOPICS,
   decodeEvents,
   decodeEventsFromXdr,
+  ConnectionPool,
 } from './utils';
 
 
@@ -129,6 +130,7 @@ export type {
   WaitNextLedgerOptions,
   DecodeEventsOptions,
   SimulateFn,
+  ConnectionPoolOptions,
 } from "./utils";
 
 // Errors
