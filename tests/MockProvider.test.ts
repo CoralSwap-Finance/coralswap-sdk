@@ -13,7 +13,7 @@
  *  - Integration test: MockProvider wired into CoralSwapClient
  */
 
-import { xdr, SorobanRpc, Keypair, TransactionBuilder, Transaction } from '@stellar/stellar-sdk';
+import { xdr, rpc as SorobanRpc, Keypair, TransactionBuilder, Transaction } from '@stellar/stellar-sdk';
 import { MockProvider } from '../src/test/mocks/MockProvider';
 import { CoralSwapClient } from '../src/client';
 import { Network } from '../src/types/common';
@@ -28,6 +28,7 @@ const TEST_PUBLIC = Keypair.fromSecret(TEST_SECRET).publicKey();
 // Mock TransactionBuilder so the integration test doesn't need real Stellar
 // network access just to build a tx envelope.
 const mockBuiltTx = {
+  toXdr: jest.fn().mockReturnValue('mock-tx-xdr'),
   toXDR: jest.fn().mockReturnValue('mock-tx-xdr'),
   sign: jest.fn(),
 } as unknown as Transaction;
@@ -46,13 +47,13 @@ jest.mock('@stellar/stellar-sdk', () => {
       ...mockBuiltTx,
       toXDR: jest.fn().mockReturnValue(txXdr),
     })),
-    SorobanRpc: {
-      ...actual.SorobanRpc,
+    rpc: {
+      ...actual.rpc,
       assembleTransaction: jest.fn((_tx: unknown) => ({
         build: () => mockBuiltTx,
       })),
       Api: {
-        ...actual.SorobanRpc.Api,
+        ...actual.rpc.Api,
         isSimulationSuccess: jest.fn((sim: unknown) => !(sim as { error?: string }).error),
       },
     },
@@ -127,7 +128,7 @@ describe('MockProvider', () => {
     it('returns an empty entries array when no entries are staged', async () => {
       // Build a minimal ledger key stub.
       const stubKey = {} as xdr.LedgerKey;
-      (stubKey as unknown as { toXDR: (f: string) => string }).toXDR = () => 'stub-key';
+      (stubKey as unknown as { toXdr: (f: string) => string }).toXdr = () => 'stub-key';
 
       const response = await mock.getLedgerEntries(stubKey);
 
@@ -138,7 +139,7 @@ describe('MockProvider', () => {
     it('returns staged entries for registered keys', async () => {
       // Create a real-ish LedgerKey stub with a deterministic toXDR output.
       const stubKey = {
-        toXDR: (format: string) => (format === 'base64' ? 'bW9ja0tleQ==' : Buffer.from('mockKey')),
+        toXdr: (format: string) => (format === 'base64' ? 'bW9ja0tleQ==' : Buffer.from('mockKey')),
       } as unknown as xdr.LedgerKey;
 
       const stubEntry: SorobanRpc.Api.LedgerEntryResult = {
@@ -158,11 +159,11 @@ describe('MockProvider', () => {
 
     it('returns only entries matching the queried keys', async () => {
       const key1 = {
-        toXDR: (format: string) => (format === 'base64' ? 'a2V5MQ==' : Buffer.from('key1')),
+        toXdr: (format: string) => (format === 'base64' ? 'a2V5MQ==' : Buffer.from('key1')),
       } as unknown as xdr.LedgerKey;
 
       const key2 = {
-        toXDR: (format: string) => (format === 'base64' ? 'a2V5Mg==' : Buffer.from('key2')),
+        toXdr: (format: string) => (format === 'base64' ? 'a2V5Mg==' : Buffer.from('key2')),
       } as unknown as xdr.LedgerKey;
 
       const entry1: SorobanRpc.Api.LedgerEntryResult = {
@@ -497,6 +498,96 @@ describe('MockProvider', () => {
 
     it.each(cases)('$name() rejects with a readable error message', async ({ name, call }) => {
       await expect(call()).rejects.toThrow(`MockProvider: ${name}() is not implemented`);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // script() / clearScript() — per-method scripted responses
+  // -------------------------------------------------------------------------
+
+  describe('script() / clearScript()', () => {
+    it('resolves a scripted static value on every call', async () => {
+      const response: SorobanRpc.Api.LedgerEntryResult = { entries: [], latestLedger: 42 } as never;
+      mock.script('getContractData', response);
+
+      await expect(mock.getContractData('CCONT', {} as xdr.ScVal)).resolves.toBe(response);
+      // Not a one-shot: the same value resolves again on a second call.
+      await expect(mock.getContractData('CCONT', {} as xdr.ScVal)).resolves.toBe(response);
+    });
+
+    it('invokes a scripted function with the call arguments and returns its result', async () => {
+      const seen: unknown[] = [];
+      mock.script('getContractData', (contract: unknown, key: unknown) => {
+        seen.push([contract, key]);
+        return { entries: [], latestLedger: 7 };
+      });
+
+      const scVal = {} as xdr.ScVal;
+      const result = await mock.getContractData('CCONT', scVal);
+
+      expect(seen).toEqual([['CCONT', scVal]]);
+      expect(result).toEqual({ entries: [], latestLedger: 7 });
+    });
+
+    it('rejects with a scripted Error instance, including a typed subclass', async () => {
+      // Stand-in for the typed failures #662 (NotConfiguredError) and #676
+      // (DecodeError) will introduce -- proves the exact pattern a future
+      // test would use, without depending on either issue having landed.
+      class NotConfiguredError extends Error {
+        constructor(message: string) {
+          super(message);
+          this.name = 'NotConfiguredError';
+        }
+      }
+
+      mock.script('getNetwork', new NotConfiguredError('router not configured'));
+
+      await expect(mock.getNetwork()).rejects.toBeInstanceOf(NotConfiguredError);
+      await expect(mock.getNetwork()).rejects.toThrow('router not configured');
+    });
+
+    it('lets a scripted function throw an error asynchronously', async () => {
+      class DecodeError extends Error {
+        constructor(message: string) {
+          super(message);
+          this.name = 'DecodeError';
+        }
+      }
+
+      mock.script('getContractData', () => {
+        throw new DecodeError('malformed ScVal');
+      });
+
+      await expect(mock.getContractData('CCONT', {} as xdr.ScVal)).rejects.toBeInstanceOf(
+        DecodeError,
+      );
+    });
+
+    it('clearScript() reverts a method to loud-fail', async () => {
+      mock.script('getNetwork', { passphrase: 'Test SDF Network ; September 2015' });
+      await expect(mock.getNetwork()).resolves.toBeDefined();
+
+      mock.clearScript('getNetwork');
+
+      await expect(mock.getNetwork()).rejects.toThrow('MockProvider: getNetwork() is not implemented');
+    });
+
+    it('scripting one method does not affect another unscripted method', async () => {
+      mock.script('getNetwork', { passphrase: 'Test SDF Network ; September 2015' });
+
+      await expect(mock.getNetwork()).resolves.toBeDefined();
+      await expect(mock.getFeeStats()).rejects.toThrow(
+        'MockProvider: getFeeStats() is not implemented',
+      );
+    });
+
+    it('reset() clears scripted responses along with all other staged state', async () => {
+      mock.script('getNetwork', { passphrase: 'Test SDF Network ; September 2015' });
+      await expect(mock.getNetwork()).resolves.toBeDefined();
+
+      mock.reset();
+
+      await expect(mock.getNetwork()).rejects.toThrow('MockProvider: getNetwork() is not implemented');
     });
   });
 

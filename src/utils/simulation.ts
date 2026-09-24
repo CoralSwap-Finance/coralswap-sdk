@@ -1,4 +1,4 @@
-import { SorobanRpc, xdr } from '@stellar/stellar-sdk';
+import { rpc, xdr } from '@stellar/stellar-sdk';
 import type { SimulateTransactionResult, SimulationDiagnosticEvent } from '@/types/common';
 
 /**
@@ -38,9 +38,9 @@ function simulationFailedResult<T>(data: T): SimulationResult<T> {
  * Check if a simulation result is successful.
  */
 export function isSimulationSuccess(
-  sim: SorobanRpc.Api.SimulateTransactionResponse,
+  sim: rpc.Api.SimulateTransactionResponse,
 ): SimulationResult<boolean> {
-  const success = SorobanRpc.Api.isSimulationSuccess(sim);
+  const success = rpc.Api.isSimulationSuccess(sim);
   if (!success) return simulationFailedResult(false);
 
   return {
@@ -53,9 +53,9 @@ export function isSimulationSuccess(
  * Extract the return value from a successful simulation.
  */
 export function getSimulationReturnValue(
-  sim: SorobanRpc.Api.SimulateTransactionResponse,
+  sim: rpc.Api.SimulateTransactionResponse,
 ): SimulationResult<xdr.ScVal | null> {
-  if (!SorobanRpc.Api.isSimulationSuccess(sim)) {
+  if (!rpc.Api.isSimulationSuccess(sim)) {
     return simulationFailedResult(null);
   }
 
@@ -69,21 +69,25 @@ export function getSimulationReturnValue(
  * Extract resource usage estimates from a simulation.
  */
 export function getResourceEstimate(
-  sim: SorobanRpc.Api.SimulateTransactionResponse,
+  sim: rpc.Api.SimulateTransactionResponse,
 ): SimulationResult<SimulationResourceEstimate | null> {
-  if (!SorobanRpc.Api.isSimulationSuccess(sim)) {
+  if (!rpc.Api.isSimulationSuccess(sim)) {
     return simulationFailedResult(null);
   }
 
-  const cost = sim.cost;
+  const resources = sim.transactionData
+    ? sim.transactionData.build().resources
+    : null;
   return {
     success: true,
-    data: {
-      cpuInstructions: cost?.cpuInsns ? Number(cost.cpuInsns) : 0,
-      memoryBytes: cost?.memBytes ? Number(cost.memBytes) : 0,
-      readBytes: 0,
-      writeBytes: 0,
-    },
+    data: resources
+      ? {
+          cpuInstructions: resources.instructions,
+          memoryBytes: resources.diskReadBytes + resources.writeBytes,
+          readBytes: resources.diskReadBytes,
+          writeBytes: resources.writeBytes,
+        }
+      : null,
   };
 }
 
@@ -109,7 +113,7 @@ export function decodeDiagnosticEvents(
       try {
         return {
           xdr: entry,
-          decoded: xdr.DiagnosticEvent.fromXDR(entry, 'base64'),
+          decoded: xdr.DiagnosticEvent.fromXdr(entry, 'base64'),
         };
       } catch {
         return { xdr: entry, decoded: null };
@@ -118,7 +122,7 @@ export function decodeDiagnosticEvents(
     // Already a decoded DiagnosticEvent — serialise back to base64 for the xdr field
     try {
       return {
-        xdr: entry.toXDR('base64'),
+        xdr: entry.toXdr('base64'),
         decoded: entry,
       };
     } catch {
@@ -133,19 +137,19 @@ export function decodeDiagnosticEvents(
  * Centralises all field extraction so both `client.ts` and any future
  * callers get a consistent, fully-typed view of the simulation data.
  *
- * @param sim - Raw response from `SorobanRpc.Server.simulateTransaction`
+ * @param sim - Raw response from `rpc.Server.simulateTransaction`
  * @returns A typed `SimulateTransactionResult`
  */
 export function buildSimulationResult(
-  sim: SorobanRpc.Api.SimulateTransactionResponse,
+  sim: rpc.Api.SimulateTransactionResponse,
 ): SimulateTransactionResult {
-  const success = SorobanRpc.Api.isSimulationSuccess(sim);
+  const success = rpc.Api.isSimulationSuccess(sim);
   const events = decodeDiagnosticEvents(
-    (sim as SorobanRpc.Api.SimulateTransactionSuccessResponse).events,
+    (sim as rpc.Api.SimulateTransactionSuccessResponse).events,
   );
 
   if (!success) {
-    const errorResponse = sim as SorobanRpc.Api.SimulateTransactionErrorResponse;
+    const errorResponse = sim as rpc.Api.SimulateTransactionErrorResponse;
     return {
       success: false,
       returnValue: null,
@@ -160,14 +164,20 @@ export function buildSimulationResult(
     };
   }
 
-  const ok = sim as SorobanRpc.Api.SimulateTransactionSuccessResponse;
+  const ok = sim as rpc.Api.SimulateTransactionSuccessResponse;
+  const resources = ok.transactionData
+    ? ok.transactionData.build().resources
+    : null;
   return {
     success: true,
     returnValue: ok.result?.retval ?? null,
     auth: ok.result?.auth ?? [],
     minResourceFee: ok.minResourceFee,
-    cost: ok.cost
-      ? { cpuInsns: ok.cost.cpuInsns, memBytes: ok.cost.memBytes }
+    cost: resources
+      ? {
+          cpuInsns: String(resources.instructions),
+          memBytes: String(resources.diskReadBytes + resources.writeBytes),
+        }
       : null,
     transactionData: ok.transactionData ? ok.transactionData.build() : null,
     latestLedger: ok.latestLedger,
@@ -181,7 +191,7 @@ export function buildSimulationResult(
  * Check if a simulation exceeds budget limits.
  */
 export function exceedsBudget(
-  sim: SorobanRpc.Api.SimulateTransactionResponse,
+  sim: rpc.Api.SimulateTransactionResponse,
   maxInstructions: number = 100_000_000,
 ): SimulationResult<boolean> {
   const resources = getResourceEstimate(sim);

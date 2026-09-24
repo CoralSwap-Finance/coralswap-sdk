@@ -25,6 +25,10 @@ import {
   scValToNative,
 } from "@stellar/stellar-sdk";
 import { getVotingPowerAtLedger } from "@/utils/voting-power";
+import {
+  getTransactionStatus,
+  shouldRetrySubmission,
+} from "@/utils/idempotent-resubmission";
 
 /**
  * Governance module — proposal creation, voting, and LP-token delegation.
@@ -179,6 +183,45 @@ export class GovernanceModule {
     const result = await this.client.submitTransaction([op], signerPublicKey);
 
     if (!result.success) {
+      if (result.txHash) {
+        const status = await getTransactionStatus(
+          this.client.server,
+          result.txHash,
+        );
+        const decision = shouldRetrySubmission(status);
+
+        if (!decision.shouldRetry) {
+          if (status.status === "SUCCESS") {
+            return status.txHash;
+          }
+
+          throw new TransactionError(
+            `createProposal failed: ${
+              result.error?.message ?? "Transaction failed on-chain"
+            }`,
+            result.txHash,
+            { operation: "createProposal", title, description },
+          );
+        }
+
+        const retryResult = await this.client.submitTransaction(
+          [op],
+          signerPublicKey,
+        );
+
+        if (retryResult.success) {
+          return retryResult.txHash!;
+        }
+
+        throw new TransactionError(
+          `createProposal failed after retry: ${
+            retryResult.error?.message ?? "Unknown error"
+          }`,
+          retryResult.txHash,
+          { operation: "createProposal", title, description },
+        );
+      }
+
       throw new TransactionError(
         `createProposal failed: ${result.error?.message ?? "Unknown error"}`,
         result.txHash,
@@ -257,6 +300,45 @@ export class GovernanceModule {
     const result = await this.client.submitTransaction([op], signerPublicKey);
 
     if (!result.success) {
+      if (result.txHash) {
+        const status = await getTransactionStatus(
+          this.client.server,
+          result.txHash,
+        );
+        const decision = shouldRetrySubmission(status);
+
+        if (!decision.shouldRetry) {
+          if (status.status === "SUCCESS") {
+            return status.txHash;
+          }
+
+          throw new TransactionError(
+            `castVote failed: ${
+              result.error?.message ?? "Transaction failed on-chain"
+            }`,
+            result.txHash,
+            { operation: "castVote", proposalId, voteType },
+          );
+        }
+
+        const retryResult = await this.client.submitTransaction(
+          [op],
+          signerPublicKey,
+        );
+
+        if (retryResult.success) {
+          return retryResult.txHash!;
+        }
+
+        throw new TransactionError(
+          `castVote failed after retry: ${
+            retryResult.error?.message ?? "Unknown error"
+          }`,
+          retryResult.txHash,
+          { operation: "castVote", proposalId, voteType },
+        );
+      }
+
       throw new TransactionError(
         `castVote failed: ${result.error?.message ?? "Unknown error"}`,
         result.txHash,
@@ -450,9 +532,9 @@ export class GovernanceModule {
       return [];
     }
 
-    const items = sim.returnValue.vec();
+    const items = sim.returnValue.type === "scvVec" ? sim.returnValue.vec : undefined;
     if (!items) return [];
-    return items.map((v) => this.decodeProposal(v));
+    return items.map((v: xdr.ScVal) => this.decodeProposal(v));
   }
 
   /**
@@ -550,10 +632,10 @@ export class GovernanceModule {
       return [];
     }
 
-    const items = sim.returnValue.vec();
+    const items = sim.returnValue.type === "scvVec" ? sim.returnValue.vec : undefined;
     if (!items) return [];
 
-    let proposals = items.map((v) => this.decodeProposal(v));
+    let proposals = items.map((v: xdr.ScVal) => this.decodeProposal(v));
 
     if (filter?.status) {
       proposals = proposals.filter((p) => p.status === filter.status);

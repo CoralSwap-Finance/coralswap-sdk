@@ -1,12 +1,13 @@
 import { nativeToScVal } from '@stellar/stellar-sdk';
 import { CoralSwapClient } from '../src/client';
 import { StopLossModule } from '../src/modules/stop-loss';
+import { SwapModule } from '../src/modules/swap';
 import {
   StaleOracleError,
   TransactionError,
   ValidationError,
 } from '../src/errors';
-import { Network } from '../src/types/common';
+import { Network, TradeType } from '../src/types/common';
 import type {
   StopLossOrder,
   StopLossParams,
@@ -231,6 +232,171 @@ describe('StopLossModule', () => {
       await expect(
         stopLoss.createStopLoss(makeParams(), mockSigner),
       ).rejects.toThrow(TransactionError);
+    });
+
+    it('rejects order creation against a stale price feed by default', async () => {
+      jest.spyOn(client, 'simulateTransaction').mockResolvedValue(
+        makeSimResult({
+          price: '10000000',
+          timestamp: NOW_MS - 6 * 60 * 1000, // 6 minutes old (> DEFAULT_STALE_AFTER_MS)
+        }),
+      );
+      const submit = mockSubmitSuccess();
+
+      await expect(
+        stopLoss.createStopLoss(makeParams(), mockSigner),
+      ).rejects.toThrow(StaleOracleError);
+
+      expect(submit).not.toHaveBeenCalled();
+    });
+
+    it('rejects order creation against a stale price feed with a custom threshold', async () => {
+      jest.spyOn(client, 'simulateTransaction').mockResolvedValue(
+        makeSimResult({
+          price: '10000000',
+          timestamp: NOW_MS - 2 * 60 * 1000, // 2 minutes old
+        }),
+      );
+      const submit = mockSubmitSuccess();
+
+      await expect(
+        stopLoss.createStopLoss(makeParams(), mockSigner, {
+          staleAfterMs: 60_000, // 1 minute threshold
+        }),
+      ).rejects.toThrow(StaleOracleError);
+
+      expect(submit).not.toHaveBeenCalled();
+    });
+
+    it('accepts order creation when the price feed is fresh', async () => {
+      jest.spyOn(client, 'simulateTransaction').mockResolvedValue(
+        makeSimResult({
+          price: '10000000',
+          timestamp: NOW_MS - 4 * 60 * 1000, // 4 minutes old (< DEFAULT_STALE_AFTER_MS)
+        }),
+      );
+      mockSubmitSuccess();
+
+      const id = await stopLoss.createStopLoss(makeParams(), mockSigner);
+
+      expect(id).toBe(TEST_TX_HASH);
+    });
+  });
+
+  describe('swapAndCreateStopLoss()', () => {
+    const RESERVE = 1_000_000_000n;
+
+    function buildComposedMockClient() {
+      const pair = {
+        getReserves: jest
+          .fn()
+          .mockResolvedValue({ reserve0: RESERVE, reserve1: RESERVE }),
+        getDynamicFee: jest.fn().mockResolvedValue(30),
+        getTokens: jest
+          .fn()
+          .mockResolvedValue({ token0: TOKEN_IN, token1: TOKEN_OUT }),
+      };
+
+      return {
+        config: { defaultSlippageBps: 50 },
+        networkConfig: { networkPassphrase: 'Test SDF Network ; September 2015' },
+        publicKey: OWNER,
+        getDeadline: jest.fn().mockReturnValue(9_999_999_999),
+        getPairAddress: jest.fn().mockResolvedValue(PAIR),
+        pair: jest.fn().mockReturnValue(pair),
+        router: {
+          buildSwapExactIn: jest.fn().mockReturnValue('swap-operation'),
+        },
+        simulateTransaction: jest
+          .fn()
+          .mockResolvedValue(makeSimResult('10000000')),
+        submitTransaction: jest.fn(),
+        transactionComposer(this: any) {
+          const operations: unknown[] = [];
+          return {
+            addOperation(op: unknown) {
+              operations.push(op);
+              return this;
+            },
+            submit: () => this.submitTransaction(operations),
+          };
+        },
+      };
+    }
+
+    const swapRequest = {
+      tokenIn: TOKEN_IN,
+      tokenOut: TOKEN_OUT,
+      amount: 1_000_0000000n,
+      tradeType: TradeType.EXACT_IN,
+    };
+
+    it('submits the swap and the stop-loss as a single atomic transaction', async () => {
+      const mockClient = buildComposedMockClient();
+      mockClient.submitTransaction.mockResolvedValue({
+        success: true,
+        data: { txHash: TEST_TX_HASH, ledger: 4242 },
+      });
+
+      const swapModule = new SwapModule(mockClient as any);
+      const composedStopLoss = new StopLossModule(mockClient as any, MANAGER, ORACLE);
+
+      const result = await composedStopLoss.swapAndCreateStopLoss(
+        swapModule,
+        swapRequest,
+        makeParams(),
+        mockSigner,
+      );
+
+      expect(result).toEqual({ txHash: TEST_TX_HASH, ledger: 4242 });
+      expect(mockClient.submitTransaction).toHaveBeenCalledTimes(1);
+
+      const [operations] = mockClient.submitTransaction.mock.calls[0];
+      expect(operations).toHaveLength(2);
+      expect(operations[0]).toBe('swap-operation');
+      expect(mockClient.router.buildSwapExactIn).toHaveBeenCalledTimes(1);
+    });
+
+    it('rolls back both legs when the composed transaction fails', async () => {
+      const mockClient = buildComposedMockClient();
+      mockClient.submitTransaction.mockResolvedValue({
+        success: false,
+        error: { code: 'TX_FAILED', message: 'insufficient balance' },
+      });
+
+      const swapModule = new SwapModule(mockClient as any);
+      const composedStopLoss = new StopLossModule(mockClient as any, MANAGER, ORACLE);
+
+      await expect(
+        composedStopLoss.swapAndCreateStopLoss(
+          swapModule,
+          swapRequest,
+          makeParams(),
+          mockSigner,
+        ),
+      ).rejects.toThrow(TransactionError);
+
+      // Only one atomic submission is attempted -- there is no separate
+      // stop-loss submission left dangling after the swap "succeeded".
+      expect(mockClient.submitTransaction).toHaveBeenCalledTimes(1);
+    });
+
+    it('rejects the whole composed flow when the trigger price is not below market', async () => {
+      const mockClient = buildComposedMockClient();
+
+      const swapModule = new SwapModule(mockClient as any);
+      const composedStopLoss = new StopLossModule(mockClient as any, MANAGER, ORACLE);
+
+      await expect(
+        composedStopLoss.swapAndCreateStopLoss(
+          swapModule,
+          swapRequest,
+          makeParams({ triggerPrice: 20_000_000n }),
+          mockSigner,
+        ),
+      ).rejects.toThrow(ValidationError);
+
+      expect(mockClient.submitTransaction).not.toHaveBeenCalled();
     });
   });
 

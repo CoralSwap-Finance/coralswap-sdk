@@ -5,6 +5,7 @@ import {
   InsufficientLiquidityError,
   InvalidThresholdError,
 } from '@/errors';
+import { OracleModule } from './oracle';
 import {
   AlertConfigLegacy,
   AlertStatusLegacy,
@@ -118,10 +119,12 @@ type StoredAlertV2 = StoredGenericAlertV2 | StoredPriceAlertV2 | StoredILAlertV2
 
 export class AlertsModule {
   private readonly client: CoralSwapClient;
+  private readonly oracle: OracleModule;
   private readonly rules: Map<string, AlertInstance> = new Map();
 
   constructor(client: CoralSwapClient) {
     this.client = client;
+    this.oracle = new OracleModule(client);
   }
 
   async createAlert(config: AlertConfigLegacy): Promise<string> {
@@ -243,8 +246,21 @@ export class AlertsModule {
   }
 
   private async fetchPrice(_address: string): Promise<bigint> {
-    try { const p = this.client.pair(_address); const r = await p.getReserves(); return r.reserve0 === 0n || r.reserve1 === 0n ? 0n : (r.reserve1 * 10_000_000n) / r.reserve0; }
-    catch { return 0n; }
+    try {
+      // Try to use TWAP (manipulation-resistant) first
+      const twap = await this.oracle.getTWAP(_address);
+      if (twap) {
+        // Use TWAP price0 (token1 per token0)
+        return twap.price0TWAP;
+      }
+
+      // Fallback to spot price if TWAP not yet available
+      const p = this.client.pair(_address);
+      const r = await p.getReserves();
+      return r.reserve0 === 0n || r.reserve1 === 0n ? 0n : (r.reserve1 * 10_000_000n) / r.reserve0;
+    } catch {
+      return 0n;
+    }
   }
 
   private async fetchVolume24h(_addresses: string[]): Promise<bigint> { return 0n; }
@@ -269,6 +285,7 @@ export class AlertsModule {
 
 export class AlertModule {
   private client: CoralSwapClient;
+  private oracle: OracleModule;
   private listeners: Map<string, Array<(event: AlertEvent) => void>> = new Map();
   private rules: Map<string, AlertInstance> = new Map();
   private alertsV2: Map<string, StoredAlertV2> = new Map();
@@ -277,6 +294,7 @@ export class AlertModule {
 
   constructor(client: CoralSwapClient, oracleAddress?: string) {
     this.client = client;
+    this.oracle = new OracleModule(client);
     this.oracleAddress = oracleAddress;
   }
 
@@ -539,20 +557,32 @@ export class AlertModule {
     this.validateILAlertConfig(config);
 
     const pair = this.client.pair(config.pairAddress);
-    const { reserve0, reserve1 } = await pair.getReserves();
     const tokens = await pair.getTokens();
 
     this.validatePairTokens(tokens, config.tokenA, config.tokenB);
 
     const isAToken0 = tokens.token0 === config.tokenA;
-    const reserveA = isAToken0 ? reserve0 : reserve1;
-    const reserveB = isAToken0 ? reserve1 : reserve0;
+    
+    // Try to use TWAP (manipulation-resistant) first
+    const twap = await this.oracle.getTWAP(config.pairAddress);
+    let currentPrice: bigint;
 
-    if (reserveA === 0n || reserveB === 0n) {
-      throw new InsufficientLiquidityError('Pool has no liquidity');
+    if (twap) {
+      // TWAP is available - use it instead of spot price
+      currentPrice = isAToken0 ? twap.price0TWAP : twap.price1TWAP;
+    } else {
+      // Fallback to spot price if TWAP not yet available
+      const { reserve0, reserve1 } = await pair.getReserves();
+
+      if (reserve0 === 0n || reserve1 === 0n) {
+        throw new InsufficientLiquidityError('Pool has no liquidity');
+      }
+
+      const reserveA = isAToken0 ? reserve0 : reserve1;
+      const reserveB = isAToken0 ? reserve1 : reserve0;
+      currentPrice = (reserveB * PRICE_SCALE) / reserveA;
     }
 
-    const currentPrice = (reserveB * PRICE_SCALE) / reserveA;
     const priceRatio = this.computePriceRatio(currentPrice, config.referencePrice);
     const currentILBps = this.computeImpermanentLossBps(priceRatio);
 
@@ -738,16 +768,27 @@ export class AlertModule {
     tokenOut: string,
   ): Promise<bigint> {
     const pair = this.client.pair(pairAddress);
-    const { reserve0, reserve1 } = await pair.getReserves();
     const tokens = await pair.getTokens();
+
+    this.validatePairTokens(tokens, tokenIn, tokenOut);
+
+    // Try to use TWAP (manipulation-resistant) first
+    const twap = await this.oracle.getTWAP(pairAddress);
+    if (twap) {
+      // TWAP is available - use it instead of spot price
+      const isTokenInToken0 = tokens.token0 === tokenIn;
+      return isTokenInToken0 ? twap.price0TWAP : twap.price1TWAP;
+    }
+
+    // Fallback to spot price if TWAP not yet available
+    // (needs at least MIN_TWAP_WINDOW_SECONDS of observations)
+    const { reserve0, reserve1 } = await pair.getReserves();
 
     if (reserve0 === 0n || reserve1 === 0n) {
       throw new InsufficientLiquidityError('Pool has no liquidity');
     }
 
     const isTokenInToken0 = tokens.token0 === tokenIn;
-    this.validatePairTokens(tokens, tokenIn, tokenOut);
-
     const reserveIn = isTokenInToken0 ? reserve0 : reserve1;
     const reserveOut = isTokenInToken0 ? reserve1 : reserve0;
 

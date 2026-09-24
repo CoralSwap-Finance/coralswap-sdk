@@ -16,7 +16,7 @@ import {
 import { PRECISION, DEFAULTS } from '../config';
 import { PairNotFoundError, ValidationError, InsufficientLiquidityError, TransactionError } from '../errors';
 import { PairClient } from '@/contracts/pair';
-import { SorobanRpc, xdr } from '@stellar/stellar-sdk';
+import { rpc, xdr } from '@stellar/stellar-sdk';
 import { GasEstimate } from '../types/gas';
 import { estimateGas } from '../utils/gas';
 import { resolveTokenIdentifier } from '../utils/addresses';
@@ -203,43 +203,46 @@ export class SwapModule {
   /**
    * Execute a swap transaction on-chain, or estimate its fee.
    */
-  async execute(request: SwapRequest, options: { estimateOnly: true }): Promise<GasEstimate>;
-  async execute(request: SwapRequest, options?: { estimateOnly?: false }): Promise<SwapResult>;
-  async execute(request: SwapRequest, options?: { estimateOnly?: boolean }): Promise<SwapResult | GasEstimate> {
+  buildSwapOperation(
+    request: SwapRequest,
+    quote: SwapQuote,
+  ): import('@stellar/stellar-sdk').xdr.Operation {
     const path = this.resolvePath(request);
-    const quote = await this.getQuote(request);
-
-    let op: import('@stellar/stellar-sdk').xdr.Operation;
 
     if (path.length > 2) {
-      // Multi-hop: router handles the full path
-      op = this.client.router.buildSwapExactTokensForTokens(
+      return this.client.router.buildSwapExactTokensForTokens(
         request.to ?? this.client.publicKey,
         path,
         quote.amountIn,
         quote.amountOutMin,
         quote.deadline,
       );
-    } else {
-      op =
-        request.tradeType === TradeType.EXACT_IN
-          ? this.client.router.buildSwapExactIn(
-              request.to ?? this.client.publicKey,
-              request.tokenIn,
-              request.tokenOut,
-              quote.amountIn,
-              quote.amountOutMin,
-              quote.deadline,
-            )
-          : this.client.router.buildSwapExactOut(
-              request.to ?? this.client.publicKey,
-              request.tokenIn,
-              request.tokenOut,
-              quote.amountOut,
-              quote.amountIn,
-              quote.deadline,
-            );
     }
+
+    return request.tradeType === TradeType.EXACT_IN
+      ? this.client.router.buildSwapExactIn(
+          request.to ?? this.client.publicKey,
+          request.tokenIn,
+          request.tokenOut,
+          quote.amountIn,
+          quote.amountOutMin,
+          quote.deadline,
+        )
+      : this.client.router.buildSwapExactOut(
+          request.to ?? this.client.publicKey,
+          request.tokenIn,
+          request.tokenOut,
+          quote.amountOut,
+          quote.amountIn,
+          quote.deadline,
+        );
+  }
+
+  async execute(request: SwapRequest, options: { estimateOnly: true }): Promise<GasEstimate>;
+  async execute(request: SwapRequest, options?: { estimateOnly?: false }): Promise<SwapResult>;
+  async execute(request: SwapRequest, options?: { estimateOnly?: boolean }): Promise<SwapResult | GasEstimate> {
+    const quote = await this.getQuote(request);
+    const op = this.buildSwapOperation(request, quote);
 
     if (options?.estimateOnly) {
       return estimateGas((ops) => this.client.simulateTransaction(ops, {}), [op]);
@@ -767,13 +770,13 @@ export class SwapModule {
     // Build the getEvents request.
     // When pairAddress is given we scope the query to that contract, which is
     // the most efficient path. Without it we query all contracts for "swap" topic.
-    const request: SorobanRpc.Server.GetEventsRequest = {
+    const request: rpc.Server.GetEventsRequest = {
       startLedger: fromLedger,
       filters: [
         {
           type: "contract",
           contractIds: filter.pairAddress ? [filter.pairAddress] : [],
-          topics: [[xdr.ScVal.scvSymbol("swap").toXDR("base64")]],
+          topics: [[xdr.ScVal.scvSymbol("swap").toXdr("base64")]],
         },
       ],
       limit: filter.limit ?? 200,

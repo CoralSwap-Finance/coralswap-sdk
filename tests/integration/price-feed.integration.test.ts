@@ -11,7 +11,11 @@ import { Network } from '../../src/types/common';
  *   REDSTONE_ASSET       – optional asset symbol to query (default: BTC)
  *   TEST_RPC_URL         – optional RPC override
  */
-const SKIP = process.env.STELLAR_TESTNET !== 'true';
+// Skip unless the full set of testnet fixtures is configured, so the suite
+// degrades to a clean skip on forks/PRs without secrets.
+const SKIP =
+  process.env.STELLAR_TESTNET !== 'true' ||
+  !process.env.REDSTONE_ORACLE_ADDRESS;
 
 function requireEnv(name: string): string {
   const value = process.env[name];

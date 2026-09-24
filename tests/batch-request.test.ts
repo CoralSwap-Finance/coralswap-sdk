@@ -33,6 +33,34 @@ function makeFailingTask(error: unknown, delayMs = 0): () => Promise<never> {
 // ---------------------------------------------------------------------------
 
 describe('batchRequest()', () => {
+  describe('edge-case matrix', () => {
+    const batchFns = [
+      ['batchRequest', batchRequest],
+      ['batchCall', batchCall],
+      ['batchCallSequential', batchCallSequential],
+    ] as const;
+
+    it.each(batchFns)('%s returns an empty array for zero tasks', async (_name, fn) => {
+      const results = await fn([] as Array<() => Promise<unknown>>);
+      expect(results).toEqual([]);
+    });
+
+    it.each(batchFns)('%s preserves input order under partial failure', async (_name, fn) => {
+      const tasks = [
+        async () => 'first',
+        async () => { throw new Error('boom'); },
+        async () => 'third',
+      ];
+
+      const results = await fn(tasks as any);
+
+      expect(results).toHaveLength(3);
+      expect(results[0]).toEqual({ status: 'fulfilled', value: 'first' });
+      expect(results[1]).toMatchObject({ status: 'rejected' });
+      expect(results[2]).toEqual({ status: 'fulfilled', value: 'third' });
+    });
+  });
+
   // -------------------------------------------------------------------------
   // Result ordering
   // -------------------------------------------------------------------------

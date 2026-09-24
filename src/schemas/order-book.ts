@@ -25,10 +25,11 @@ import { z } from 'zod';
 export const OrderBookAddressSchema = z
   .string()
   .min(1, 'Address must not be empty')
-  .refine(
-    (addr) => /^[GC][A-Z0-9]{55}$/.test(addr),
-    (addr) => ({ message: `Address is not a valid Stellar address: ${addr}` }),
-  );
+  .superRefine((addr, ctx) => {
+    if (!/^[GC][A-Z0-9]{55}$/.test(addr)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: `Address is not a valid Stellar address: ${addr}` });
+    }
+  });
 
 /**
  * Zod schema for the optional `TradeFilter` parameter of `getTradeHistory`.
