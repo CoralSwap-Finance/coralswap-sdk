@@ -348,6 +348,44 @@ if (twap) {
 }
 ```
 
+### Webhook Endpoints
+
+```typescript
+import { WebhookModule } from "@coralswap/sdk";
+
+const webhooks = new WebhookModule();
+
+// 1. Register: must be https://, needs at least one subscribed event.
+const id = await webhooks.registerWebhook(
+  "https://hooks.example.com/coralswap",
+  ["swap", "il"],
+  "shared-secret", // optional: signs every delivery with HMAC-SHA256
+);
+
+// 2. Verify: posts a signed challenge and records the outcome.
+const handshake = await webhooks.verifyWebhook(id);
+console.log("verified:", handshake.verified, "status:", handshake.statusCode);
+
+// 3. Update: change the url, the event subscription, or rotate the secret.
+//    A new url resets `verified` (the old handshake proved nothing) and
+//    clears the failure counter.
+await webhooks.updateWebhook(id, { events: ["swap", "il", "flash-loan"] });
+
+// 4. List: configuration plus live delivery state.
+const [webhook] = webhooks.listWebhooks();
+console.log(webhook.id, webhook.url, webhook.verified, webhook.failCount);
+
+// Events filter deliveries: a webhook only fires for what it subscribed to.
+// `filtered: true` means nothing was sent and no attempt was recorded.
+const result = await webhooks.sendWebhook(id, { pair, amount }, { event: "swap" });
+```
+
+Webhooks that fail `5` consecutive deliveries are auto-disabled — `sendWebhook()`
+then throws `WebhookDisabledError` until the endpoint recovers and you call
+`enableWebhook()`. A verification handshake that does not return `2xx` marks the
+webhook `verified: false`, so `isWebhookVerified()`/`listWebhooks()` always show
+the state of the last handshake.
+
 ## Native XLM
 
 The SDK supports the native Stellar asset (XLM) via the Stellar Asset Contract (SAC). You can pass `"XLM"` or `"native"` as a token identifier in swap and multi-hop methods; it is resolved to the network’s XLM SAC address automatically.
@@ -420,6 +458,91 @@ try {
     console.log("RPC retries exceeded the 5s deadline");
   }
 }
+```
+
+## Signer Authoring
+
+`CoralSwapClient` never touches a private key directly -- it delegates signing
+to anything implementing the `Signer` interface:
+
+```typescript
+interface Signer {
+  publicKey(): Promise<string>;
+  signTransaction(xdr: string): Promise<string>;
+}
+```
+
+Passing `secretKey` to the constructor is a convenience: internally it just
+builds the SDK's own reference implementation, `KeypairSigner`. To integrate a
+browser wallet (Freighter, Albedo, xBull, a hardware signer, etc.), implement
+`Signer` yourself and pass it as `config.signer` instead:
+
+```typescript
+import { CoralSwapClient, Network, Signer } from "@coralswap/sdk";
+
+class FreighterSigner implements Signer {
+  async publicKey(): Promise<string> {
+    return window.freighter.getPublicKey();
+  }
+
+  async signTransaction(xdr: string): Promise<string> {
+    // The wallet must sign against the same network passphrase the
+    // client is configured for -- see "Matching the network config" below.
+    return window.freighter.signTransaction(xdr, {
+      networkPassphrase: Network.TESTNET,
+    });
+  }
+}
+
+const client = new CoralSwapClient({
+  network: Network.TESTNET,
+  signer: new FreighterSigner(),
+});
+
+// client.submitTransaction(...) now calls FreighterSigner.signTransaction()
+// instead of signing with a locally-held secret key.
+```
+
+### Matching the network config
+
+A signer must sign against the exact network the client talks to. Read it
+from `client.networkConfig` rather than hardcoding it, so a single signer
+implementation works across testnet/mainnet/staging:
+
+```typescript
+const { networkPassphrase, rpcUrl } = client.networkConfig;
+```
+
+`TESTNET_NETWORK`, `MAINNET_NETWORK`, and `STAGING_NETWORK` (also exported
+from the package root) expose the same shape if you need it before a client
+instance exists.
+
+### Building a transaction envelope by hand
+
+Most callers should use `client.submitTransaction(operations)` or
+`client.simulateTransaction(operations, options)`, which already handle
+fetching the account, building, simulating, and (for `submitTransaction`)
+signing and sending. If you're authoring a signer that needs to construct
+and sign a raw envelope itself -- for example to show a wallet a human-
+readable preview before submission -- combine `client.getAccount()` (which
+returns the account's current sequence number, using the same RPC
+retry/fallback as the rest of the client) with the address utilities above:
+
+```typescript
+import { TransactionBuilder } from "@stellar/stellar-sdk";
+import { isValidAddress, toScAddress } from "@coralswap/sdk";
+
+const account = await client.getAccount(); // or client.getAccount(otherPublicKey)
+
+const tx = new TransactionBuilder(account, {
+  fee: "100",
+  networkPassphrase: client.networkConfig.networkPassphrase,
+})
+  .addOperation(op)
+  .setTimeout(client.networkConfig.sorobanTimeout)
+  .build();
+
+const signedXdr = await mySigner.signTransaction(tx.toXDR());
 ```
 
 ## Error Handling
