@@ -4,8 +4,8 @@ import { readFileSync } from 'node:fs';
 
 const reportPath = /(report|metric|analytics|quote|estimate|balance|price)/i;
 
-// Only TypeScript sources, and never build output: src/pair/target holds ~1500
-// committed Cargo artifacts that are not source and cannot be parsed as such.
+// Only TypeScript sources, and never build output. src/pair is a Cargo crate,
+// so a local build fills src/pair/target with artifacts that are not source.
 const files = execFileSync('git', ['ls-files', 'src'], { encoding: 'utf8' })
   .split('\n')
   .filter(Boolean)
