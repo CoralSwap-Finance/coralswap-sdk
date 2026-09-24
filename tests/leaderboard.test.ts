@@ -132,6 +132,15 @@ describe("LeaderboardModule.getLeaderboard()", () => {
 
     // Default current ledger: 50000
     jest.spyOn(client, "getCurrentLedger").mockResolvedValue(50000);
+
+    // EventCursor.anchorIfNeeded() reads the chain tip straight off the server.
+    // Without this stub the suite makes a live RPC call and its runtime depends
+    // on network reachability, which is what pushes it past jest's 5s default.
+    jest
+      .spyOn(client.server, "getLatestLedger")
+      .mockResolvedValue({ sequence: 50000 } as unknown as Awaited<
+        ReturnType<typeof client.server.getLatestLedger>
+      >);
   });
 
   afterEach(() => {
@@ -301,6 +310,15 @@ describe("LeaderboardModule.getTopTraders()", () => {
 
     // Mock getCurrentLedger to return a fixed ledger sequence
     jest.spyOn(client, "getCurrentLedger").mockResolvedValue(100000);
+
+    // EventCursor.anchorIfNeeded() reads the chain tip straight off the server.
+    // Without this stub the suite makes a live RPC call and its runtime depends
+    // on network reachability, which is what pushes it past jest's 5s default.
+    jest
+      .spyOn(client.server, "getLatestLedger")
+      .mockResolvedValue({ sequence: 100000 } as unknown as Awaited<
+        ReturnType<typeof client.server.getLatestLedger>
+      >);
 
     // Mock factory getter
     jest.spyOn(client, "factory", "get").mockReturnValue({
@@ -512,6 +530,15 @@ describe("LeaderboardModule getEvents encoding", () => {
     client = new CoralSwapClient({ network: Network.TESTNET, secretKey: TEST_SECRET });
     leaderboard = new LeaderboardModule(client);
     jest.spyOn(client, "getCurrentLedger").mockResolvedValue(50000);
+
+    // EventCursor.anchorIfNeeded() reads the chain tip straight off the server.
+    // Without this stub the suite makes a live RPC call and its runtime depends
+    // on network reachability, which is what pushes it past jest's 5s default.
+    jest
+      .spyOn(client.server, "getLatestLedger")
+      .mockResolvedValue({ sequence: 50000 } as unknown as Awaited<
+        ReturnType<typeof client.server.getLatestLedger>
+      >);
   });
 
   afterEach(() => jest.restoreAllMocks());
@@ -543,6 +570,15 @@ describe("LeaderboardModule getEvents encoding", () => {
   it("anchors startLedger to the chain head, never to ledger 0", async () => {
     // Head below the 30d window: the naive Math.max(0, ...) produced 0 here.
     jest.spyOn(client, "getCurrentLedger").mockResolvedValue(100);
+
+    // EventCursor.anchorIfNeeded() reads the chain tip straight off the server.
+    // Without this stub the suite makes a live RPC call and its runtime depends
+    // on network reachability, which is what pushes it past jest's 5s default.
+    jest
+      .spyOn(client.server, "getLatestLedger")
+      .mockResolvedValue({ sequence: 100 } as unknown as Awaited<
+        ReturnType<typeof client.server.getLatestLedger>
+      >);
     const spy = jest
       .spyOn(client.server, "getEvents")
       .mockResolvedValue(makeEventsResponse([]));

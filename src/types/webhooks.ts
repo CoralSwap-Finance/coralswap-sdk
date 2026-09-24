@@ -102,6 +102,13 @@ export interface WebhookDeliveryResult {
   statusCode: number;
   delivered: boolean;
   retryCount: number;
+  /**
+   * Present and `true` only when the delivery was never attempted because
+   * the event's type is not among the webhook's subscribed `events`
+   * (see {@link WebhookOptions.event}). Undefined for every real attempt,
+   * so the field is safe to ignore.
+   */
+  filtered?: boolean;
 }
 
 export interface WebhookOptions {
@@ -111,11 +118,50 @@ export interface WebhookOptions {
   backoffMultiplier?: number;
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
+  /**
+   * Type of the event being dispatched. The webhook only fires when this
+   * value is among its subscribed `events`; when omitted the first
+   * subscribed event is used (legacy behaviour).
+   */
+  event?: WebhookEventName;
 }
+
+/**
+ * Mutable subset of a registered webhook accepted by
+ * {@link WebhookModule.updateWebhook}. Anything omitted is left untouched.
+ */
+export type WebhookUpdate = Partial<Pick<WebhookConfigV2, 'url' | 'events' | 'secret'>>;
 
 export interface StoredWebhook extends WebhookConfigV2 {
   id: string;
   createdAt: number;
+  /** Epoch-ms timestamp of the last {@link WebhookModule.updateWebhook} call. */
+  updatedAt?: number;
+  /**
+   * Whether the endpoint passed its most recent verification handshake.
+   *
+   * A freshly registered webhook starts `false` (registration is a purely
+   * local operation and performs no network I/O) and only flips to `true`
+   * once `verifyWebhook()` receives a 2xx from the endpoint. A failed
+   * handshake — or a change of `url`, which invalidates any previous
+   * evidence about the endpoint — sets it back to `false`.
+   */
+  verified: boolean;
+}
+
+/**
+ * Public view of a registered webhook: its configuration plus the live
+ * delivery state used to decide whether it is still healthy.
+ */
+export interface Webhook extends StoredWebhook {
+  /**
+   * Consecutive delivery failures. Reset to `0` by any successful
+   * delivery and by re-enabling the webhook; once it reaches
+   * {@link WEBHOOK_DISABLE_FAILURE_THRESHOLD} the webhook is auto-disabled.
+   */
+  failCount: number;
+  /** Epoch-ms timestamp of the most recent delivery attempt, if any. */
+  lastDelivery?: number;
 }
 
 export const WEBHOOK_SIGNATURE_HEADER = 'X-Signature';
