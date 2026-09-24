@@ -1,6 +1,7 @@
 import { CoralSwapClient } from "@/client";
 import { PRECISION } from "@/config";
 import { ValidationError, InsufficientLiquidityError } from "@/errors";
+import { validateAddress } from "@/utils/validation";
 
 /**
  * Minimum time window (in seconds) for TWAP to resist single-block manipulation.
@@ -8,6 +9,30 @@ import { ValidationError, InsufficientLiquidityError } from "@/errors";
  * be rejected or flagged.
  */
 export const MIN_TWAP_WINDOW_SECONDS = 300; // 5 minutes
+
+/**
+ * Hard upper bound on cached observations per pair.
+ *
+ * The observation cache uses a dual-pruning policy:
+ *
+ * 1. **Window-coverage pruning (primary):** After each new observation, entries
+ *    are dropped from the front only when the remaining cache still spans at
+ *    least {@link MIN_TWAP_WINDOW_SECONDS}. This guarantees that, once a pair
+ *    has been polled for the full minimum window, the cache always holds enough
+ *    history to produce a valid TWAP — regardless of polling frequency.
+ *
+ * 2. **Hard-cap pruning (growth bound):** If window-coverage pruning has not
+ *    reduced the cache below {@link MAX_OBSERVATIONS} (e.g., because all
+ *    observations are still within the minimum window), the oldest entries are
+ *    evicted until the count reaches the cap. This prevents unbounded memory
+ *    growth for very high-frequency pairs.
+ *
+ * Consequence: for a pair polled once per second the cache can hold up to
+ * `MAX_OBSERVATIONS` entries; once the oldest observation is more than
+ * `MIN_TWAP_WINDOW_SECONDS` old, window-coverage pruning takes over and the
+ * cache stabilises at the number of observations produced in that window.
+ */
+export const MAX_OBSERVATIONS = 500;
 
 /**
  * TWAP Oracle data point from cumulative price accumulators.
@@ -80,6 +105,7 @@ export class OracleModule {
    * const obs = await client.oracle.observe('C...');
    */
   async observe(pairAddress: string): Promise<TWAPObservation> {
+    validateAddress(pairAddress, "pairAddress");
     const pair = this.client.pair(pairAddress);
     const prices = await pair.getCumulativePrices();
 
@@ -89,13 +115,37 @@ export class OracleModule {
       blockTimestampLast: prices.blockTimestampLast,
     };
 
-    // Cache observation for TWAP calculation
+    // Cache observation for TWAP calculation using dual-pruning policy:
+    //
+    // Pass 1 — window-coverage pruning:
+    //   Drop the oldest entry if the cache still covers MIN_TWAP_WINDOW_SECONDS
+    //   after the removal (i.e. observations[1]..newest spans the minimum window).
+    //   Repeat until the invariant would be violated or the cache has ≤ 1 entry.
+    //
+    // Pass 2 — hard-cap pruning (growth bound):
+    //   If the cache still exceeds MAX_OBSERVATIONS after pass 1, evict from the
+    //   front until it fits. This caps memory use for high-frequency pairs whose
+    //   entire history is still inside the minimum window.
     const key = pairAddress;
     const existing = this.observationCache.get(key) ?? [];
     existing.push(observation);
-    // Keep only last 100 observations
-    if (existing.length > 100) {
-      existing.splice(0, existing.length - 100);
+
+    const newestTs = existing[existing.length - 1].blockTimestampLast;
+
+    // Pass 1: drop from the front while window coverage is preserved
+    while (existing.length > 1) {
+      const windowAfterDrop =
+        newestTs - existing[1].blockTimestampLast;
+      if (windowAfterDrop >= MIN_TWAP_WINDOW_SECONDS) {
+        existing.shift();
+      } else {
+        break;
+      }
+    }
+
+    // Pass 2: enforce hard cap as a growth bound
+    if (existing.length > MAX_OBSERVATIONS) {
+      existing.splice(0, existing.length - MAX_OBSERVATIONS);
     }
     this.observationCache.set(key, existing);
 
@@ -177,6 +227,7 @@ export class OracleModule {
     options: { enforceMinWindow?: boolean } = {},
   ): Promise<TWAPResult | null> {
     const { enforceMinWindow = true } = options;
+    validateAddress(pairAddress, "pairAddress");
 
     // Take a fresh observation
     await this.observe(pairAddress);
@@ -231,6 +282,7 @@ export class OracleModule {
     price0Per1: bigint;
     price1Per0: bigint;
   }> {
+    validateAddress(pairAddress, "pairAddress");
     const pair = this.client.pair(pairAddress);
     const { reserve0, reserve1 } = await pair.getReserves();
 
@@ -267,6 +319,7 @@ export class OracleModule {
     spotPrice0: bigint;
     spotPrice1: bigint;
   } | null> {
+    validateAddress(pairAddress, "pairAddress");
     // Get TWAP price (manipulation-resistant)
     const twapResult = await this.getTWAP(pairAddress);
     if (!twapResult) {
@@ -341,6 +394,7 @@ export class OracleModule {
    * const count = client.oracle.getObservationCount('C...');
    */
   getObservationCount(pairAddress: string): number {
+    validateAddress(pairAddress, "pairAddress");
     return this.observationCache.get(pairAddress)?.length ?? 0;
   }
 
@@ -351,6 +405,7 @@ export class OracleModule {
    * @returns A cloned array of cached observations.
    */
   getObservationSeries(pairAddress: string): TWAPObservation[] {
+    validateAddress(pairAddress, "pairAddress");
     return this.observationCache.get(pairAddress)?.slice() ?? [];
   }
 }

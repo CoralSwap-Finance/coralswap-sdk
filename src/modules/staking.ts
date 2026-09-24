@@ -16,7 +16,6 @@ import {
 import { Signer } from "@/types/common";
 import { RemoveLiquidityRequest, LiquidityResult } from "@/types/liquidity";
 import {
-  ValidationError,
   TransactionError,
   CooldownError,
   StakingError,

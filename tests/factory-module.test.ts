@@ -73,6 +73,40 @@ function mockLpTokenClient(totalSupply: bigint = 500_000n) {
     };
 }
 
+describe('FactoryClient and PairClient contract view wrappers', () => {
+    it('exposes total pair and fee-state version accessors', async () => {
+        const factory = new (require('../src/contracts/factory').FactoryClient)(
+            'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM',
+            {} as any,
+            'Test SDF Network ; September 2015',
+            { maxRetries: 0, baseDelayMs: 0, maxDelayMs: 0 },
+        );
+
+        (factory as any).simulateRead = jest.fn()
+            .mockResolvedValueOnce({ type: 'scvU32', u32: 42 })
+            .mockResolvedValueOnce({ type: 'scvU32', u32: 7 });
+
+        await expect(factory.getTotalPairs()).resolves.toBe(42);
+        await expect(factory.getFeeStateVersion()).resolves.toBe(7);
+    });
+
+    it('exposes pair wasm and fee-state version accessors', async () => {
+        const pair = new (require('../src/contracts/pair').PairClient)(
+            'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM',
+            {} as any,
+            'Test SDF Network ; September 2015',
+            { maxRetries: 0, baseDelayMs: 0, maxDelayMs: 0 },
+        );
+
+        (pair as any).simulateRead = jest.fn()
+            .mockResolvedValueOnce({ type: 'scvBytes', bytes: () => Buffer.from('abcd', 'hex') })
+            .mockResolvedValueOnce({ type: 'scvU32', u32: 17 });
+
+        await expect(pair.getWasmHash()).resolves.toBe('abcd');
+        await expect(pair.getFeeStateVersion()).resolves.toBe(17);
+    });
+});
+
 // ---------------------------------------------------------------------------
 // Existing cache tests (preserved + migrated to TTL-aware entries)
 // ---------------------------------------------------------------------------

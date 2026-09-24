@@ -140,6 +140,50 @@ export class FactoryClient {
   }
 
   /**
+   * Query the total number of registered pairs in the factory.
+   *
+   * @returns The number of pairs tracked by the factory contract.
+   */
+  async getTotalPairs(): Promise<number> {
+    for (const methodName of ["get_total_pairs", "total_pairs"]) {
+      try {
+        const op = this.contract.call(methodName);
+        const result = await this.simulateRead(op);
+        if (!result) continue;
+        if (result.type === "scvU32") return result.u32;
+        if (result.type === "scvU64") return Number(result.u64);
+        if (result.type === "scvI32") return Number(result.i32);
+        if (result.type === "scvI64") return Number(result.i64);
+      } catch {
+        // Fall through to the next known naming variant.
+      }
+    }
+    return 0;
+  }
+
+  /**
+   * Query the current factory fee-state version.
+   *
+   * @returns The fee-state version applied by the factory contract.
+   */
+  async getFeeStateVersion(): Promise<number> {
+    for (const methodName of ["get_fee_state_version", "fee_state_version"]) {
+      try {
+        const op = this.contract.call(methodName);
+        const result = await this.simulateRead(op);
+        if (!result) continue;
+        if (result.type === "scvU32") return result.u32;
+        if (result.type === "scvU64") return Number(result.u64);
+        if (result.type === "scvI32") return Number(result.i32);
+        if (result.type === "scvI64") return Number(result.i64);
+      } catch {
+        // Fall through to the next known naming variant.
+      }
+    }
+    return 0;
+  }
+
+  /**
    * Query the current fee parameters from factory storage.
    *
    * @returns Protocol-wide fee configuration including min/max fee bounds,
