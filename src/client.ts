@@ -1,7 +1,8 @@
 import {
-  SorobanRpc,
+  rpc,
   TransactionBuilder,
   Transaction,
+  Account,
   xdr,
 } from '@stellar/stellar-sdk';
 import { CoralSwapConfig, NetworkConfig, NETWORK_CONFIGS, DEFAULTS } from '@/config';
@@ -20,6 +21,10 @@ import { ConnectionPool } from '@/utils/connection-pool';
 import { buildSimulationResult } from '@/utils/simulation';
 import { RateLimiter } from '@/utils/rate-limiter';
 import { withRetry, RetryOptions, isRetryable } from '@/utils/retry';
+import { validateRpcUrls, getRpcUrlScheme } from '@/utils/rpc-url';
+import { TransactionComposer } from '@/transaction-composer';
+import { TypedEventCursor } from '@/utils/event-cursor';
+import { EventCursorOptions } from '@/utils/event-cursor';
 export { KeypairSigner, PollingStrategy, PollingOptions };
 
 /**
@@ -39,12 +44,17 @@ export class CoralSwapClient {
   network: Network;
   config: CoralSwapConfig;
   networkConfig: NetworkConfig;
-  private _server: SorobanRpc.Server;
+  private _server: rpc.Server;
   private _rpcUrls: string[] = [];
   private _activeRpcUrl: string;
   private _connectionPool: ConnectionPool;
   private signer: Signer | null = null;
   private _publicKeyCache: string | null = null;
+  /**
+   * Serializes transaction lifecycles so concurrent submissions cannot build
+   * transactions from the same account sequence number (nonce).
+   */
+  private _submissionQueue: Promise<void> = Promise.resolve();
   private _factory: FactoryClient | null = null;
   private _router: RouterClient | null = null;
   private _factoryModule: FactoryModule | null = null;
@@ -63,21 +73,26 @@ export class CoralSwapClient {
    * @private
    */
   private async executeWithFallback<T>(
-      fn: (server: SorobanRpc.Server) => Promise<T>,
-      label: string,
+    fn: (server: rpc.Server) => Promise<T>,
+    label: string,
   ): Promise<T> {
-    const options: RetryOptions = {
-      maxRetries: this.config.maxRetries ?? DEFAULTS.maxRetries,
-      baseDelayMs: this.config.retryDelayMs ?? DEFAULTS.retryDelayMs,
-      maxDelayMs: this.config.maxRetryDelayMs ?? DEFAULTS.maxRetryDelayMs,
-    };
+    const options: RetryOptions = this.getRetryOptions();
 
     let lastError: unknown;
 
     for (let attempt = 0; attempt < this._connectionPool.size; attempt++) {
-      let rpcUrl: string;
+      const rpcUrl = this._connectionPool.getEndpoint();
+
+      if (rpcUrl !== this._activeRpcUrl) {
+        this.server = this.createRpcServer(rpcUrl);
+        this._poller = null;
+        this._activeRpcUrl = rpcUrl;
+        this._factory = null;
+        this._router = null;
+      }
+
       try {
-        return await withRetry(
+        const result = await withRetry(
             async () => {
               // Acquire a rate-limiter token per dispatch attempt so retries
               // and fallback-endpoint rotations are each individually throttled.
@@ -88,33 +103,12 @@ export class CoralSwapClient {
             },
             options,
             this.logger,
-            `${label}[RPC:${this._currentRpcIndex}]`,
-        rpcUrl = this._connectionPool.getEndpoint();
-      } catch (err) {
-        throw err;
-      }
-
-      if (rpcUrl !== this._activeRpcUrl) {
-        this._server = this.createRpcServer(rpcUrl);
-        this._poller = null;
-        this._activeRpcUrl = rpcUrl;
-        this.networkConfig.rpcUrl = rpcUrl;
-      }
-
-      try {
-        const result = await withRetry(
-          () => fn(this.server),
-          options,
-          this.logger,
-          `${label}[RPC:${rpcUrl}]`,
+            `${label}[RPC:${rpcUrl}]`,
         );
 
         this._connectionPool.reportSuccess(rpcUrl);
         return result;
       } catch (err) {
-        // Non-retryable errors (e.g. ValidationError, bad simulation) must surface
-        // immediately — cycling through every fallback endpoint cannot fix them and
-        // only multiplies latency for a failure that retrying can never resolve.
         if (!isRetryable(err)) {
           throw err;
         }
@@ -135,7 +129,7 @@ export class CoralSwapClient {
   /**
    * Get the current Soroban RPC server instance.
    */
-  get server(): SorobanRpc.Server {
+  get server(): rpc.Server {
     return this._server;
   }
 
@@ -144,21 +138,25 @@ export class CoralSwapClient {
    *
    * Primarily used in tests to inject a mock server without a live network.
    */
-  set server(s: SorobanRpc.Server) {
+  set server(s: rpc.Server) {
     this._server = s;
     this._poller = null;
   }
 
   /**
-   * Create a new SorobanRpc.Server instance with custom options.
+   * Create a new rpc.Server instance with custom options.
    * @private
    */
-  private createRpcServer(url: string): SorobanRpc.Server {
+  private createRpcServer(url: string): rpc.Server {
+    // Cleartext (http/ws) and wss endpoints must opt in to `allowHttp` --
+    // stellar-sdk otherwise throws for anything that is not https.
+    const scheme = getRpcUrlScheme(url);
     const options: Record<string, unknown> = {
       headers: this.config.rpcHeaders,
       ...this.config.fetchOptions,
+      allowHttp: scheme !== 'https',
     };
-    return new SorobanRpc.Server(url, options);
+    return new rpc.Server(url, options);
   }
 
   /**
@@ -194,6 +192,9 @@ export class CoralSwapClient {
     } else {
       this._rpcUrls = [this.networkConfig.rpcUrl];
     }
+
+    // Reject cleartext / invalid RPC endpoints before anything can be sent.
+    validateRpcUrls(this._rpcUrls, this.network);
 
     // Keep networkConfig.rpcUrl in sync with the active RPC URL
     this.networkConfig.rpcUrl = this._rpcUrls[0];
@@ -316,6 +317,45 @@ export class CoralSwapClient {
   }
 
   /**
+   * Create a transaction composer for atomic multi-operation transactions.
+   */
+  transactionComposer(): TransactionComposer {
+    return new TransactionComposer(this);
+  }
+
+  /**
+   * Open a single, filtered, cursor-pagination-aware stream of typed events
+   * for a contract.
+   *
+   * Returns a {@link TypedEventCursor} that applies the given topic filters at
+   * the cursor level (reusing the shared {@link EventCursor} pagination and
+   * ledger-window semantics) and decodes each page into typed
+   * {@link CoralSwapEvent}s. Multiple listeners can compose over the one cursor
+   * instead of each re-issuing `getEvents` and re-filtering per module.
+   *
+   * @param contractId - Contract whose events should be streamed (e.g. a pair
+   *   address).
+   * @param filters - Topic symbols to filter on, e.g. `["swap", "sync"]`. Omit
+   *   to receive all recognised CoralSwap topics.
+   * @param options - Optional ledger-window / page-limit defaults forwarded to
+   *   the underlying cursor.
+   * @returns A typed, cursor-pagination-aware event cursor.
+   * @example
+   * const cursor = client.allEvents(pairAddress, ['swap', 'sync']);
+   * const events = await cursor.scan({ limit: 500 });
+   * for await (const event of cursor.stream()) {
+   *   if (event.type === 'swap') console.log(event.amountIn);
+   * }
+   */
+  allEvents(
+    contractId: string,
+    filters?: string[],
+    options?: EventCursorOptions,
+  ): TypedEventCursor {
+    return new TypedEventCursor(this.server, contractId, filters, options);
+  }
+
+  /**
    * Switch the client to a different network.
    *
    * @param network - The target network.
@@ -334,6 +374,9 @@ export class CoralSwapClient {
     } else {
       this._rpcUrls = [this.networkConfig.rpcUrl];
     }
+
+    // Reject cleartext / invalid RPC endpoints before anything can be sent.
+    validateRpcUrls(this._rpcUrls, network);
 
     // Keep networkConfig.rpcUrl in sync with the active RPC URL
     this.networkConfig.rpcUrl = this._rpcUrls[0];
@@ -427,6 +470,26 @@ export class CoralSwapClient {
       operations: xdr.Operation[],
       source?: string,
   ): Promise<Result<{ txHash: string; ledger: number }>> {
+    // Soroban account sequences are nonces. Queue the complete
+    // getAccount -> build -> simulate -> sign -> send -> poll lifecycle,
+    // rather than only the final send, so two callers cannot use the same
+    // sequence number. The queue is settled on both success and failure so a
+    // failed submission never permanently blocks later submissions.
+    const submission = this._submissionQueue.then(() =>
+      this.submitTransactionUnlocked(operations, source),
+    );
+    this._submissionQueue = submission.then(
+      () => undefined,
+      () => undefined,
+    );
+    return submission;
+  }
+
+  /** Execute one transaction lifecycle. Calls are serialized by submitTransaction. */
+  private async submitTransactionUnlocked(
+      operations: xdr.Operation[],
+      source?: string,
+  ): Promise<Result<{ txHash: string; ledger: number }>> {
     try {
       const sourceKey = source ?? (await this.resolvePublicKey());
 
@@ -456,9 +519,9 @@ export class CoralSwapClient {
           (server) => server.simulateTransaction(tx),
           "simulateTransaction",
       );
-      if (!SorobanRpc.Api.isSimulationSuccess(sim)) {
+      if (!rpc.Api.isSimulationSuccess(sim)) {
         const simSummary = {
-          error: SorobanRpc.Api.isSimulationError(sim) ? sim.error : 'restore required',
+          error: rpc.Api.isSimulationError(sim) ? sim.error : 'restore required',
           latestLedger: sim.latestLedger,
         };
         this.logger?.error("simulateTransaction: simulation failed", simSummary);
@@ -476,7 +539,7 @@ export class CoralSwapClient {
       }
       this.logger?.debug("simulateTransaction: success");
 
-      const preparedTx = SorobanRpc.assembleTransaction(tx, sim).build();
+      const preparedTx = rpc.assembleTransaction(tx, sim).build();
 
       if (!this.signer) {
         return {
@@ -489,7 +552,7 @@ export class CoralSwapClient {
         };
       }
 
-      const signedXdr = await this.signer.signTransaction(preparedTx.toXDR());
+      const signedXdr = await this.signer.signTransaction(preparedTx.toXdr());
       const signedTx = new Transaction(
           signedXdr,
           this.networkConfig.networkPassphrase,
@@ -562,7 +625,7 @@ export class CoralSwapClient {
   /**
    * Simulate a transaction without submitting (dry-run).
    *
-   * **Legacy form** — returns the raw `SorobanRpc.Api.SimulateTransactionResponse`
+   * **Legacy form** — returns the raw `rpc.Api.SimulateTransactionResponse`
    * for backward compatibility.
    *
    * @param operations - Array of operations to simulate
@@ -570,12 +633,12 @@ export class CoralSwapClient {
    * @returns Raw simulation response from the RPC
    * @example
    * const sim = await client.simulateTransaction([op]);
-   * if (SorobanRpc.Api.isSimulationSuccess(sim)) { ... }
+   * if (rpc.Api.isSimulationSuccess(sim)) { ... }
    */
   async simulateTransaction(
       operations: xdr.Operation[],
       source?: string,
-  ): Promise<SorobanRpc.Api.SimulateTransactionResponse>;
+  ): Promise<rpc.Api.SimulateTransactionResponse>;
 
   /**
    * Simulate a transaction without submitting (enhanced dry-run).
@@ -622,7 +685,7 @@ export class CoralSwapClient {
   async simulateTransaction(
       operations: xdr.Operation[],
       sourceOrOptions?: string | SimulateTransactionOptions,
-  ): Promise<SorobanRpc.Api.SimulateTransactionResponse | SimulateTransactionResult> {
+  ): Promise<rpc.Api.SimulateTransactionResponse | SimulateTransactionResult> {
     // Distinguish enhanced form (options object) from legacy form (string or undefined).
     const isEnhanced =
         sourceOrOptions !== undefined && typeof sourceOrOptions !== 'string';
@@ -673,7 +736,7 @@ export class CoralSwapClient {
         'simulateTransaction_simulate',
     );
     this.logger?.debug('simulateTransaction (dry-run): completed', {
-      success: SorobanRpc.Api.isSimulationSuccess(sim),
+      success: rpc.Api.isSimulationSuccess(sim),
       enhanced: isEnhanced,
     });
 
@@ -719,13 +782,53 @@ export class CoralSwapClient {
   }
 
   /**
+   * Fetch the current on-chain account state for a public key, including
+   * its sequence number, using this client's configured RPC endpoints
+   * with the same retry/fallback behavior as {@link submitTransaction}.
+   *
+   * Third-party signer authors building a raw `TransactionBuilder`
+   * envelope by hand (rather than calling {@link submitTransaction} or
+   * {@link simulateTransaction}) can use this to fetch the current
+   * sequence number for the account they are signing with, against the
+   * exact network this client is configured for -- without standing up
+   * a second `rpc.Server` themselves.
+   *
+   * @param publicKey - Account to look up. Defaults to this client's own
+   *   resolved public key (see {@link resolvePublicKey}).
+   * @example
+   * const account = await client.getAccount();
+   * const tx = new TransactionBuilder(account, {
+   *   fee: '100',
+   *   networkPassphrase: client.networkConfig.networkPassphrase,
+   * })
+   *   .addOperation(op)
+   *   .setTimeout(30)
+   *   .build();
+   * tx.sign(Keypair.fromSecret(mySecretKey));
+   */
+  async getAccount(publicKey?: string): Promise<Account> {
+    const sourceKey = publicKey ?? (await this.resolvePublicKey());
+    return this.executeWithFallback(
+        (server) => server.getAccount(sourceKey),
+        "getAccount",
+    );
+  }
+
+  /**
    * Internal helper to get structured retry options.
+   *
+   * A configured `deadlineMs` is a relative total-time budget per RPC call,
+   * so it is converted into an absolute deadline timestamp at call time.
    */
   private getRetryOptions(): RetryOptions {
-    return {
+    const options: RetryOptions = {
       maxRetries: this.config.maxRetries ?? DEFAULTS.maxRetries,
       baseDelayMs: this.config.retryDelayMs ?? DEFAULTS.retryDelayMs,
       maxDelayMs: this.config.maxRetryDelayMs ?? DEFAULTS.maxRetryDelayMs,
     };
+    if (typeof this.config.deadlineMs === "number") {
+      options.deadlineMs = Date.now() + this.config.deadlineMs;
+    }
+    return options;
   }
 }

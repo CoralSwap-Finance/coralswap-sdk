@@ -32,24 +32,32 @@ const DCAParamsSchema = z
     tokenIn: z
       .string()
       .nonempty({ message: 'tokenIn must not be empty' })
-      .refine(isValidAddress, {
-        message: (value) => `tokenIn is not a valid Stellar address: ${value}`,
-      }),
+      .superRefine(
+      (value, ctx) => {
+        if (!isValidAddress(value)) {
+          ctx.addIssue({ code: z.ZodIssueCode.custom, message: `tokenIn is not a valid Stellar address: ${value}` });
+        }
+      },
+      ),
     tokenOut: z
       .string()
       .nonempty({ message: 'tokenOut must not be empty' })
-      .refine(isValidAddress, {
-        message: (value) => `tokenOut is not a valid Stellar address: ${value}`,
-      }),
+      .superRefine(
+      (value, ctx) => {
+        if (!isValidAddress(value)) {
+          ctx.addIssue({ code: z.ZodIssueCode.custom, message: `tokenOut is not a valid Stellar address: ${value}` });
+        }
+      },
+      ),
     amountPerInterval: z.bigint(),
     intervalSeconds: z
-      .number({ invalid_type_error: 'intervalSeconds must be an integer' })
+      .number({ error: 'intervalSeconds must be an integer' })
       .int({ message: 'intervalSeconds must be an integer' })
       .min(MIN_INTERVAL_SECONDS, {
         message: `intervalSeconds must be at least ${MIN_INTERVAL_SECONDS}`,
       }),
     totalIntervals: z
-      .number({ invalid_type_error: 'totalIntervals must be an integer' })
+      .number({ error: 'totalIntervals must be an integer' })
       .int({ message: 'totalIntervals must be an integer' })
       .min(MIN_TOTAL_INTERVALS, {
         message: `totalIntervals must be at least ${MIN_TOTAL_INTERVALS}`,
@@ -57,9 +65,13 @@ const DCAParamsSchema = z
     pairAddress: z
       .string()
       .nonempty({ message: 'pairAddress must not be empty' })
-      .refine(isValidAddress, {
-        message: (value) => `pairAddress is not a valid Stellar address: ${value}`,
-      }),
+      .superRefine(
+      (value, ctx) => {
+        if (!isValidAddress(value)) {
+          ctx.addIssue({ code: z.ZodIssueCode.custom, message: `pairAddress is not a valid Stellar address: ${value}` });
+        }
+      },
+      ),
   })
   .superRefine((params, ctx) => {
     if (params.tokenIn === params.tokenOut) {
@@ -269,7 +281,9 @@ export class DCAModule {
    * @throws {ValidationError} If `owner` is not a valid Stellar address
    */
   async getDCASchedules(owner: string): Promise<DCASchedule[]> {
-    validateAddress(owner, 'owner');
+    if (!isValidAddress(owner)) {
+      throw new ValidationError(`owner is not a valid Stellar address: ${owner}`);
+    }
 
     const contract = new Contract(this.contractAddress);
     const op = contract.call('get_schedules', new Address(owner).toScVal());
@@ -280,10 +294,10 @@ export class DCAModule {
       return [];
     }
 
-    const items = sim.returnValue.vec();
+    const items = sim.returnValue.type === "scvVec" ? sim.returnValue.vec : [];
     if (!items) return [];
 
-    return items.map((v) => this.decodeSchedule(v));
+    return items.map((v: xdr.ScVal) => this.decodeSchedule(v));
   }
 
   /**

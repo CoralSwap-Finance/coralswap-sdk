@@ -1,12 +1,13 @@
 import {
   Contract,
-  SorobanRpc,
+  rpc,
   TransactionBuilder,
   xdr,
   Address,
   nativeToScVal,
 } from "@stellar/stellar-sdk";
 import { withRetry, RetryOptions } from "@/utils/retry";
+import { decodeI128, decodeString, decodeU32 } from "@/utils/scval";
 import { Logger } from "@/types/common";
 
 /**
@@ -17,7 +18,7 @@ import { Logger } from "@/types/common";
  */
 export class LPTokenClient {
   private contract: Contract;
-  private server: SorobanRpc.Server;
+  private server: rpc.Server;
   private networkPassphrase: string;
   private retryOptions: RetryOptions;
   private logger?: Logger;
@@ -34,7 +35,7 @@ export class LPTokenClient {
    */
   constructor(
     contractAddress: string,
-    server: SorobanRpc.Server,
+    server: rpc.Server,
     networkPassphrase: string,
     retryOptions: RetryOptions,
     logger?: Logger,
@@ -60,10 +61,7 @@ export class LPTokenClient {
     );
     const result = await this.simulateRead(op);
     if (!result) return 0n;
-    return (
-      BigInt(result.i128().lo().toString()) +
-      (BigInt(result.i128().hi().toString()) << 64n)
-    );
+    return decodeI128(result);
   }
 
   /**
@@ -75,10 +73,7 @@ export class LPTokenClient {
     const op = this.contract.call("total_supply");
     const result = await this.simulateRead(op);
     if (!result) return 0n;
-    return (
-      BigInt(result.i128().lo().toString()) +
-      (BigInt(result.i128().hi().toString()) << 64n)
-    );
+    return decodeI128(result);
   }
 
   /**
@@ -96,10 +91,7 @@ export class LPTokenClient {
     );
     const result = await this.simulateRead(op);
     if (!result) return 0n;
-    return (
-      BigInt(result.i128().lo().toString()) +
-      (BigInt(result.i128().hi().toString()) << 64n)
-    );
+    return decodeI128(result);
   }
 
   /**
@@ -166,9 +158,9 @@ export class LPTokenClient {
     ]);
 
     return {
-      name: nameResult?.str().toString() ?? "CoralSwap LP",
-      symbol: symbolResult?.str().toString() ?? "CORAL-LP",
-      decimals: decimalsResult?.u32() ?? 7,
+      name: nameResult ? decodeString(nameResult) : "CoralSwap LP",
+      symbol: symbolResult ? decodeString(symbolResult) : "CORAL-LP",
+      decimals: decimalsResult ? decodeU32(decimalsResult) : 7,
     };
   }
 
@@ -204,7 +196,7 @@ export class LPTokenClient {
       this.logger,
       "LPTokenClient_simulateTransaction",
     );
-    if (SorobanRpc.Api.isSimulationSuccess(sim) && sim.result) {
+    if (rpc.Api.isSimulationSuccess(sim) && sim.result) {
       return sim.result.retval;
     }
     return null;

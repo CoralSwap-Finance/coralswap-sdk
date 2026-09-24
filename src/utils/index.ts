@@ -38,6 +38,19 @@ export {
 export type { SimulationResult, SimulationResourceEstimate } from './simulation';
 
 export {
+  decodeI128,
+  decodeI32,
+  decodeI64,
+  decodeU32,
+  decodeU64,
+  decodeBool,
+  decodeAddress,
+  decodeString,
+  getMapValue,
+  mapValue,
+} from "./scval";
+
+export {
   withRetry,
   isRetryable,
   sleep,
@@ -61,6 +74,16 @@ export {
 } from './validation';
 
 export {
+  getRpcUrlScheme,
+  isSecureRpcUrl,
+  isCleartextRpcAllowed,
+  validateRpcUrls,
+  SECURE_RPC_SCHEMES,
+  ALLOWED_RPC_SCHEMES,
+} from './rpc-url';
+export type { RpcUrlScheme } from './rpc-url';
+
+export {
   batchRequest,
   batchRequestOrThrow,
   batchCall,
@@ -75,8 +98,8 @@ export type { RateLimiterOptions } from './rate-limiter';
 export { estimateGas } from './gas';
 export type { SimulateFn } from './gas';
 
-export { waitNextLedger } from './ledger';
-export type { WaitNextLedgerOptions } from './ledger';
+export { waitNextLedger, ledgerToApproxTime, LEDGER_CLOSE_INTERVAL_SECONDS } from './ledger';
+export type { WaitNextLedgerOptions, LedgerHead } from './ledger';
 
 export {
   EventParser,
@@ -86,7 +109,8 @@ export {
 } from './events';
 export type { DecodeEventsOptions } from './events';
 
-export { EventCursor } from './event-cursor';
+export { EventCursor, TypedEventCursor, decodeEventTopic, MIN_START_LEDGER, MAX_EVENT_LIMIT } from './event-cursor';
+export type { EventCursorOptions, TypedEventScanParams } from './event-cursor';
 export { ConnectionPool } from './connection-pool';
 
 export {

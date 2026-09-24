@@ -50,8 +50,8 @@ describe("Network Switching", () => {
       NETWORK_CONFIGS[Network.MAINNET].networkPassphrase,
     );
     expect(client.server).not.toBe(initialServer);
-    expect((client.server as any).rpcUrl).toBe(
-      NETWORK_CONFIGS[Network.MAINNET].rpcUrl,
+    expect(String((client.server as any).serverURL)).toBe(
+      NETWORK_CONFIGS[Network.MAINNET].rpcUrl + "/",
     );
   });
 
@@ -110,7 +110,7 @@ describe("Network Switching", () => {
 
     expect(client.network).toBe(Network.MAINNET);
     expect(client.networkConfig.rpcUrl).toBe(customRpc);
-    expect((client.server as any).rpcUrl).toBe(customRpc);
+    expect(String((client.server as any).serverURL)).toBe(customRpc + "/");
   });
 });
 
@@ -199,5 +199,43 @@ describe("Staging Network Configuration", () => {
     expect(client.networkConfig.rpcUrl).toBe(
       NETWORK_CONFIGS[Network.MAINNET].rpcUrl,
     );
+  });
+});
+
+describe("RPC URL scheme validation on setNetwork", () => {
+  const TEST_SECRET =
+    "SB6K2AINTGNYBFX4M7TRPGSKQ5RKNOXXWB7UZUHRYOVTM7REDUGECKZU";
+
+  it("rejects cleartext http when switching to mainnet", () => {
+    const client = new CoralSwapClient({
+      network: Network.TESTNET,
+      secretKey: TEST_SECRET,
+    });
+
+    expect(() => client.setNetwork(Network.MAINNET, "http://localhost:8000")).toThrow(
+      /cleartext/i,
+    );
+  });
+
+  it("allows cleartext http when switching to testnet", () => {
+    const client = new CoralSwapClient({
+      network: Network.MAINNET,
+      secretKey: TEST_SECRET,
+    });
+
+    client.setNetwork(Network.TESTNET, "http://localhost:8000");
+
+    expect(client.networkConfig.rpcUrl).toBe("http://localhost:8000");
+  });
+
+  it("allows https when switching to mainnet", () => {
+    const client = new CoralSwapClient({
+      network: Network.TESTNET,
+      secretKey: TEST_SECRET,
+    });
+
+    client.setNetwork(Network.MAINNET, "https://soroban.stellar.org");
+
+    expect(client.networkConfig.rpcUrl).toBe("https://soroban.stellar.org");
   });
 });

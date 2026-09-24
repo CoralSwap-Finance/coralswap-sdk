@@ -9,17 +9,18 @@ import {
 } from "@/types/flash-loan";
 import { FlashLoanConfig } from "@/types/pool";
 import { GasEstimate } from "@/types/gas";
+import { FlashLoanContractEvent } from "@/types/events";
 import {
   calculateRepayment,
   validateFeeFloor,
 } from "@/contracts/flash-receiver";
-import { FlashLoanError, TransactionError } from "@/errors";
+import { FlashLoanError } from "@/errors";
 import { FeeModule } from "./fees";
 import { validateAddress, validatePositiveAmount } from "@/utils/validation";
 import { estimateGas } from "@/utils/gas";
 import { DEFAULTS } from "@/config";
 import { decodeEvents } from "@/utils/events";
-import { SorobanRpc, scValToNative, xdr } from "@stellar/stellar-sdk";
+import { rpc, scValToNative, xdr } from "@stellar/stellar-sdk";
 import { getTransactionStatus, shouldRetrySubmission } from "@/utils/idempotent-resubmission";
 
 /**
@@ -302,21 +303,24 @@ export class FlashLoanModule {
           try {
             // Fall back to decodeEvents
             const events = decodeEvents(
-              txResult as SorobanRpc.Api.GetSuccessfulTransactionResponse,
+              txResult as rpc.Api.GetSuccessfulTransactionResponse,
               {
                 contractId: request.pairAddress,
               },
             );
 
             // Look for FlashLoanExecuted or FlashLoanFailed events
-            const flashLoanEvent = events.find((e) => e.type === "flash_loan");
-            if (flashLoanEvent && flashLoanEvent.type === "flash_loan") {
+            const flashLoanEvent = events.find(
+              (e): e is FlashLoanContractEvent => e.type === "flash_loan",
+            );
+            if (flashLoanEvent) {
               event = {
                 type: "FlashLoanExecuted",
                 borrowedAmount: flashLoanEvent.amount,
                 feePaid: flashLoanEvent.fee,
                 callbackAddress: flashLoanEvent.borrower,
                 token: request.token,
+                decodeStatus: flashLoanEvent.decodeStatus,
               };
             }
           } catch {
@@ -325,24 +329,26 @@ export class FlashLoanModule {
 
           if (!event && hasRawEvents) {
             // Fallback: raw event accessor existed (older contract) but no match;
-            // synthesise an event from request values.
+            // synthesise an event from request values with explicit partial decodeStatus.
             event = {
               type: "FlashLoanExecuted",
               borrowedAmount: request.amount,
               feePaid: feeEstimate.feeAmount,
               callbackAddress: request.receiverAddress,
               token: request.token,
+              decodeStatus: "partial",
             };
           }
         }
       } else {
-        // Non-SUCCESS status: provide fallback event from request values
+        // Non-SUCCESS status: provide fallback event from request values with explicit partial decodeStatus
         event = {
           type: "FlashLoanExecuted",
           borrowedAmount: request.amount,
           feePaid: feeEstimate.feeAmount,
           callbackAddress: request.receiverAddress,
           token: request.token,
+          decodeStatus: "partial",
         };
       }
     } catch (err) {
@@ -427,9 +433,9 @@ export class FlashLoanModule {
   }
 
   private async parseFlashLoanEvents(
-    txResult: SorobanRpc.Api.GetSuccessfulTransactionResponse,
+    txResult: rpc.Api.GetSuccessfulTransactionResponse,
     request: FlashLoanRequest,
-    feeAmount: bigint,
+    _feeAmount: bigint,
   ): Promise<FlashLoanExecutedEvent | undefined> {
     try {
       const rawEvents = this.getRawEvents(txResult);
@@ -453,14 +459,17 @@ export class FlashLoanModule {
         const events = decodeEvents(txResult, {
           contractId: request.pairAddress,
         });
-        const flashLoanEvent = events.find((e) => e.type === "flash_loan");
-        if (flashLoanEvent && flashLoanEvent.type === "flash_loan") {
+        const flashLoanEvent = events.find(
+          (e): e is FlashLoanContractEvent => e.type === "flash_loan",
+        );
+        if (flashLoanEvent) {
           return {
             type: "FlashLoanExecuted",
             borrowedAmount: flashLoanEvent.amount,
             feePaid: flashLoanEvent.fee,
             callbackAddress: flashLoanEvent.borrower,
             token: request.token,
+            decodeStatus: flashLoanEvent.decodeStatus,
           };
         }
       } catch {
@@ -473,8 +482,7 @@ export class FlashLoanModule {
 
   private getRawEvents(txResult: any): xdr.ContractEvent[] {
     try {
-      const sorobanMeta = txResult.resultMetaXdr.v3().sorobanMeta();
-      return sorobanMeta?.events() ?? [];
+      return txResult?.resultMetaXdr?.v3?.sorobanMeta?.events ?? [];
     } catch {
       return [];
     }
@@ -483,8 +491,8 @@ export class FlashLoanModule {
   private hasEventsAccessor(txResult: any): boolean {
     try {
       return (
-        typeof txResult?.resultMetaXdr?.v3()?.sorobanMeta()?.events ===
-        "function"
+        Array.isArray(txResult?.resultMetaXdr?.v3?.sorobanMeta?.events) &&
+        txResult.resultMetaXdr.v3.sorobanMeta.events.length > 0
       );
     } catch {
       return false;
@@ -495,16 +503,18 @@ export class FlashLoanModule {
     events: xdr.ContractEvent[],
   ): FlashLoanExecutedEvent | null {
     for (const event of events) {
-      if (event.type().name !== "contract") continue;
+      if (event.type.name !== "contract") continue;
 
-      const topics = event.body().v0().topics();
+      const body = event.body;
+      if (body.type !== "v0") continue;
+      const topics = body.v0.topics;
       if (!topics.length) continue;
 
       const eventName = this.topicSymbol(topics[0]);
       if (eventName !== "FlashLoanExecuted") continue;
 
       try {
-        const data = scValToNative(event.body().v0().data()) as Record<
+        const data = scValToNative(body.v0.data) as Record<
           string,
           unknown
         >;
@@ -522,6 +532,7 @@ export class FlashLoanModule {
               "",
           ),
           token: String(data["token"] ?? ""),
+          decodeStatus: "complete",
         };
       } catch {
         continue;
@@ -534,16 +545,18 @@ export class FlashLoanModule {
     events: xdr.ContractEvent[],
   ): FlashLoanFailedEvent | null {
     for (const event of events) {
-      if (event.type().name !== "contract") continue;
+      if (event.type.name !== "contract") continue;
 
-      const topics = event.body().v0().topics();
+      const body = event.body;
+      if (body.type !== "v0") continue;
+      const topics = body.v0.topics;
       if (!topics.length) continue;
 
       const eventName = this.topicSymbol(topics[0]);
       if (eventName !== "FlashLoanFailed") continue;
 
       try {
-        const data = scValToNative(event.body().v0().data()) as Record<
+        const data = scValToNative(body.v0.data) as Record<
           string,
           unknown
         >;
@@ -557,6 +570,7 @@ export class FlashLoanModule {
           reason: String(
             data["reason"] ?? data["error"] ?? "callback reverted",
           ),
+          decodeStatus: "complete",
         };
       } catch {
         continue;
@@ -567,7 +581,7 @@ export class FlashLoanModule {
 
   private topicSymbol(topic: xdr.ScVal): string {
     try {
-      return topic.sym().toString();
+      return topic.type === "scvSymbol" ? topic.sym.toString() : "";
     } catch {
       return "";
     }

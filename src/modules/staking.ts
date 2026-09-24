@@ -1,6 +1,6 @@
 import {
   Contract,
-  SorobanRpc,
+  rpc,
   TransactionBuilder,
   xdr,
   Address,
@@ -14,17 +14,21 @@ import {
   VoteEligibility,
 } from "@/types/staking";
 import { Signer } from "@/types/common";
+import { RemoveLiquidityRequest, LiquidityResult } from "@/types/liquidity";
 import {
   ValidationError,
   TransactionError,
   CooldownError,
   StakingError,
 } from "@/errors";
-import { validateAddress } from "@/utils/validation";
+import {
+  validateAddress,
+  validatePositiveAmount,
+  validateNonNegativeAmount,
+  validateDistinctTokens,
+} from "@/utils/validation";
 import { isValidAddress } from "@/utils/addresses";
 import { z } from "zod";
-import { TransactionError, CooldownError, StakingError } from "@/errors";
-import { validateAddress, validatePositiveAmount } from "@/utils/validation";
 
 /**
  * Staking module — manages LP token staking for governance weight
@@ -53,13 +57,19 @@ const StakeOperationSchema = z.object({
   lpTokenAddress: z
     .string()
     .min(1, "lpTokenAddress must not be empty")
-    .refine(
-      (val) => isValidAddress(val),
-      (val) => ({ message: `lpTokenAddress is not a valid Stellar address: ${val}` }),
+    .superRefine(
+      (val, ctx) => {
+        if (!isValidAddress(val)) {
+          ctx.addIssue({ code: z.ZodIssueCode.custom, message: `lpTokenAddress is not a valid Stellar address: ${val}` });
+        }
+      },
     ),
-  amount: z.bigint().refine(
-    (val) => val > 0n,
-    (val) => ({ message: `amount must be greater than 0, got ${val}` }),
+  amount: z.bigint().superRefine(
+    (val, ctx) => {
+      if (val <= 0n) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: `amount must be greater than 0, got ${val}` });
+      }
+    },
   ),
 });
 
@@ -103,20 +113,35 @@ export class StakingModule {
    * const txHash = await staking.stake('CAAAA...', 1000n, mySigner);
    * ```
    */
+  buildStakeOperation(
+    lpTokenAddress: string,
+    amount: bigint,
+    publicKey: string,
+  ): xdr.Operation {
+    validateAddress(lpTokenAddress, "lpTokenAddress");
+    validatePositiveAmount(amount, "amount");
+
+    const contract = new Contract(lpTokenAddress);
+
+    return contract.call(
+      "stake",
+      nativeToScVal(Address.fromString(publicKey), { type: "address" }),
+      nativeToScVal(amount, { type: "i128" }),
+    );
+  }
+
   async stake(
     lpTokenAddress: string,
     amount: bigint,
     signer: Signer,
   ): Promise<string> {
     validateStakeParams(lpTokenAddress, amount);
-
     const publicKey = await signer.publicKey();
-    const contract = new Contract(lpTokenAddress);
 
-    const op = contract.call(
-      "stake",
-      nativeToScVal(Address.fromString(publicKey), { type: "address" }),
-      nativeToScVal(amount, { type: "i128" }),
+    const op = this.buildStakeOperation(
+      lpTokenAddress,
+      amount,
+      publicKey,
     );
 
     const result = await this.client.submitTransaction([op]);
@@ -164,7 +189,7 @@ export class StakingModule {
       return { amount: 0n, stakedAt: 0, cooldownEnd: 0 };
     }
 
-    const fields = result.map();
+    const fields = result.type === "scvMap" ? result.map : undefined;
     return {
       amount: this.extractI128(fields, "amount"),
       stakedAt: this.extractU64(fields, "staked_at"),
@@ -200,7 +225,8 @@ export class StakingModule {
     }
 
     // APY is returned as basis points (u32), convert to decimal
-    return result.u32() / 10000;
+    const apyVal = result.type === "scvU32" ? result.u32 : 0;
+    return apyVal / 10000;
   }
 
   /**
@@ -246,7 +272,7 @@ export class StakingModule {
       };
     }
 
-    const fields = result.map();
+    const fields = result.type === "scvMap" ? result.map : undefined;
     return {
       pendingRewards: this.extractI128(fields, "pending_rewards"),
       claimedRewards: this.extractI128(fields, "claimed_rewards"),
@@ -328,9 +354,31 @@ export class StakingModule {
     amount: bigint,
     signer: Signer,
   ): Promise<string> {
-    validateStakeParams(lpTokenAddress, amount);
-
     const publicKey = await signer.publicKey();
+    const op = await this.buildUnstakeOperation(lpTokenAddress, amount, publicKey);
+
+    const result = await this.client.submitTransaction([op]);
+
+    if (!result.success) {
+      throw new TransactionError(
+        `Unstake failed: ${result.error?.message ?? "Unknown error"}`,
+        result.txHash,
+      );
+    }
+
+    return result.txHash!;
+  }
+
+  /**
+   * Validate cooldown/balance and build the `unstake` operation, without
+   * submitting it. Shared by {@link unstake} and {@link unstakeAndWithdraw}.
+   */
+  private async buildUnstakeOperation(
+    lpTokenAddress: string,
+    amount: bigint,
+    publicKey: string,
+  ): Promise<xdr.Operation> {
+    validateStakeParams(lpTokenAddress, amount);
 
     // Enforce cooldown period
     const cooldownStatus = await this.getCooldownStatus(
@@ -355,22 +403,100 @@ export class StakingModule {
 
     const contract = new Contract(lpTokenAddress);
 
-    const op = contract.call(
+    return contract.call(
       "unstake",
       nativeToScVal(Address.fromString(publicKey), { type: "address" }),
       nativeToScVal(amount, { type: "i128" }),
     );
+  }
 
-    const result = await this.client.submitTransaction([op]);
+  /**
+   * Unstake LP tokens and withdraw them from the pool as a single atomic
+   * transaction, once cooldown has elapsed.
+   *
+   * Unstaking (subject to cooldown) followed by withdrawing from the pool is
+   * a common exit flow, normally done as two sequential transactions. This
+   * composes both operations with a {@link TransactionComposer} so a failure
+   * in either leg rolls back both — there's no window where LP tokens have
+   * been unstaked but liquidity hasn't been withdrawn, or vice versa.
+   *
+   * @param lpTokenAddress - The contract address of the staked LP token.
+   * @param amount - The amount of LP tokens to unstake (must be > 0).
+   * @param removeLiquidityRequest - Parameters for the liquidity withdrawal.
+   *   `removeLiquidityRequest.liquidity` should match `amount`.
+   * @param signer - The signer authorizing both operations.
+   * @returns The withdrawal amounts plus the transaction hash/ledger of the
+   *   single atomic transaction.
+   * @throws {ValidationError} If amount or liquidity-request fields are invalid.
+   * @throws {CooldownError} If the cooldown period has not elapsed.
+   * @throws {StakingError} If unstake amount exceeds staked balance.
+   * @throws {TransactionError} If the composed transaction is rejected — in
+   *   that case neither the unstake nor the withdrawal took effect.
+   *
+   * @example
+   * ```ts
+   * const result = await staking.unstakeAndWithdraw(
+   *   lpTokenAddr,
+   *   500n,
+   *   {
+   *     tokenA: 'CAAA...',
+   *     tokenB: 'CBBB...',
+   *     liquidity: 500n,
+   *     amountAMin: 0n,
+   *     amountBMin: 0n,
+   *     to: myAddress,
+   *   },
+   *   mySigner,
+   * );
+   * ```
+   */
+  async unstakeAndWithdraw(
+    lpTokenAddress: string,
+    amount: bigint,
+    removeLiquidityRequest: RemoveLiquidityRequest,
+    signer: Signer,
+  ): Promise<LiquidityResult> {
+    validateAddress(removeLiquidityRequest.tokenA, "tokenA");
+    validateAddress(removeLiquidityRequest.tokenB, "tokenB");
+    validateDistinctTokens(removeLiquidityRequest.tokenA, removeLiquidityRequest.tokenB);
+    validateAddress(removeLiquidityRequest.to, "to");
+    validatePositiveAmount(removeLiquidityRequest.liquidity, "liquidity");
+    validateNonNegativeAmount(removeLiquidityRequest.amountAMin, "amountAMin");
+    validateNonNegativeAmount(removeLiquidityRequest.amountBMin, "amountBMin");
 
-    if (!result.success) {
+    const publicKey = await signer.publicKey();
+    const unstakeOp = await this.buildUnstakeOperation(lpTokenAddress, amount, publicKey);
+
+    const deadline = removeLiquidityRequest.deadline ?? this.client.getDeadline();
+    const withdrawOp = this.client.router.buildRemoveLiquidity(
+      removeLiquidityRequest.to,
+      removeLiquidityRequest.tokenA,
+      removeLiquidityRequest.tokenB,
+      removeLiquidityRequest.liquidity,
+      removeLiquidityRequest.amountAMin,
+      removeLiquidityRequest.amountBMin,
+      deadline,
+    );
+
+    const composer = this.client.transactionComposer();
+    composer.addOperation(unstakeOp).addOperation(withdrawOp);
+
+    const result = await composer.submit();
+
+    if (!result.success || !result.data) {
       throw new TransactionError(
-        `Unstake failed: ${result.error?.message ?? "Unknown error"}`,
+        `unstakeAndWithdraw failed: ${result.error?.message ?? "Unknown error"}`,
         result.txHash,
       );
     }
 
-    return result.txHash!;
+    return {
+      txHash: result.data.txHash,
+      ledger: result.data.ledger,
+      amountA: removeLiquidityRequest.amountAMin,
+      amountB: removeLiquidityRequest.amountBMin,
+      liquidity: removeLiquidityRequest.liquidity,
+    };
   }
 
   /**
@@ -415,7 +541,7 @@ export class StakingModule {
       };
     }
 
-    const fields = result.map();
+    const fields = result.type === "scvMap" ? result.map : undefined;
     const cooldownEnd = this.extractU64(fields, "cooldown_end");
     const nowSec = Math.floor(Date.now() / 1000);
     const isInCooldown = cooldownEnd > nowSec;
@@ -507,7 +633,7 @@ export class StakingModule {
       .build();
 
     const sim = await this.client.server.simulateTransaction(tx);
-    if (SorobanRpc.Api.isSimulationSuccess(sim) && sim.result) {
+    if (rpc.Api.isSimulationSuccess(sim) && sim.result) {
       return sim.result.retval;
     }
     return null;
@@ -521,13 +647,16 @@ export class StakingModule {
     key: string,
   ): bigint {
     if (!fields) return 0n;
-    const entry = fields.find((f) => f.key().sym().toString() === key);
-    if (!entry) return 0n;
-    const val = entry.val();
-    return (
-      BigInt(val.i128().lo().toString()) +
-      (BigInt(val.i128().hi().toString()) << 64n)
+    const entry = fields.find(
+      (f) => f.key.type === "scvSymbol" && f.key.sym.toString() === key,
     );
+    if (!entry) return 0n;
+    const val = entry.val;
+    if (val.type !== "scvI128") return 0n;
+    const i128 = val.i128 as unknown;
+    if (typeof i128 === "bigint") return i128;
+    const parts = i128 as { hi: bigint; lo: bigint };
+    return (parts.hi << 64n) + parts.lo;
   }
 
   /**
@@ -538,9 +667,13 @@ export class StakingModule {
     key: string,
   ): number {
     if (!fields) return 0;
-    const entry = fields.find((f) => f.key().sym().toString() === key);
+    const entry = fields.find(
+      (f) => f.key.type === "scvSymbol" && f.key.sym.toString() === key,
+    );
     if (!entry) return 0;
-    return Number(entry.val().u64());
+    const val = entry.val;
+    if (val.type !== "scvU64") return 0;
+    return Number(val.u64);
   }
 
   /**
@@ -551,9 +684,13 @@ export class StakingModule {
     key: string,
   ): number {
     if (!fields) return 0;
-    const entry = fields.find((f) => f.key().sym().toString() === key);
+    const entry = fields.find(
+      (f) => f.key.type === "scvSymbol" && f.key.sym.toString() === key,
+    );
     if (!entry) return 0;
-    return entry.val().u32();
+    const val = entry.val;
+    if (val.type !== "scvU32") return 0;
+    return val.u32;
   }
 
   /**
@@ -564,16 +701,17 @@ export class StakingModule {
     key: string,
   ): string {
     if (!fields) return "";
-    const entry = fields.find((f) => f.key().sym().toString() === key);
+    const entry = fields.find(
+      (f) => f.key.type === "scvSymbol" && f.key.sym.toString() === key,
+    );
     if (!entry) return "";
     try {
-      return Address.fromScVal(entry.val()).toString();
+      return Address.fromScVal(entry.val).toString();
     } catch {
-      // Fallback for environments where the ScVal isn't a real XDR object
-      const val = entry.val() as unknown as {
-        address?: () => { toString(): string };
+      const val = entry.val as unknown as {
+        address?: { toString(): string };
       };
-      return val.address?.().toString() ?? "";
+      return val.address?.toString() ?? "";
     }
   }
 }
