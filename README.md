@@ -6,17 +6,51 @@ TypeScript SDK for the CoralSwap Protocol -- a V2 AMM on Stellar/Soroban with dy
 
 ## Architecture
 
-**Contract-first, API-optional.** This SDK interacts directly with CoralSwap's Soroban smart contracts through Soroban RPC. No centralized API gateway, no API keys, no single points of failure.
+**Contract-first, API-optional.** The SDK talks directly to Soroban RPC and CoralSwap contracts; there is no centralized gateway, no API key layer, and no hidden off-chain state. Module behavior is intentionally explicit: reads go to the chain or a configured oracle, and "unavailable" is represented as either a typed error or a nullable return, not as a silent fallback.
 
 ```
 Application
     |
 @coralswap/sdk
-    |
+    |  +-- modules read direct contract state
+    |  +-- modules validate typed failures
+    |  +-- modules return nullable/boolean availability states
+    v
 Soroban RPC (direct)
     |
-CoralSwap Contracts (on-chain)
+CoralSwap contracts + RedStone feeds + network health probes
 ```
+
+### Module data sources
+
+| Module | Primary data source | Read/write model | Availability / failure contract |
+| --- | --- | --- | --- |
+| `SwapModule` | Pair reserves, token balances, dynamic fee state via pair/router contracts | Reads live chain state for quotes and simulates writes for execution | Throws `PairNotFoundError`, `InsufficientLiquidityError`, `SlippageError`, `DeadlineError`, or transaction-level errors on submission |
+| `LiquidityModule` | Pair reserves, LP token state, factory pair resolution | Reads live pool state for quotes, then submits a Soroban transaction for writes | Throws typed validation or pair/liquidity errors; no silent "null quote" path |
+| `FlashLoanModule` | Pair flash-loan config, reserves, callback events, RPC transaction results | Read-only config checks plus write execution | `isAvailable()` returns `false` on read failure; execution throws `FlashLoanError` / `FlashLoanFailedError` |
+| `FeeModule` | Pair fee state and event history from on-chain storage/RPC events | Mostly read-only queries | `getCurrentFee()` and `getFeeState()` return live data; `isStale()` is a boolean result; no hidden null fallback |
+| `OracleModule` | Pair cumulative price accumulators | Read-only observations for TWAP | `getTWAP()` returns `null` when there are not enough observations or the window is too short; price-window validation throws `ValidationError` |
+| `FactoryModule` | Factory contract registry + TTL pair-cache | Read-only lookups, with optional cache | `getPairAddress()` returns `string | null`; `getPairInfo()` throws `PairNotFoundError` when no pair exists |
+| `HealthCheckModule` | RPC `getHealth()` and contract existence/TTL checks | Read-only health probes | Returns structured results (`healthy`, `deployed`, `ttlValid`, etc.) rather than throwing unless arguments are invalid |
+| `TreasuryModule` / `PortfolioModule` | Factory pair set + reserve-derived spot prices | Derived read-only USD valuation | Missing stablecoin price feed can raise `MissingPriceFeedError`; some portfolio aggregates may use zero-value fallback depending on caller configuration |
+| `StopLossModule` | RedStone oracle feed + pair state | Price validation + on-chain stop-loss writes | Throws `StaleOracleError` when the oracle price is too old; validation errors remain typed rather than generic failures |
+| `MonitoringModule` | Pair metrics, treasury pricing, RPC event history | Read-only metrics/warnings | Returns structured health/metric objects; a price-fetch failure is treated as a metric-quality issue, not a fatal transport error |
+| `AlertsModule` | Oracle or pair-derived price data plus configured thresholds | Read-only evaluation + local in-memory alert rules | Some alert paths skip unavailable prices or fall back to spot-price checks; failures are surfaced via typed `ValidationError` / protocol errors |
+
+### Error and unavailability contract
+
+The SDK follows a consistent typed-error model instead of ad hoc string matching:
+
+- All SDK exceptions extend `CoralSwapSDKError`.
+- The error tree includes `NetworkError`, `RpcError`, `SimulationError`, `TransactionError`, `ValidationError`, `DeadlineError`, `SlippageError`, `InsufficientLiquidityError`, `PairNotFoundError`, `MissingPriceFeedError`, `StaleOracleError`, and module-specific subclasses such as `FlashLoanFailedError`.
+- `mapError()` normalizes raw Soroban/RPC failures into those typed errors so callers can switch on `code` or `instanceof` without parsing messages.
+- Explicit nullable/boolean semantics are used where the chain does not have a strict failure state:
+  - `FactoryModule.getPairAddress()` → `string | null`
+  - `OracleModule.getTWAP()` → `TWAPResult | null`
+  - `FlashLoanModule.isAvailable()` → `boolean` (`false` on failed read)
+  - `HealthCheckModule` probes → structured result objects with `healthy` / `deployed` / `error` fields
+
+This means a module either returns a concrete value, returns a sentinel like `null`/`false` for a known unavailable condition, or throws a typed SDK error for a real failure. There is no hidden "best-effort" API layer silently rewriting the protocol state.
 
 ## Installation
 
@@ -33,7 +67,6 @@ npm install @coralswap/sdk
 ```
 
 ### Basic Setup
-
 ```typescript
 import { CoralSwapClient, Network } from "@coralswap/sdk";
 
@@ -48,6 +81,64 @@ const client = new CoralSwapClient({
 const healthy = await client.isHealthy();
 console.log("RPC healthy:", healthy);
 ```
+
+## Network & Passphrase Configuration
+
+The `network` enum selects a built-in **preset** that supplies the RPC URL, Stellar network passphrase, and deployed contract addresses.
+
+| Preset | Enum value | Passphrase | Contract addresses | RPC URL |
+|--------|-----------|-----------|-------------------|---------|
+| Testnet | `Network.TESTNET` | `Test SDF Network ; September 2015` | ✅ Populated | `soroban-testnet.stellar.org` |
+| Mainnet | `Network.MAINNET` | `Public Global Stellar Network ; September 2015` | ⚠️ Empty (not yet deployed) | `soroban.stellar.org` |
+| Staging | `Network.STAGING` | `Test SDF Network ; September 2015` | ✅ Same as testnet | `soroban-testnet.stellar.org` |
+
+### ⚠️ Staging ≡ Testnet
+
+`STAGING` and `TESTNET` share the **same passphrase and contract addresses**. Transactions signed for one network are valid on the other. Use `STAGING` only when the backend or infrastructure team explicitly designates it; otherwise prefer `TESTNET` for clarity.
+
+### Passphrase and signer pairing
+
+The Stellar **network passphrase** is baked into every transaction envelope. A signer must receive the correct passphrase so that the signed XDR is valid on the target network.
+
+```typescript
+import { CoralSwapClient, Network } from "@coralswap/sdk";
+
+// KeypairSigner (built-in) — passphrase is set automatically from the preset
+const client = new CoralSwapClient({
+  network: Network.TESTNET,
+  secretKey: "S...",
+});
+
+// Custom Signer (e.g. Freighter) — the SDK passes the preset passphrase to
+// TransactionBuilder automatically; the wallet handles it.
+const clientWithWallet = new CoralSwapClient({
+  network: Network.TESTNET,
+  signer: freighterSigner, // implements the Signer interface
+});
+```
+
+If you call `setNetwork()` at runtime, the passphrase used for signing updates automatically:
+
+```typescript
+client.setNetwork(Network.MAINNET); // passphrase now = "Public Global Stellar Network ; September 2015"
+```
+
+### Custom RPC URL(s)
+
+Override the built-in RPC endpoint with a single URL or a list of fallback URLs:
+
+```typescript
+const client = new CoralSwapClient({
+  network: Network.TESTNET,
+  rpcUrl: ["https://my-rpc.example.com", "https://soroban-testnet.stellar.org"],
+});
+```
+
+### Mainnet caveats
+
+- **Contract addresses are empty.** The `factoryAddress` and `routerAddress` for `Network.MAINNET` are placeholders until CoralSwap contracts are deployed to public Stellar. Operations that depend on them (`client.factory`, `client.router`) will throw.
+- **Use real funds carefully.** Mainnet transactions are irreversible. Always test on testnet first.
+- **RPC rate limits.** The public `soroban.stellar.org` endpoint enforces rate limits. Consider supplying a dedicated RPC URL via `rpcUrl` and/or a `RateLimiter` for production traffic.
 
 ### Swap Tokens
 
@@ -257,6 +348,44 @@ if (twap) {
 }
 ```
 
+### Webhook Endpoints
+
+```typescript
+import { WebhookModule } from "@coralswap/sdk";
+
+const webhooks = new WebhookModule();
+
+// 1. Register: must be https://, needs at least one subscribed event.
+const id = await webhooks.registerWebhook(
+  "https://hooks.example.com/coralswap",
+  ["swap", "il"],
+  "shared-secret", // optional: signs every delivery with HMAC-SHA256
+);
+
+// 2. Verify: posts a signed challenge and records the outcome.
+const handshake = await webhooks.verifyWebhook(id);
+console.log("verified:", handshake.verified, "status:", handshake.statusCode);
+
+// 3. Update: change the url, the event subscription, or rotate the secret.
+//    A new url resets `verified` (the old handshake proved nothing) and
+//    clears the failure counter.
+await webhooks.updateWebhook(id, { events: ["swap", "il", "flash-loan"] });
+
+// 4. List: configuration plus live delivery state.
+const [webhook] = webhooks.listWebhooks();
+console.log(webhook.id, webhook.url, webhook.verified, webhook.failCount);
+
+// Events filter deliveries: a webhook only fires for what it subscribed to.
+// `filtered: true` means nothing was sent and no attempt was recorded.
+const result = await webhooks.sendWebhook(id, { pair, amount }, { event: "swap" });
+```
+
+Webhooks that fail `5` consecutive deliveries are auto-disabled — `sendWebhook()`
+then throws `WebhookDisabledError` until the endpoint recovers and you call
+`enableWebhook()`. A verification handshake that does not return `2xx` marks the
+webhook `verified: false`, so `isWebhookVerified()`/`listWebhooks()` always show
+the state of the last handshake.
+
 ## Native XLM
 
 The SDK supports the native Stellar asset (XLM) via the Stellar Asset Contract (SAC). You can pass `"XLM"` or `"native"` as a token identifier in swap and multi-hop methods; it is resolved to the network’s XLM SAC address automatically.
@@ -289,6 +418,7 @@ import {
   sortTokens,
   isValidAddress,
   withRetry,
+  DeadlineError,
 } from "@coralswap/sdk";
 
 // Amount conversions
@@ -305,6 +435,114 @@ const result = await withRetry(() => client.factory.getAllPairs(), {
   maxRetries: 5,
   baseDelayMs: 500,
 });
+
+// Bound the total time spent on a single RPC call (including retries).
+// Once the deadline elapses, retries stop and a DeadlineError is thrown —
+// useful for hard latency caps on user-facing requests.
+const bounded = await withRetry(() => client.factory.getAllPairs(), {
+  maxRetries: 5,
+  baseDelayMs: 500,
+});
+
+// Or set it once on the client so every RPC call shares the bound.
+const client = new CoralSwapClient({
+  network: Network.TESTNET,
+  secretKey: "S...",
+  deadlineMs: 5000, // give up after 5 seconds total, DeadlineError is thrown
+});
+
+try {
+  const healthy = await client.isHealthy();
+} catch (err) {
+  if (err instanceof DeadlineError) {
+    console.log("RPC retries exceeded the 5s deadline");
+  }
+}
+```
+
+## Signer Authoring
+
+`CoralSwapClient` never touches a private key directly -- it delegates signing
+to anything implementing the `Signer` interface:
+
+```typescript
+interface Signer {
+  publicKey(): Promise<string>;
+  signTransaction(xdr: string): Promise<string>;
+}
+```
+
+Passing `secretKey` to the constructor is a convenience: internally it just
+builds the SDK's own reference implementation, `KeypairSigner`. To integrate a
+browser wallet (Freighter, Albedo, xBull, a hardware signer, etc.), implement
+`Signer` yourself and pass it as `config.signer` instead:
+
+```typescript
+import { CoralSwapClient, Network, Signer } from "@coralswap/sdk";
+
+class FreighterSigner implements Signer {
+  async publicKey(): Promise<string> {
+    return window.freighter.getPublicKey();
+  }
+
+  async signTransaction(xdr: string): Promise<string> {
+    // The wallet must sign against the same network passphrase the
+    // client is configured for -- see "Matching the network config" below.
+    return window.freighter.signTransaction(xdr, {
+      networkPassphrase: Network.TESTNET,
+    });
+  }
+}
+
+const client = new CoralSwapClient({
+  network: Network.TESTNET,
+  signer: new FreighterSigner(),
+});
+
+// client.submitTransaction(...) now calls FreighterSigner.signTransaction()
+// instead of signing with a locally-held secret key.
+```
+
+### Matching the network config
+
+A signer must sign against the exact network the client talks to. Read it
+from `client.networkConfig` rather than hardcoding it, so a single signer
+implementation works across testnet/mainnet/staging:
+
+```typescript
+const { networkPassphrase, rpcUrl } = client.networkConfig;
+```
+
+`TESTNET_NETWORK`, `MAINNET_NETWORK`, and `STAGING_NETWORK` (also exported
+from the package root) expose the same shape if you need it before a client
+instance exists.
+
+### Building a transaction envelope by hand
+
+Most callers should use `client.submitTransaction(operations)` or
+`client.simulateTransaction(operations, options)`, which already handle
+fetching the account, building, simulating, and (for `submitTransaction`)
+signing and sending. If you're authoring a signer that needs to construct
+and sign a raw envelope itself -- for example to show a wallet a human-
+readable preview before submission -- combine `client.getAccount()` (which
+returns the account's current sequence number, using the same RPC
+retry/fallback as the rest of the client) with the address utilities above:
+
+```typescript
+import { TransactionBuilder } from "@stellar/stellar-sdk";
+import { isValidAddress, toScAddress } from "@coralswap/sdk";
+
+const account = await client.getAccount(); // or client.getAccount(otherPublicKey)
+
+const tx = new TransactionBuilder(account, {
+  fee: "100",
+  networkPassphrase: client.networkConfig.networkPassphrase,
+})
+  .addOperation(op)
+  .setTimeout(client.networkConfig.sorobanTimeout)
+  .build();
+
+const signedXdr = await mySigner.signTransaction(tx.toXDR());
 ```
 
 ## Error Handling
@@ -342,6 +580,20 @@ try {
 ## Performance
 
 High-throughput integrations (trading bots, aggregators, dashboards) should tune caching, RPC failover, and connection pooling. See **[docs/PERFORMANCE.md](docs/PERFORMANCE.md)** for use-case profiles, TTL guidance, benchmark numbers, and copy-paste configuration examples.
+
+## Bundle-size Budget
+
+The public surface of the SDK (`src/index.ts`) is guarded by a bundle-size regression budget. Its public exports are bundled with **esbuild in tree-shaking mode** and minified, and the result is checked against a fixed cap. Because tree-shaking drops anything unreachable from the used bindings, a reintroduced dead export only inflates the bundle when it drags genuinely-new, unused code back in — exactly the regression this guard catches.
+
+```bash
+npm run check:bundle-size
+```
+
+| Budget                              | Value     |
+| ----------------------------------- | --------- |
+| `src/index.ts` (minified bundle)   | 200 KiB (204800 bytes) |
+
+The budget is enforced in CI by `.github/workflows/bundle-size.yml`. To change it, update `BUNDLE_SIZE_BUDGET_BYTES` in `scripts/check-bundle-size.mjs` and this table.
 
 ## Design Principles
 
@@ -383,7 +635,7 @@ The tests are idempotent — if the pair already exists it is reused, so you can
 
 ### CI
 
-Integration tests run automatically on pull requests to `main` via `.github/workflows/integration.yml`. The job is marked `continue-on-error` for fork PRs (which cannot access repository secrets), so they will not block merges from external contributors.
+Integration tests run automatically on a nightly schedule via `.github/workflows/integration.yml`. They can also be triggered manually using `workflow_dispatch`. The job is marked `continue-on-error` for fork PRs (if run manually), so they will not block merges from external contributors.
 
 Add the following secrets to your repository (Settings → Secrets → Actions):
 
@@ -398,6 +650,10 @@ Add the following secrets to your repository (Settings → Secrets → Actions):
 - [ADR-001 Module Boundary Decisions](docs/adr/ADR-001-module-boundaries.md)
 - [ADR-002 Error Handling Strategy](docs/adr/ADR-002-error-handling.md)
 - [ADR-003 Caching Approach](docs/adr/ADR-003-caching-approach.md)
+
+
+| `TEST_RWA_POOL`    | Deployed RWA pool contract address on testnet |
+| `TEST_NAV_FEED_ID` | RedStone NAV feed id for the pool's underlying asset |
 
 ## License
 

@@ -1,4 +1,4 @@
-import { xdr, Address, SorobanRpc } from "@stellar/stellar-sdk";
+import { xdr, Address, rpc } from "@stellar/stellar-sdk";
 import {
   CoralSwapEvent,
   ContractEvent,
@@ -13,7 +13,7 @@ import {
 import { ValidationError } from "@/errors";
 
 /** Response type that may include hash/id for transaction identifier. */
-type TxWithOptionalHash = SorobanRpc.Api.GetSuccessfulTransactionResponse & {
+type TxWithOptionalHash = rpc.Api.GetSuccessfulTransactionResponse & {
   hash?: string;
   id?: string;
 };
@@ -42,36 +42,51 @@ const KNOWN_TOPICS = new Set<string>(Object.values(EVENT_TOPICS));
 
 /**
  * Decode an ScVal i128 to a bigint.
+ * Throws ValidationError on type mismatch rather than fabricating a zero fallback.
  */
 function decodeI128(val: xdr.ScVal): bigint {
-  const parts = val.i128();
-  const lo = BigInt(parts.lo().toString());
-  const hi = BigInt(parts.hi().toString());
-  return (hi << 64n) + lo;
+  if (val.type !== "scvI128") {
+    throw new ValidationError(`Expected i128 ScVal, got ${val.type}`);
+  }
+  const i128 = val.i128 as unknown;
+  if (typeof i128 === "bigint") return i128;
+  const parts = i128 as { hi: bigint; lo: bigint };
+  return (parts.hi << 64n) + parts.lo;
 }
 
 /**
  * Decode an ScVal u32 to a number.
+ * Throws ValidationError on type mismatch rather than fabricating a zero fallback.
  */
 function decodeU32(val: xdr.ScVal): number {
-  return val.u32();
+  if (val.type !== "scvU32") {
+    throw new ValidationError(`Expected u32 ScVal, got ${val.type}`);
+  }
+  return val.u32;
 }
 
 /**
  * Decode an ScVal address to a string.
+ * Throws ValidationError on invalid address ScVal.
  */
 function decodeAddress(val: xdr.ScVal): string {
-  return Address.fromScVal(val).toString();
+  try {
+    return Address.fromScVal(val).toString();
+  } catch (err) {
+    throw new ValidationError(
+      `Invalid address ScVal: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 }
 
 /**
  * Decode an ScVal symbol or string to a JS string.
+ * Throws ValidationError on type mismatch rather than fabricating an empty string.
  */
 function decodeString(val: xdr.ScVal): string {
-  const tag = val.switch().name;
-  if (tag === "scvSymbol") return val.sym().toString();
-  if (tag === "scvString") return val.str().toString();
-  return val.value()?.toString() ?? "";
+  if (val.type === "scvSymbol") return val.sym.toString();
+  if (val.type === "scvString") return val.str.toString();
+  throw new ValidationError(`Expected symbol or string ScVal, got ${val.type}`);
 }
 
 /**
@@ -82,12 +97,11 @@ function getMapValue(
   key: string,
 ): xdr.ScVal | undefined {
   for (const entry of map) {
-    const k = entry.key();
-    const tag = k.switch().name;
+    const k = entry.key;
     let keyStr: string | undefined;
-    if (tag === "scvSymbol") keyStr = k.sym().toString();
-    else if (tag === "scvString") keyStr = k.str().toString();
-    if (keyStr === key) return entry.val();
+    if (k.type === "scvSymbol") keyStr = k.sym.toString();
+    else if (k.type === "scvString") keyStr = k.str.toString();
+    if (keyStr === key) return entry.val;
   }
   return undefined;
 }
@@ -109,9 +123,13 @@ function requireMapValue(map: xdr.ScMapEntry[], key: string): xdr.ScVal {
  */
 function extractContractId(evt: xdr.DiagnosticEvent): string {
   try {
-    const ce = evt.event();
-    if (ce.contractId()) {
-      return Address.contract(ce.contractId()!).toString();
+    const contractId = evt.event.contractId;
+    if (contractId) {
+      const rawBytes =
+        'value' in contractId && contractId.value instanceof Uint8Array
+          ? contractId.value
+          : (contractId as unknown as Uint8Array);
+      return Address.contract(rawBytes).toString();
     }
   } catch {
     // contractId may be absent for system events
@@ -123,18 +141,20 @@ function extractContractId(evt: xdr.DiagnosticEvent): string {
  * Extract the topic ScVal array from a DiagnosticEvent.
  */
 function extractTopics(evt: xdr.DiagnosticEvent): xdr.ScVal[] {
-  const ce = evt.event();
-  const body = ce.body();
-  return body.v0().topics();
+  const body = evt.event.body;
+  if (body.type !== "v0") return [];
+  return body.v0.topics;
 }
 
 /**
  * Extract the data ScVal from a DiagnosticEvent.
  */
 function extractData(evt: xdr.DiagnosticEvent): xdr.ScVal {
-  const ce = evt.event();
-  const body = ce.body();
-  return body.v0().data();
+  const body = evt.event.body;
+  if (body.type !== "v0") {
+    throw new ValidationError("Unsupported event body version");
+  }
+  return body.v0.data;
 }
 
 // ---------------------------------------------------------------------------
@@ -233,16 +253,52 @@ export class EventParser {
    * @returns Array of typed CoralSwapEvent.
    */
   fromTransaction(
-    response: SorobanRpc.Api.GetSuccessfulTransactionResponse,
+    response: rpc.Api.GetSuccessfulTransactionResponse,
   ): CoralSwapEvent[] {
     const meta = response.resultMetaXdr;
-    const v3 = meta.v3();
-    const diagnosticEvents = v3.sorobanMeta()?.diagnosticEvents() ?? [];
+    if (meta.type !== "v3") return [];
+    const diagnosticEvents = meta.v3.sorobanMeta?.diagnosticEvents ?? [];
     const tx = response as TxWithOptionalHash;
     const txHash = tx.hash ?? tx.id ?? '';
 
     const ledger = response.ledger ?? 0;
     return this.parse(diagnosticEvents, txHash, ledger);
+  }
+
+  /**
+   * Decode a single Soroban `getEvents` response entry into a typed
+   * {@link CoralSwapEvent}.
+   *
+   * Unlike {@link parse}/{@link fromTransaction}, which operate on
+   * `xdr.DiagnosticEvent`s from transaction result meta, this consumes the
+   * `rpc.Api.EventResponse` shape returned by live event streaming (see
+   * {@link EventCursor}). It applies the same contract-filter and
+   * topic-dispatch rules, so streamed events are typed identically to
+   * transaction-parsed ones.
+   *
+   * @param event - A single event entry from `server.getEvents`.
+   * @returns The typed event, or `null` when it is not a recognised CoralSwap
+   *   event, is filtered out, or did not run in a successful contract call.
+   */
+  fromEventResponse(event: rpc.Api.EventResponse): CoralSwapEvent | null {
+    if (event.inSuccessfulContractCall === false) return null;
+
+    const contractId = event.contractId ? event.contractId.toString() : "";
+    const topics = event.topic ?? [];
+    const data = event.value;
+    if (!data) return null;
+
+    try {
+      return this.decodeParts(
+        contractId,
+        topics,
+        data,
+        event.txHash ?? "",
+        event.ledger ?? 0,
+      );
+    } catch {
+      return null;
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -259,14 +315,9 @@ export class EventParser {
     ledger: number,
   ): CoralSwapEvent | null {
     // Only process contract-type events that ran in a successful call
-    if (!evt.inSuccessfulContractCall()) return null;
+    if (!evt.inSuccessfulContractCall) return null;
 
     const contractId = extractContractId(evt);
-
-    // If contract filter is configured, skip non-matching contracts
-    if (this.contractIds.size > 0 && !this.contractIds.has(contractId)) {
-      return null;
-    }
 
     let topics: xdr.ScVal[];
     let data: xdr.ScVal;
@@ -277,9 +328,41 @@ export class EventParser {
       return null;
     }
 
+    return this.decodeParts(contractId, topics, data, txHash, ledger);
+  }
+
+  /**
+   * Decode an already-extracted `(contractId, topics, data)` triple into a
+   * typed {@link CoralSwapEvent}.
+   *
+   * This is the shared core used by both {@link decodeSingle} (diagnostic
+   * events) and {@link fromEventResponse} (Soroban `getEvents` responses), so
+   * live-event streaming and transaction-result parsing apply identical
+   * contract-filtering and topic-dispatch rules.
+   *
+   * @returns The typed event, or `null` when the contract is filtered out or
+   *   the topic is not a recognised CoralSwap event.
+   */
+  private decodeParts(
+    contractId: string,
+    topics: xdr.ScVal[],
+    data: xdr.ScVal,
+    txHash: string,
+    ledger: number,
+  ): CoralSwapEvent | null {
+    // If contract filter is configured, skip non-matching contracts
+    if (this.contractIds.size > 0 && !this.contractIds.has(contractId)) {
+      return null;
+    }
+
     if (topics.length === 0) return null;
 
-    const topicName = decodeString(topics[0]);
+    let topicName: string;
+    try {
+      topicName = decodeString(topics[0]);
+    } catch {
+      return null;
+    }
     if (!KNOWN_TOPICS.has(topicName)) return null;
 
     const base: Omit<ContractEvent, "type"> = {
@@ -287,6 +370,7 @@ export class EventParser {
       ledger,
       timestamp: ledger,
       txHash,
+      decodeStatus: "complete",
     };
 
     switch (topicName) {
@@ -322,7 +406,7 @@ export class EventParser {
     data: xdr.ScVal,
     base: Omit<ContractEvent, "type">,
   ): SwapEvent {
-    const map = data.map();
+    const map = data.type === "scvMap" ? data.map : undefined;
     if (!map) throw new ValidationError("Swap event data is not an ScMap");
 
     return {
@@ -342,7 +426,7 @@ export class EventParser {
     base: Omit<ContractEvent, "type">,
     type: "add_liquidity" | "remove_liquidity",
   ): LiquidityEvent {
-    const map = data.map();
+    const map = data.type === "scvMap" ? data.map : undefined;
     if (!map) throw new ValidationError("Liquidity event data is not an ScMap");
 
     return {
@@ -361,7 +445,7 @@ export class EventParser {
     data: xdr.ScVal,
     base: Omit<ContractEvent, "type">,
   ): FlashLoanContractEvent {
-    const map = data.map();
+    const map = data.type === "scvMap" ? data.map : undefined;
     if (!map) throw new ValidationError("FlashLoan event data is not an ScMap");
 
     return {
@@ -378,7 +462,7 @@ export class EventParser {
     data: xdr.ScVal,
     base: Omit<ContractEvent, "type">,
   ): MintEvent {
-    const map = data.map();
+    const map = data.type === "scvMap" ? data.map : undefined;
     if (!map) throw new ValidationError("Mint event data is not an ScMap");
 
     return {
@@ -395,7 +479,7 @@ export class EventParser {
     data: xdr.ScVal,
     base: Omit<ContractEvent, "type">,
   ): BurnEvent {
-    const map = data.map();
+    const map = data.type === "scvMap" ? data.map : undefined;
     if (!map) throw new ValidationError("Burn event data is not an ScMap");
 
     return {
@@ -413,7 +497,7 @@ export class EventParser {
     data: xdr.ScVal,
     base: Omit<ContractEvent, "type">,
   ): SyncEvent {
-    const map = data.map();
+    const map = data.type === "scvMap" ? data.map : undefined;
     if (!map) throw new ValidationError("Sync event data is not an ScMap");
 
     return {
@@ -428,7 +512,7 @@ export class EventParser {
     data: xdr.ScVal,
     base: Omit<ContractEvent, "type">,
   ): FeeUpdateEvent {
-    const map = data.map();
+    const map = data.type === "scvMap" ? data.map : undefined;
     if (!map) throw new ValidationError("FeeUpdate event data is not an ScMap");
 
     return {
@@ -483,15 +567,15 @@ export interface DecodeEventsOptions {
  * ```
  */
 export function decodeEvents(
-  response: SorobanRpc.Api.GetSuccessfulTransactionResponse,
+  response: rpc.Api.GetSuccessfulTransactionResponse,
   options: DecodeEventsOptions = {},
 ): CoralSwapEvent[] {
   const contractIds = options.contractId ? [options.contractId] : [];
   const parser = new EventParser(contractIds);
 
   const meta = response.resultMetaXdr;
-  const v3 = meta.v3();
-  const diagnosticEvents = v3.sorobanMeta()?.diagnosticEvents() ?? [];
+  if (meta.type !== "v3") return [];
+  const diagnosticEvents = meta.v3.sorobanMeta?.diagnosticEvents ?? [];
   const tx = response as TxWithOptionalHash;
   const txHash = tx.hash ?? tx.id ?? "";
   const ledger = response.ledger ?? 0;
@@ -521,9 +605,11 @@ export function decodeEvents(
  * ```ts
  * import { decodeEventsFromXdr } from '@coralswap/sdk';
  *
- * const meta = txResponse.resultMetaXdr.v3();
- * const diagnosticEvents = meta.sorobanMeta()?.diagnosticEvents() ?? [];
- * const events = decodeEventsFromXdr(diagnosticEvents);
+ * const meta = txResponse.resultMetaXdr;
+ * if (meta.type === 'v3') {
+ *   const diagnosticEvents = meta.v3.sorobanMeta?.diagnosticEvents ?? [];
+ *   const events = decodeEventsFromXdr(diagnosticEvents);
+ * }
  * ```
  */
 export function decodeEventsFromXdr(

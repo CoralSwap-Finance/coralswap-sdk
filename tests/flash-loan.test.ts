@@ -43,17 +43,26 @@ function buildMockClient(options: {
 }
 
 /**
- * Build a mock xdr.TransactionMeta v3 object whose sorobanMeta().events()
+ * Build a real v17 xdr.TransactionMeta whose sorobanMeta.events
  * returns the provided events list.
  */
 function buildMockMeta(events: xdr.ContractEvent[]): xdr.TransactionMeta {
-  return {
-    v3: () => ({
-      sorobanMeta: () => ({
-        events: () => events,
-      }),
-    }),
-  } as unknown as xdr.TransactionMeta;
+  const sorobanMeta = new xdr.SorobanTransactionMeta({
+    ext: xdr.SorobanTransactionMetaExt.v0() as xdr.SorobanTransactionMetaExt,
+    events,
+    returnValue: xdr.ScVal.scvVoid(),
+    diagnosticEvents: [],
+  });
+
+  const metaV3 = new xdr.TransactionMetaV3({
+    ext: xdr.ExtensionPoint.v0() as xdr.ExtensionPoint,
+    txChangesBefore: [],
+    operations: [],
+    txChangesAfter: [],
+    sorobanMeta,
+  });
+
+  return xdr.TransactionMeta.v3(metaV3) as xdr.TransactionMeta;
 }
 
 /**
@@ -81,21 +90,15 @@ function buildContractEvent(
   const topicScVal = xdr.ScVal.scvSymbol(topicSymbol);
   const dataScVal = xdr.ScVal.scvMap(mapEntries);
 
-  // js-xdr union constructors accept (switchValue, armValue) at runtime even
-  // though the TypeScript declarations expose them as static numeric methods.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const AnyContractEventBody = xdr.ContractEventBody as any;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const AnyExtensionPoint = xdr.ExtensionPoint as any;
-
   const v0 = new xdr.ContractEventV0({ topics: [topicScVal], data: dataScVal });
-  const body = new AnyContractEventBody(0, v0) as xdr.ContractEventBody;
-  const ext = new AnyExtensionPoint(0) as xdr.ExtensionPoint;
+  // v17 XDR unions are built from per-variant factories, not `new`.
+  const body = xdr.ContractEventBody.v0(v0) as xdr.ContractEventBody;
+  const ext = xdr.ExtensionPoint.v0() as xdr.ExtensionPoint;
 
   return new xdr.ContractEvent({
     ext,
     contractId: null,
-    type: xdr.ContractEventType.contract(),
+    type: xdr.ContractEventType.contract,
     body,
   });
 }
@@ -146,6 +149,7 @@ describe('FlashLoanModule.execute()', () => {
       expect(result.event.feePaid).toBe(90n);
       expect(result.event.token).toBe('TOKEN_A');
       expect(result.event.callbackAddress).toBe('RECEIVER_ADDR');
+      expect(result.event.decodeStatus).toBe('complete');
     });
 
     it('exposes borrowedAmount and feePaid at top-level via event', async () => {
@@ -170,13 +174,16 @@ describe('FlashLoanModule.execute()', () => {
       const { borrowedAmount, feePaid } = result.event;
       expect(borrowedAmount).toBe(500_000n);
       expect(feePaid).toBe(50n);
+      expect(result.event.decodeStatus).toBe('complete');
     });
 
-    it('falls back to request values when no FlashLoanExecuted event is present', async () => {
+    it('falls back to request values when no FlashLoanExecuted event is present with partial decodeStatus', async () => {
       const client = buildMockClient({
         txResult: {
           status: 'SUCCESS',
-          resultMetaXdr: buildMockMeta([]), // no events
+          resultMetaXdr: buildMockMeta([
+            buildContractEvent('Transfer', { amount: 5n, token: 'SOME_TOKEN' }),
+          ]), // event accessor present but no FlashLoanExecuted
         },
       });
 
@@ -184,12 +191,13 @@ describe('FlashLoanModule.execute()', () => {
       const result = await module.execute(FLASH_REQUEST);
 
       expect(result.txHash).toBe('MOCK_TX');
-      // Fallback event still satisfies the interface
+      // Fallback event still satisfies the interface and is labeled with partial decodeStatus
       expect(result.event.type).toBe('FlashLoanExecuted');
       expect(result.event.borrowedAmount).toBe(FLASH_REQUEST.amount);
+      expect(result.event.decodeStatus).toBe('partial');
     });
 
-    it('ignores events when getTransaction returns non-SUCCESS status', async () => {
+    it('ignores events when getTransaction returns non-SUCCESS status and labels partial decodeStatus', async () => {
       const client = buildMockClient({
         txResult: { status: 'NOT_FOUND' },
       });
@@ -199,6 +207,7 @@ describe('FlashLoanModule.execute()', () => {
 
       expect(result.txHash).toBe('MOCK_TX');
       expect(result.event.type).toBe('FlashLoanExecuted');
+      expect(result.event.decodeStatus).toBe('partial');
     });
   });
 
@@ -246,11 +255,10 @@ describe('FlashLoanModule.execute()', () => {
       }
 
       expect(caught).not.toBeNull();
-      expect(caught!.event).toBeDefined();
-      expect(caught!.event!.type).toBe('FlashLoanFailed');
-      expect(caught!.event!.borrowedAmount).toBe(1_000_000n);
-      expect(caught!.event!.token).toBe('TOKEN_A');
-      expect(caught!.event!.reason).toBe('callback_revert');
+      expect(caught!.message).toContain('callback_revert');
+      expect(caught!.reason).toBe('callback_revert');
+      expect(caught!.token).toBe('TOKEN_A');
+      expect(caught!.borrowedAmount).toBe(1_000_000n);
     });
 
     it('throws FlashLoanError (without event) when submitTransaction fails', async () => {

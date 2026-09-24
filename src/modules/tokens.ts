@@ -1,8 +1,11 @@
 import { z } from 'zod';
+import { xdr, nativeToScVal, Address } from '@stellar/stellar-sdk';
+import { Contract } from '@stellar/stellar-sdk';
 import { CoralSwapClient } from '@/client';
 import { Network } from '@/types/common';
 import { Token, TokenList } from '@/types/tokens';
 import { NetworkError, ValidationError } from '@/errors';
+import { validateAddress } from '@/utils/validation';
 
 // ---------------------------------------------------------------------------
 // Zod schemas — validates token list JSON against Stellar token list standard
@@ -32,6 +35,22 @@ const TokenListSchema = z.object({
   timestamp: z.string().optional(),
   tokens: z.array(TokenSchema),
 });
+
+/**
+ * Result of building a token approve operation.
+ */
+export interface ApproveOperation {
+  /** The XDR operation to include in a transaction. */
+  op: xdr.Operation;
+  /** The token contract address that was approved. */
+  tokenAddress: string;
+  /** The spender address that received approval. */
+  spender: string;
+  /** The approved amount (in token's smallest unit). */
+  amount: bigint;
+  /** The ledger number at which this approval expires. */
+  expirationLedger: number;
+}
 
 // ---------------------------------------------------------------------------
 // TokenListModule
@@ -169,6 +188,80 @@ export class TokenListModule {
   // -------------------------------------------------------------------------
   // Private helpers
   // -------------------------------------------------------------------------
+
+  /**
+   * Build a scoped token approve (allowance) operation per SEP-41.
+   *
+   * Constructs a Soroban contract invocation that calls the `approve` function
+   * on the specified token contract, granting `spender` permission to transfer
+   * up to `amount` tokens on the caller's behalf until `expirationLedger`.
+   *
+   * **Security note:** The allowance is scoped to the exact `amount` provided,
+   * NOT an unlimited/max value. This prevents the well-known "unlimited
+   * approval" wallet-drain pattern. If you intentionally need a larger or
+   * unlimited allowance, pass the desired amount explicitly.
+   *
+   * @param tokenAddress - The Soroban contract address of the token.
+   * @param spender - The address that will be allowed to spend the tokens.
+   * @param amount - The exact amount to approve (in the token's smallest unit).
+   *   Defaults to an operation-scoped amount — never an unlimited value.
+   * @param expirationLedger - The ledger sequence number after which this
+   *   approval expires. Defaults to 0 (no expiration). For SEP-41 tokens,
+   *   the contract enforces this expiry.
+   * @returns An {@link ApproveOperation} containing the XDR operation and metadata.
+   * @throws {ValidationError} If any address is invalid, amount is negative, or
+   *   `expirationLedger` is negative.
+   *
+   * @example
+   * ```ts
+   * const tokens = client.tokens();
+   * const { op } = tokens.buildApprove(
+   *   'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC', // token
+   *   'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF',   // spender (router)
+   *   1000_000_000n,                                                   // 1000 USDC (7 decimals)
+   *   123456,                                                          // expiration ledger
+   * );
+   * // Include `op` in a TransactionBuilder with other operations
+   * ```
+   *
+   * @example
+   * ```ts
+   * // Approve before a swap
+   * const approve = tokens.buildApprove(tokenIn, routerAddress, amountIn, expiryLedger);
+   * const swap = client.swap.execute({ ... });
+   * ```
+   */
+  buildApprove(
+    tokenAddress: string,
+    spender: string,
+    amount: bigint,
+    expirationLedger: number = 0,
+  ): ApproveOperation {
+    validateAddress(tokenAddress, 'tokenAddress');
+    validateAddress(spender, 'spender');
+    if (amount < 0n) {
+      throw new ValidationError('amount must be non-negative', { amount: amount.toString() });
+    }
+    if (expirationLedger < 0) {
+      throw new ValidationError('expirationLedger must be non-negative', { expirationLedger });
+    }
+
+    const contract = new Contract(tokenAddress);
+    const op = contract.call(
+      'approve',
+      nativeToScVal(Address.fromString(spender), { type: 'address' }),
+      nativeToScVal(amount, { type: 'i128' }),
+      nativeToScVal(expirationLedger, { type: 'u32' }),
+    );
+
+    return {
+      op,
+      tokenAddress,
+      spender,
+      amount,
+      expirationLedger,
+    };
+  }
 
   /**
    * Perform a GET request and parse the response as JSON.

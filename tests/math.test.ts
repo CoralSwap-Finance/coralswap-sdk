@@ -49,6 +49,49 @@ describe('Fraction', () => {
     expect(quot.denominator).toBe(2n);
   });
 
+  it('invert with negative numerator', () => {
+    const f = new Fraction(-1, 3);
+    const inverted = f.invert();
+    expect(inverted.numerator).toBe(-3n);
+    expect(inverted.denominator).toBe(1n);
+    // Verify the value: -1/3 inverted is -3/1 = -3
+  });
+
+  it('invert with positive numerator', () => {
+    const f = new Fraction(2, 5);
+    const inverted = f.invert();
+    expect(inverted.numerator).toBe(5n);
+    expect(inverted.denominator).toBe(2n);
+  });
+
+  it('divide by negative fraction', () => {
+    const f1 = new Fraction(1, 2);
+    const f2 = new Fraction(-1, 4);
+    const quot = f1.divide(f2);
+    // (1/2) / (-1/4) = (1/2) * (-4/1) = -4/2 = -2
+    expect(quot.numerator).toBe(-4n);
+    expect(quot.denominator).toBe(2n);
+  });
+
+  it('divide negative by positive fraction', () => {
+    const f1 = new Fraction(-3, 4);
+    const f2 = new Fraction(2, 5);
+    const quot = f1.divide(f2);
+    // (-3/4) / (2/5) = (-3/4) * (5/2) = -15/8
+    expect(quot.numerator).toBe(-15n);
+    expect(quot.denominator).toBe(8n);
+  });
+
+  it('divide negative by negative fraction', () => {
+    const f1 = new Fraction(-1, 2);
+    const f2 = new Fraction(-3, 4);
+    const quot = f1.divide(f2);
+    // (-1/2) / (-3/4) = (-1/2) * (-4/3) = 4/6 = (after simplification in theory, but no auto-simplify)
+    // But actually: 4/6 means numerator=4, denominator=6
+    expect(quot.numerator).toBe(4n);
+    expect(quot.denominator).toBe(6n);
+  });
+
   describe('toFixed', () => {
     it('formats integers', () => {
       expect(new Fraction(5, 1).toFixed(2)).toBe('5.00');

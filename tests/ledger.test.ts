@@ -1,4 +1,41 @@
-import { waitNextLedger } from '../src/utils/ledger';
+import {
+  waitNextLedger,
+  ledgerToApproxTime,
+  LEDGER_CLOSE_INTERVAL_SECONDS,
+} from '../src/utils/ledger';
+
+describe('ledgerToApproxTime', () => {
+  const head = { ledger: 1_000, closeTime: 1_700_000_000 };
+
+  it('returns the head close time for the head ledger', () => {
+    expect(ledgerToApproxTime(head.ledger, head)).toBe(head.closeTime);
+  });
+
+  it('extrapolates forward at the ledger close interval', () => {
+    expect(ledgerToApproxTime(head.ledger + 12, head)).toBe(
+      head.closeTime + 12 * LEDGER_CLOSE_INTERVAL_SECONDS,
+    );
+  });
+
+  it('extrapolates backward for ledgers before the head', () => {
+    expect(ledgerToApproxTime(head.ledger - 100, head)).toBe(
+      head.closeTime - 100 * LEDGER_CLOSE_INTERVAL_SECONDS,
+    );
+  });
+
+  it('measures a ledger span in seconds when close time cancels out', () => {
+    const span = 250;
+    const seconds = ledgerToApproxTime(head.ledger + span, {
+      ledger: head.ledger,
+      closeTime: 0,
+    });
+    expect(seconds).toBe(span * LEDGER_CLOSE_INTERVAL_SECONDS);
+  });
+
+  it('pins the close interval to Stellar\'s ~5s cadence', () => {
+    expect(LEDGER_CLOSE_INTERVAL_SECONDS).toBe(5);
+  });
+});
 
 describe('waitNextLedger', () => {
   it('resolves with new ledger when it increments', async () => {

@@ -67,10 +67,11 @@
  * console.log(`Refunded: ${cancel.refundedAmount}, Filled: ${cancel.filledAmount}`);
  */
 
+import { z } from 'zod';
 import { CoralSwapSDKError } from "@/errors";
 import {
   Contract,
-  SorobanRpc,
+  rpc,
   TransactionBuilder,
   xdr,
   nativeToScVal,
@@ -84,7 +85,11 @@ import {
   LimitOrderDetails,
   PlaceLimitOrderResult,
 } from '@/types/limit-orders';
-import { withRetry, RetryOptions } from '@/utils/retry';
+import { withRetry, RetryOptions, sleep, isRetryable } from '@/utils/retry';
+import {
+  getTransactionStatus,
+  shouldRetrySubmission,
+} from '@/utils/idempotent-resubmission';
 import { OrderNotFoundError, InvalidOperationError, ValidationError } from '@/errors';
 import { validateAddress, validatePositiveAmount, validateDistinctTokens } from '@/utils/validation';
 
@@ -100,10 +105,10 @@ import { validateAddress, validatePositiveAmount, validateDistinctTokens } from 
  */
 export function scValToString(val: xdr.ScVal | undefined): string {
   if (!val) throw new CoralSwapSDKError("PARSING_ERROR", "Missing field");
-  const tag = val.switch().name;
-  if (tag === 'scvString') return val.str().toString();
-  if (tag === 'scvSymbol') return val.sym().toString();
-  if (tag === 'scvBytes') return Buffer.from(val.bytes()).toString('utf8');
+  const tag = val.type;
+  if (tag === 'scvString') return val.str.toString();
+  if (tag === 'scvSymbol') return val.sym.toString();
+  if (tag === 'scvBytes') return Buffer.from(val.bytes.toBytes()).toString('utf8');
   throw new CoralSwapSDKError("PARSING_ERROR", `Expected string/symbol/bytes, got ${tag}`);
 }
 
@@ -119,11 +124,11 @@ export function scValToString(val: xdr.ScVal | undefined): string {
  */
 export function scValToNumber(val: xdr.ScVal | undefined): number {
   if (!val) throw new CoralSwapSDKError("PARSING_ERROR", "Missing field");
-  const tag = val.switch().name;
-  if (tag === 'scvU32') return Number(val.u32());
-  if (tag === 'scvU64') return Number(val.u64().toBigInt());
-  if (tag === 'scvI32') return val.i32();
-  if (tag === 'scvI64') return Number(val.i64().toBigInt());
+  const tag = val.type;
+  if (tag === 'scvU32') return val.u32;
+  if (tag === 'scvU64') return Number(val.u64);
+  if (tag === 'scvI32') return val.i32;
+  if (tag === 'scvI64') return Number(val.i64);
   throw new CoralSwapSDKError("PARSING_ERROR", `Expected number type, got ${tag}`);
 }
 
@@ -138,7 +143,7 @@ export function scValToNumber(val: xdr.ScVal | undefined): number {
  */
 export function scValToOptionalNumber(val: xdr.ScVal | undefined): number | undefined {
   if (!val) return undefined;
-  if (val.switch().name === 'scvVoid') return undefined;
+  if (val.type === 'scvVoid') return undefined;
   return scValToNumber(val);
 }
 
@@ -154,19 +159,32 @@ export function scValToOptionalNumber(val: xdr.ScVal | undefined): number | unde
  */
 export function scValToBigInt(val: xdr.ScVal | undefined): bigint {
   if (!val) throw new CoralSwapSDKError("PARSING_ERROR", "Missing field");
-  const tag = val.switch().name;
+  const tag = val.type;
   if (tag === 'scvI128') {
-    const parts = val.i128();
-    const lo = BigInt(parts.lo().toString());
-    const hi = BigInt(parts.hi().toString());
-    const loUnsigned = lo < 0n ? lo + (1n << 64n) : lo;
-    return (hi << 64n) + loUnsigned;
+    const i128 = val.i128 as unknown;
+    if (typeof i128 === 'bigint') return i128;
+    const parts = i128 as { hi: bigint; lo: bigint };
+    return (parts.hi << 64n) + parts.lo;
   }
-  if (tag === 'scvU64') return val.u64().toBigInt();
-  if (tag === 'scvI64') return BigInt(val.i64().toBigInt());
-  if (tag === 'scvU32') return BigInt(val.u32());
-  if (tag === 'scvI32') return BigInt(val.i32());
+  if (tag === 'scvU64') return val.u64;
+  if (tag === 'scvI64') return val.i64;
+  if (tag === 'scvU32') return BigInt(val.u32);
+  if (tag === 'scvI32') return BigInt(val.i32);
   throw new CoralSwapSDKError("PARSING_ERROR", `Expected bigint type, got ${tag}`);
+}
+
+function scMapToRecord(map: xdr.ScMapEntry[]): Record<string, xdr.ScVal> {
+  const fields: Record<string, xdr.ScVal> = {};
+  for (const entry of map) {
+    const k = entry.key;
+    const tag = k.type;
+    let keyStr = '';
+    if (tag === 'scvString') keyStr = k.str.toString();
+    else if (tag === 'scvSymbol') keyStr = k.sym.toString();
+    else continue;
+    fields[keyStr] = entry.val;
+  }
+  return fields;
 }
 
 /**
@@ -182,22 +200,13 @@ export function scValToBigInt(val: xdr.ScVal | undefined): bigint {
  *   or required fields cannot be read.
  */
 export function parseCancelResult(result: xdr.ScVal): { refundedAmount: bigint; filledAmount: bigint } {
-  if (result.switch().name !== 'scvMap') {
+  if (result.type !== 'scvMap') {
     throw new CoralSwapSDKError("PARSING_ERROR", "Invalid cancel result: expected ScMap");
   }
-  const map = result.map();
+  const map = result.map;
   if (!map) throw new CoralSwapSDKError("PARSING_ERROR", "Invalid cancel result: expected ScMap");
 
-  const fields: Record<string, xdr.ScVal> = {};
-  for (const entry of map) {
-    const k = entry.key();
-    const tag = k.switch().name;
-    let keyStr = '';
-    if (tag === 'scvString') keyStr = k.str().toString();
-    else if (tag === 'scvSymbol') keyStr = k.sym().toString();
-    else continue;
-    fields[keyStr] = entry.val();
-  }
+  const fields = scMapToRecord(map);
 
   const refundedAmount = scValToBigInt(fields['refunded_amount'] ?? fields['refundedAmount']);
   const filledAmount = scValToBigInt(fields['filled_amount'] ?? fields['filledAmount']);
@@ -220,19 +229,13 @@ export function parseCancelResult(result: xdr.ScVal): { refundedAmount: bigint; 
  *   unrecognised, `fillPercent` is outside 0–100, or the ScVal is not a map.
  */
 export function parseOrderStatus(result: xdr.ScVal): OrderStatus {
-  const map = result.map();
+  if (result.type !== 'scvMap') {
+    throw new CoralSwapSDKError("PARSING_ERROR", "Invalid order status: expected ScMap");
+  }
+  const map = result.map;
   if (!map) throw new CoralSwapSDKError("PARSING_ERROR", "Invalid order status: expected ScMap");
 
-  const fields: Record<string, xdr.ScVal> = {};
-  for (const entry of map) {
-    const k = entry.key();
-    const tag = k.switch().name;
-    let keyStr = '';
-    if (tag === 'scvString') keyStr = k.str().toString();
-    else if (tag === 'scvSymbol') keyStr = k.sym().toString();
-    else continue;
-    fields[keyStr] = entry.val();
-  }
+  const fields = scMapToRecord(map);
 
   const stateStr = scValToString(fields['state']).toLowerCase();
   if (!['open', 'partial', 'filled', 'cancelled', 'expired'].includes(stateStr)) {
@@ -267,8 +270,8 @@ export function parseOrderStatus(result: xdr.ScVal): OrderStatus {
  */
 export function scValToStringVec(val: xdr.ScVal | undefined): string[] {
   if (!val) throw new CoralSwapSDKError("PARSING_ERROR", "Missing field");
-  if (val.switch().name !== 'scvVec') throw new CoralSwapSDKError("PARSING_ERROR", "Expected Vec");
-  const vec = val.vec();
+  if (val.type !== 'scvVec') throw new CoralSwapSDKError("PARSING_ERROR", "Expected Vec");
+  const vec = val.vec;
   if (!vec) return [];
   return vec.map((v) => scValToString(v));
 }
@@ -285,19 +288,13 @@ export function scValToStringVec(val: xdr.ScVal | undefined): string[] {
  *   the state is unrecognised, or `fillPercent` is outside 0–100.
  */
 export function parseOrderDetails(result: xdr.ScVal): LimitOrderDetails {
-  const map = result.map();
+  if (result.type !== 'scvMap') {
+    throw new CoralSwapSDKError("PARSING_ERROR", "Invalid order details: expected ScMap");
+  }
+  const map = result.map;
   if (!map) throw new CoralSwapSDKError("PARSING_ERROR", "Invalid order details: expected ScMap");
 
-  const fields: Record<string, xdr.ScVal> = {};
-  for (const entry of map) {
-    const k = entry.key();
-    const tag = k.switch().name;
-    let keyStr = '';
-    if (tag === 'scvString') keyStr = k.str().toString();
-    else if (tag === 'scvSymbol') keyStr = k.sym().toString();
-    else continue;
-    fields[keyStr] = entry.val();
-  }
+  const fields = scMapToRecord(map);
 
   const id = scValToString(fields['id']);
 
@@ -331,6 +328,179 @@ export function parseOrderDetails(result: xdr.ScVal): LimitOrderDetails {
   };
 }
 
+
+
+/**
+ * Zod schemas for this module's user-supplied inputs (#486).
+ *
+ * They live in this file rather than in `src/schemas/` so that a concurrent
+ * change to another module's validation cannot collide with these definitions.
+ * Every rule below was migrated one-for-one from the hand-written `if` guards
+ * that used to sit in this module, keeping their exact messages — a rule was
+ * moved, never dropped or loosened.
+ */
+
+/** Upper bound accepted for `targetPrice`, matching the contract's price range. */
+const MAX_TARGET_PRICE = 1_000_000;
+
+/**
+ * Run a value through a zod schema and surface failures as the SDK's own
+ * {@link ValidationError}.
+ *
+ * The first issue's message is rethrown verbatim, so callers keep seeing the
+ * exact error text they saw before the migration; the full issue list rides
+ * along as `zodErrors` for programmatic inspection.
+ */
+function validateLimitOrderInput<T>(
+  schema: z.ZodType<T>,
+  value: unknown,
+  details?: Record<string, unknown>,
+): T {
+  const result = schema.safeParse(value);
+  if (!result.success) {
+    const { issues } = result.error;
+    throw new ValidationError(issues[0]?.message ?? 'Validation failed', {
+      ...details,
+      zodErrors: issues,
+    });
+  }
+  return result.data;
+}
+
+/**
+ * A Stellar address parameter.
+ *
+ * Delegates to {@link validateAddress} so that helper stays the single source
+ * of truth for address messages.
+ */
+function addressSchema(name: string): z.ZodType<string> {
+  return z.string({ error: `${name} must not be empty` }).superRefine((value, ctx) => {
+    try {
+      validateAddress(value, name);
+    } catch (err) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          err instanceof Error ? err.message : `${name} is not a valid Stellar address: ${value}`,
+      });
+    }
+  });
+}
+
+/** An optional address parameter: `undefined` means "use the client default". */
+function optionalAddressSchema(name: string) {
+  return addressSchema(name).optional();
+}
+
+/** `orderId` must be a non-empty string. */
+const OrderIdSchema = z
+  .string({ error: 'orderId must be a non-empty string' })
+  .refine((value) => value.trim().length > 0, {
+    error: 'orderId must be a non-empty string',
+  });
+
+/** `watchOrder`'s polling interval in milliseconds. */
+const IntervalMsSchema = z
+  .number({ error: 'intervalMs must be a positive number' })
+  .positive('intervalMs must be a positive number')
+  .optional();
+
+/**
+ * Parameters of {@link LimitOrderModule.placeLimitOrder} and of
+ * {@link LimitOrderModule.cancelAndReplaceLimitOrder}'s replacement order.
+ *
+ * Fields are declared in the order the old checks ran, so the first reported
+ * issue is still the first rule that used to fail.
+ */
+const LimitOrderParamsSchema = z
+  .object({
+    targetPrice: z
+      .number({ error: 'targetPrice must be positive' })
+      .positive('targetPrice must be positive')
+      .max(MAX_TARGET_PRICE, 'targetPrice exceeds maximum allowed range (1,000,000)'),
+    expiry: z
+      .number({ error: 'expiry must be a Unix timestamp in the future' })
+      .refine((value) => value > Math.floor(Date.now() / 1000), {
+        error: 'expiry must be a Unix timestamp in the future',
+      }),
+    tokenIn: addressSchema('tokenIn'),
+    tokenOut: addressSchema('tokenOut'),
+    pairAddress: addressSchema('pairAddress'),
+    amountIn: z.bigint().superRefine((value, ctx) => {
+      try {
+        validatePositiveAmount(value, 'amountIn');
+      } catch (err) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            err instanceof Error ? err.message : 'amountIn must be greater than 0',
+        });
+      }
+    }),
+  })
+  .superRefine((params, ctx) => {
+    try {
+      validateDistinctTokens(params.tokenIn, params.tokenOut);
+    } catch (err) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['tokenOut'],
+        message:
+          err instanceof Error ? err.message : 'tokenIn and tokenOut must be different addresses',
+      });
+    }
+  });
+
+/** `watchOrder(orderId, callback, intervalMs)`. */
+const WatchOrderArgsSchema = z.object({
+  orderId: OrderIdSchema,
+  callback: z.custom<(status: OrderStatus) => void>(
+    (value) => typeof value === 'function',
+    { message: 'callback must be a function' },
+  ),
+  intervalMs: IntervalMsSchema,
+});
+
+/** `getOpenOrders(address)`. */
+const OpenOrdersAddressSchema = addressSchema('address');
+
+/** Constructor guard: a usable {@link CoralSwapClient}. */
+const ClientSchema = z.custom<CoralSwapClient>(
+  (value) => !!value && typeof value === 'object',
+  { message: 'client must be a valid CoralSwapClient instance' },
+);
+
+function validateLimitOrderParams(params: LimitOrderParams): LimitOrderParams {
+  return validateLimitOrderInput(LimitOrderParamsSchema, params);
+}
+/**
+ * Error codes that mean "the contract has no such order".
+ *
+ * Used to tell a definitively-not-landed placement (safe to resubmit) apart
+ * from an unknown state (never safe to resubmit).
+ */
+const ORDER_MISSING_CODES = new Set(['SIMULATION_ERROR', 'ORDER_NOT_FOUND']);
+
+function isOrderMissingCode(code: string): boolean {
+  return ORDER_MISSING_CODES.has(code);
+}
+
+/** How many times a provably-not-landed order transaction may be resubmitted. */
+const MAX_IDEMPOTENT_RESUBMISSIONS = 2;
+
+/** Fallback pause between resubmissions when the client sets no retry delay. */
+const DEFAULT_RESUBMIT_DELAY_MS = 2000;
+
+/**
+ * What really happened to a submission that reported failure.
+ *
+ * - `landed` — the operation is on-chain. Resubmitting would escrow or refund
+ *   a second time, so the caller must return the recovered result instead.
+ * - `not-landed` — the network never accepted it; safe to resubmit.
+ * - `failed-on-chain` — it landed and reverted. Resubmitting is pointless.
+ */
+type SubmissionOutcome = 'landed' | 'not-landed' | 'failed-on-chain';
+
 /**
  * High-level interface for CoralSwap limit orders.
  *
@@ -348,7 +518,7 @@ export function parseOrderDetails(result: xdr.ScVal): LimitOrderDetails {
 export class LimitOrderModule {
   private client: CoralSwapClient;
   private contract: Contract;
-  private server: SorobanRpc.Server;
+  private server: rpc.Server;
   private networkPassphrase: string;
   private retryOptions: RetryOptions;
 
@@ -365,13 +535,10 @@ export class LimitOrderModule {
     client: CoralSwapClient,
     contractAddress?: string,
   ) {
-    if (!client || typeof client !== 'object') {
-      throw new ValidationError('client must be a valid CoralSwapClient instance');
-    }
     if (contractAddress !== undefined) {
-      validateAddress(contractAddress, 'contractAddress');
+      validateLimitOrderInput(optionalAddressSchema('contractAddress'), contractAddress);
     }
-    this.client = client;
+    this.client = validateLimitOrderInput(ClientSchema, client);
     const address = contractAddress ?? client.networkConfig.limitOrderAddress;
     if (!address) {
       throw new CoralSwapSDKError(
@@ -407,9 +574,7 @@ export class LimitOrderModule {
    * }
    */
   async getLimitOrderStatus(orderId: string): Promise<OrderStatus> {
-    if (!orderId || typeof orderId !== 'string' || orderId.trim().length === 0) {
-      throw new ValidationError('orderId must be a non-empty string', { orderId });
-    }
+    orderId = validateLimitOrderInput(OrderIdSchema, orderId, { orderId });
 
     const op = this.contract.call(
       'status',
@@ -439,7 +604,7 @@ export class LimitOrderModule {
       'LimitOrderModule_simulate',
     );
 
-    if (!SorobanRpc.Api.isSimulationSuccess(sim) || !sim.result) {
+    if (!rpc.Api.isSimulationSuccess(sim) || !sim.result) {
       throw new CoralSwapSDKError("SIMULATION_ERROR", `Failed to read order status: simulation did not succeed`);
     }
 
@@ -478,24 +643,20 @@ export class LimitOrderModule {
     callback: (status: OrderStatus) => void,
     intervalMs?: number,
   ): () => void {
-    if (!orderId || typeof orderId !== 'string' || orderId.trim().length === 0) {
-      throw new ValidationError('orderId must be a non-empty string', { orderId });
-    }
-    if (typeof callback !== 'function') {
-      throw new ValidationError('callback must be a function');
-    }
-    if (intervalMs !== undefined && (typeof intervalMs !== 'number' || isNaN(intervalMs) || !isFinite(intervalMs) || intervalMs <= 0)) {
-      throw new ValidationError('intervalMs must be a positive number', { intervalMs });
-    }
-    const interval = intervalMs ?? 5000;
+    const args = validateLimitOrderInput(WatchOrderArgsSchema, {
+      orderId,
+      callback,
+      intervalMs,
+    });
+    const interval = args.intervalMs ?? 5000;
     let active = true;
 
     const poll = async () => {
       if (!active) return;
       try {
-        const status = await this.getLimitOrderStatus(orderId);
+        const status = await this.getLimitOrderStatus(args.orderId);
         if (!active) return;
-        callback(status);
+        args.callback(status);
       } catch {
       }
     };
@@ -538,12 +699,41 @@ export class LimitOrderModule {
    * }
    */
   async cancelLimitOrder(orderId: string, signer?: string): Promise<CancelResult> {
-    if (!orderId || typeof orderId !== 'string' || orderId.trim().length === 0) {
-      throw new ValidationError('orderId must be a non-empty string', { orderId });
-    }
-    if (signer !== undefined) {
-      validateAddress(signer, 'signer');
-    }
+    const { operation: op, refundedAmount, filledAmount } = await this.buildCancelOperation(
+      orderId,
+      signer,
+    );
+
+    // Cancellation releases escrowed funds, so a timed-out submission must never
+    // be blindly resubmitted — the first attempt may already have landed and
+    // refunded. Check the real on-chain status before each retry (#467).
+    const txHash = await this.submitWithIdempotentResubmission(
+      [op],
+      `Failed to cancel order ${orderId}`,
+      async () => (await this.getLimitOrderStatus(orderId)).state === 'cancelled',
+    );
+
+    return {
+      refundedAmount,
+      filledAmount,
+      // Empty when the cancellation was recovered rather than confirmed: the
+      // refund landed under a hash whose confirmation we never received.
+      refundTxHash: txHash ?? '',
+    };
+  }
+
+  /**
+   * Validate and simulate a cancellation, returning the built operation and
+   * the refund/fill amounts the simulation reports, without submitting.
+   *
+   * Shared by {@link cancelLimitOrder} and {@link cancelAndReplaceLimitOrder}.
+   */
+  private async buildCancelOperation(
+    orderId: string,
+    signer?: string,
+  ): Promise<{ operation: xdr.Operation; refundedAmount: bigint; filledAmount: bigint }> {
+    orderId = validateLimitOrderInput(OrderIdSchema, orderId, { orderId });
+    signer = validateLimitOrderInput(optionalAddressSchema('signer'), signer);
 
     const status = await this.getLimitOrderStatus(orderId);
 
@@ -590,7 +780,7 @@ export class LimitOrderModule {
       'LimitOrderModule_cancel_simulate',
     );
 
-    if (!SorobanRpc.Api.isSimulationSuccess(sim) || !sim.result) {
+    if (!rpc.Api.isSimulationSuccess(sim) || !sim.result) {
       throw new CoralSwapSDKError(
         "SIMULATION_ERROR",
         `Failed to cancel order ${orderId}: simulation did not succeed`,
@@ -599,20 +789,7 @@ export class LimitOrderModule {
 
     const { refundedAmount, filledAmount } = parseCancelResult(sim.result.retval);
 
-    const submitResult = await this.client.submitTransaction([op]);
-
-    if (!submitResult.success || !submitResult.data) {
-      throw new CoralSwapSDKError(
-        "TRANSACTION_ERROR",
-        `Failed to cancel order ${orderId}: ${submitResult.error?.message ?? 'Unknown error'}`,
-      );
-    }
-
-    return {
-      refundedAmount,
-      filledAmount,
-      refundTxHash: submitResult.data.txHash,
-    };
+    return { operation: op, refundedAmount, filledAmount };
   }
 
   /**
@@ -644,32 +821,32 @@ export class LimitOrderModule {
    * console.log('Placed order:', orderId);
    */
   async placeLimitOrder(params: LimitOrderParams, signer?: string): Promise<PlaceLimitOrderResult> {
-    if (!params || typeof params !== 'object') {
-      throw new ValidationError('params must be a valid object');
-    }
-    if (typeof params.targetPrice !== 'number' || isNaN(params.targetPrice) || !isFinite(params.targetPrice) || params.targetPrice <= 0) {
-      throw new ValidationError('targetPrice must be positive', { targetPrice: params.targetPrice });
-    }
-    if (params.targetPrice > 1_000_000) {
-      throw new ValidationError('targetPrice exceeds maximum allowed range (1,000,000)', {
-        targetPrice: params.targetPrice,
-      });
-    }
-    if (typeof params.expiry !== 'number' || isNaN(params.expiry) || !isFinite(params.expiry) || params.expiry <= Math.floor(Date.now() / 1000)) {
-      throw new ValidationError('expiry must be a Unix timestamp in the future', {
-        expiry: params.expiry,
-      });
-    }
+    const { operation: op, orderId } = await this.buildPlaceOperation(params, signer);
 
-    validateAddress(params.tokenIn, 'tokenIn');
-    validateAddress(params.tokenOut, 'tokenOut');
-    validateDistinctTokens(params.tokenIn, params.tokenOut);
-    validateAddress(params.pairAddress, 'pairAddress');
-    validatePositiveAmount(params.amountIn, 'amountIn');
+    // Placement escrows funds, so a timed-out submission must never be blindly
+    // resubmitted — that would escrow twice. If the order already exists
+    // on-chain the placement landed and the confirmation was simply lost (#467).
+    await this.submitWithIdempotentResubmission(
+      [op],
+      'Failed to place limit order',
+      () => this.orderExists(orderId),
+    );
 
-    if (signer !== undefined) {
-      validateAddress(signer, 'signer');
-    }
+    return { orderId };
+  }
+
+  /**
+   * Validate and simulate a new order placement, returning the built
+   * operation and the order ID the simulation reports, without submitting.
+   *
+   * Shared by {@link placeLimitOrder} and {@link cancelAndReplaceLimitOrder}.
+   */
+  private async buildPlaceOperation(
+    params: LimitOrderParams,
+    signer?: string,
+  ): Promise<{ operation: xdr.Operation; orderId: string }> {
+    params = validateLimitOrderParams(params);
+    signer = validateLimitOrderInput(optionalAddressSchema('signer'), signer);
 
     if (typeof this.client.getPairAddress === 'function') {
       const onChainPair = await this.client.getPairAddress(params.tokenIn, params.tokenOut);
@@ -717,22 +894,193 @@ export class LimitOrderModule {
       'LimitOrderModule_place_simulate',
     );
 
-    if (!SorobanRpc.Api.isSimulationSuccess(sim) || !sim.result) {
+    if (!rpc.Api.isSimulationSuccess(sim) || !sim.result) {
       throw new CoralSwapSDKError("SIMULATION_ERROR", 'Failed to place limit order: simulation did not succeed');
     }
 
     const orderId = scValToString(sim.result.retval);
 
-    const submitResult = await this.client.submitTransaction([op]);
+    return { operation: op, orderId };
+  }
 
-    if (!submitResult.success || !submitResult.data) {
-      throw new CoralSwapSDKError(
-        "TRANSACTION_ERROR",
-        `Failed to place limit order: ${submitResult.error?.message ?? 'Unknown error'}`,
-      );
+  /**
+   * Cancel an existing limit order and place its replacement as a single
+   * atomic transaction.
+   *
+   * Adjusting an order's price today means cancelling the existing order and
+   * placing a new one as two sequential transactions, leaving a window where
+   * the position is completely unprotected if the new order fails to place
+   * after the old one is cancelled. Composing both operations into a single
+   * transaction closes that window: either both take effect, or the original
+   * order remains exactly as it was. As with {@link cancelLimitOrder} and
+   * {@link placeLimitOrder}, a submission whose confirmation is lost is
+   * resolved against on-chain state rather than blindly resubmitted (#467),
+   * since both legs escrow or release real funds.
+   *
+   * @param orderId - The on-chain order ID to cancel.
+   * @param newParams - Parameters for the replacement order.
+   * @param signer - Optional Stellar address that will sign both operations.
+   *   Defaults to `client.publicKey`.
+   * @returns The refund/fill amounts from the cancelled order and the new
+   *   order's ID.
+   * @throws {@link ValidationError} if `orderId` or `newParams` are invalid.
+   * @throws {@link OrderNotFoundError} if the order to cancel is already cancelled.
+   * @throws {@link InvalidOperationError} if the order to cancel is filled or expired.
+   * @throws {@link CoralSwapSDKError} with code `TRANSACTION_ERROR` if the
+   *   composed transaction is rejected — in that case the original order
+   *   remains in place, untouched.
+   *
+   * @example
+   * ```ts
+   * const result = await limit.cancelAndReplaceLimitOrder(orderId, {
+   *   tokenIn: 'CAXFG3HY6H...',
+   *   tokenOut: 'CBOB7D2F5...',
+   *   amountIn: 500_000_000n,
+   *   targetPrice: 1.30,
+   *   expiry: Math.floor(Date.now() / 1000) + 3600 * 24,
+   *   pairAddress: 'CP5KJ7A2E...',
+   * });
+   * console.log(`Replaced ${orderId} with ${result.orderId}`);
+   * ```
+   */
+  async cancelAndReplaceLimitOrder(
+    orderId: string,
+    newParams: LimitOrderParams,
+    signer?: string,
+  ): Promise<CancelResult & PlaceLimitOrderResult> {
+    const cancel = await this.buildCancelOperation(orderId, signer);
+    const place = await this.buildPlaceOperation(newParams, signer);
+
+    const txHash = await this.submitWithIdempotentResubmission(
+      [cancel.operation, place.operation],
+      `Failed to cancel and replace order ${orderId}`,
+      () => this.orderExists(place.orderId),
+    );
+
+    return {
+      refundedAmount: cancel.refundedAmount,
+      filledAmount: cancel.filledAmount,
+      // Empty when the replacement was recovered rather than confirmed: the
+      // composed transaction landed under a hash whose confirmation we never received.
+      refundTxHash: txHash ?? '',
+      orderId: place.orderId,
+    };
+  }
+
+  /**
+   * Does the contract hold this order?
+   *
+   * Used as a second, contract-level source of truth when the transaction
+   * status alone cannot prove whether a submission landed.
+   *
+   * @throws the original error if the order's state cannot be determined, so
+   *   an unknown state is never mistaken for "not placed".
+   */
+  private async orderExists(orderId: string): Promise<boolean> {
+    try {
+      await this.getLimitOrderStatus(orderId);
+      // Any readable state means the order exists on-chain. A cancelled or
+      // expired order still counts as placed — do not place it again.
+      return true;
+    } catch (err) {
+      // A failed status simulation means the contract holds no such order, so
+      // the placement definitively did not land.
+      if (err instanceof CoralSwapSDKError && isOrderMissingCode(err.code)) {
+        return false;
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Submit an order-mutating transaction, resubmitting only when the previous
+   * attempt provably did not land.
+   *
+   * Placement escrows funds and cancellation refunds them, so a client-side
+   * timeout is never sufficient grounds to retry: the transaction may already
+   * be in a ledger. Before each resubmission the real outcome is resolved via
+   * the shared {@link getTransactionStatus} helper, falling back to the
+   * contract's own view of the order when the status check is inconclusive.
+   *
+   * @param ops - Operations to submit.
+   * @param failureMessage - Prefix for the thrown error message.
+   * @param landed - Contract-level check answering "did this already happen?".
+   * @returns The transaction hash, or `undefined` when the operation was found
+   *   to have already landed under a hash we never got confirmation for.
+   * @throws {@link CoralSwapSDKError} with code `TRANSACTION_ERROR` if the
+   *   operation did not land and cannot safely be retried again.
+   */
+  private async submitWithIdempotentResubmission(
+    ops: Parameters<CoralSwapClient['submitTransaction']>[0],
+    failureMessage: string,
+    landed: () => Promise<boolean>,
+  ): Promise<string | undefined> {
+    const maxRetries = MAX_IDEMPOTENT_RESUBMISSIONS;
+    const retryDelayMs = this.retryOptions.retryDelayMs ?? DEFAULT_RESUBMIT_DELAY_MS;
+    let lastError: string | undefined;
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      const result = await this.client.submitTransaction(ops);
+
+      if (result.success && result.data) {
+        return result.data.txHash;
+      }
+
+      lastError = result.error?.message;
+
+      // A non-retryable failure with no transaction hash never reached the
+      // network, so there is no ambiguity to resolve and nothing to re-read.
+      if (!result.txHash && !isRetryable(result.error)) {
+        throw new CoralSwapSDKError(
+          'TRANSACTION_ERROR',
+          `${failureMessage}: ${lastError ?? 'Unknown error'}`,
+        );
+      }
+
+      const outcome = await this.classifyFailedSubmission(result.txHash, landed);
+
+      if (outcome === 'landed') return undefined;
+
+      if (outcome === 'failed-on-chain' || attempt >= maxRetries) {
+        throw new CoralSwapSDKError(
+          'TRANSACTION_ERROR',
+          `${failureMessage}: ${lastError ?? 'Unknown error'}`,
+        );
+      }
+
+      await sleep(retryDelayMs);
     }
 
-    return { orderId };
+    throw new CoralSwapSDKError(
+      'TRANSACTION_ERROR',
+      `${failureMessage}: ${lastError ?? 'Unknown error'}`,
+    );
+  }
+
+  /**
+   * Work out what really happened to a submission that reported failure.
+   */
+  private async classifyFailedSubmission(
+    txHash: string | undefined,
+    landed: () => Promise<boolean>,
+  ): Promise<SubmissionOutcome> {
+    if (txHash) {
+      const status = await getTransactionStatus(this.server, txHash);
+      const { shouldRetry } = shouldRetrySubmission(status);
+
+      if (!shouldRetry) {
+        // The transaction reached a final on-chain outcome.
+        return status.status === 'SUCCESS' ? 'landed' : 'failed-on-chain';
+      }
+      // NOT_FOUND is authoritative: the network never saw the transaction.
+      if (status.status === 'NOT_FOUND') return 'not-landed';
+      // Otherwise the status check itself failed. shouldRetrySubmission()
+      // favours availability there, but escrowed funds make a wrong retry the
+      // expensive mistake — so fall through to the more conservative
+      // contract-level source its docs recommend combining with.
+    }
+
+    return (await landed()) ? 'landed' : 'not-landed';
   }
 
   /**
@@ -752,9 +1100,7 @@ export class LimitOrderModule {
    * console.log(`Filled: ${details.amountFilled} / Remaining: ${details.amountRemaining}`);
    */
   async getLimitOrder(orderId: string): Promise<LimitOrderDetails> {
-    if (!orderId || typeof orderId !== 'string' || orderId.trim().length === 0) {
-      throw new ValidationError('orderId must be a non-empty string', { orderId });
-    }
+    orderId = validateLimitOrderInput(OrderIdSchema, orderId, { orderId });
 
     const op = this.contract.call(
       'get_order',
@@ -784,7 +1130,7 @@ export class LimitOrderModule {
       'LimitOrderModule_getOrder_simulate',
     );
 
-    if (!SorobanRpc.Api.isSimulationSuccess(sim) || !sim.result) {
+    if (!rpc.Api.isSimulationSuccess(sim) || !sim.result) {
       throw new CoralSwapSDKError("SIMULATION_ERROR", `Failed to read order ${orderId}: simulation did not succeed`);
     }
 
@@ -811,7 +1157,7 @@ export class LimitOrderModule {
    * }
    */
   async getOpenOrders(address: string): Promise<LimitOrderDetails[]> {
-    validateAddress(address, 'address');
+    address = validateLimitOrderInput(OpenOrdersAddressSchema, address);
 
     const op = this.contract.call(
       'orders_for_user',
@@ -841,7 +1187,7 @@ export class LimitOrderModule {
       'LimitOrderModule_openOrders_simulate',
     );
 
-    if (!SorobanRpc.Api.isSimulationSuccess(sim) || !sim.result) {
+    if (!rpc.Api.isSimulationSuccess(sim) || !sim.result) {
       throw new CoralSwapSDKError("SIMULATION_ERROR", `Failed to fetch orders for ${address}: simulation did not succeed`);
     }
 

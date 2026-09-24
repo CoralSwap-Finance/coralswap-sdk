@@ -15,7 +15,7 @@
  */
 
 import {
-  SorobanRpc,
+  rpc,
   Contract,
   xdr,
   StrKey,
@@ -36,6 +36,48 @@ const DEFAULT_LATENCY_SAMPLES = 5;
 
 /** Maximum age (ms) before a cached `getRPCLatency` percentile window is stale. */
 const LATENCY_WINDOW_TTL_MS = 30_000;
+
+/** Samples/timeout used for the latency probe inside `getBestEndpoint`. */
+const ENDPOINT_SCORE_SAMPLES = 3;
+const ENDPOINT_SCORE_TIMEOUT_MS = 3_000;
+
+/**
+ * A percentile window recorded for one endpoint.
+ *
+ * Windows are keyed by endpoint *and* sample count, because a 3-sample window
+ * is not interchangeable with a 10-sample one.
+ */
+interface LatencyCacheEntry {
+  stats: LatencyStats;
+  /** Wall-clock time (ms) at which the window was recorded. */
+  recordedAt: number;
+}
+
+const latencyWindowCache = new Map<string, LatencyCacheEntry>();
+
+function latencyCacheKey(url: string, samples: number): string {
+  return `${url}|${samples}`;
+}
+
+/**
+ * Drop every window older than {@link LATENCY_WINDOW_TTL_MS}.
+ *
+ * Called on every cache access so stale samples cannot accumulate for
+ * endpoints that are never probed again.
+ *
+ * @param now - Current wall-clock time in ms. Injectable for tests.
+ * @returns The number of entries evicted.
+ */
+function evictStaleLatencyWindows(now: number = Date.now()): number {
+  let evicted = 0;
+  for (const [key, entry] of latencyWindowCache) {
+    if (now - entry.recordedAt >= LATENCY_WINDOW_TTL_MS) {
+      latencyWindowCache.delete(key);
+      evicted++;
+    }
+  }
+  return evicted;
+}
 
 /**
  * Result of a single RPC health probe.
@@ -106,34 +148,35 @@ export interface EndpointScore {
 }
 
 /**
- * Determine whether an error represents a network-level or timeout failure
- * (as opposed to a contract-logic error, which may be retryable).
- */
-function isProbeFailure(err: unknown): boolean {
-  if (err instanceof Error) {
-    const msg = err.message.toLowerCase();
-    return (
-      msg.includes('timeout') ||
-      msg.includes('abort') ||
-      msg.includes('network') ||
-      msg.includes('econnrefused') ||
-      msg.includes('enotfound') ||
-      msg.includes('dns') ||
-      msg.includes('failed to fetch') ||
-      msg.includes('socket')
-    );
-  }
-  return err instanceof TypeError;
-}
-
-/**
- * Create a SorobanRpc.Server bound to the given URL with a fixed timeout.
+ * Create a rpc.Server bound to the given URL with a fixed timeout.
  *
  * We cannot set `AbortSignal` directly on the server in older SDK versions,
  * so the timeout is enforced at the probe-call layer via `Promise.race`.
  */
-function makeServer(url: string): SorobanRpc.Server {
-  return new SorobanRpc.Server(url, { allowHttp: url.startsWith('http://') });
+function makeServer(url: string): rpc.Server {
+  return new rpc.Server(url, { allowHttp: url.startsWith('http://') });
+}
+
+/**
+ * Race a probe promise against a timeout, rejecting with `timeoutMessage`
+ * if `timeoutMs` elapses first.
+ *
+ * Always clears the timeout timer once the race settles, regardless of
+ * which side wins — an uncleared `setTimeout` in the losing branch keeps
+ * the event loop (and any test worker) alive until it naturally fires.
+ */
+function raceWithTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  timeoutMessage: string,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(timeoutMessage)), timeoutMs);
+    }),
+  ]).finally(() => clearTimeout(timer));
 }
 
 /**
@@ -158,7 +201,7 @@ export async function checkRPCHealth(
     return { healthy: false, status: 'unknown', latencyMs: -1, error: 'Invalid RPC URL' };
   }
 
-  let server: SorobanRpc.Server;
+  let server: rpc.Server;
   try {
     server = makeServer(url);
   } catch (err) {
@@ -172,12 +215,7 @@ export async function checkRPCHealth(
 
   const start = Date.now();
   try {
-    const health = await Promise.race([
-      server.getHealth(),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('health probe timeout')), timeoutMs),
-      ),
-    ]);
+    const health = await raceWithTimeout(server.getHealth(), timeoutMs, 'health probe timeout');
     const latencyMs = Date.now() - start;
     const status = (health as { status?: string }).status ?? 'unknown';
     return {
@@ -229,9 +267,15 @@ export function percentile(sorted: readonly number[], p: number): number {
  * {@link LatencyStats} with mean, p50/p95/p99 percentiles, and an
  * error rate computed from the failed samples.
  *
+ * Results are cached per `(url, samples)` for {@link LATENCY_WINDOW_TTL_MS};
+ * a window older than the TTL is evicted and re-measured on the next call, so
+ * ranking decisions never run on indefinitely-retained samples. Pass
+ * `options.fresh` to bypass the cached window and force a new measurement.
+ *
  * @param url       - Full URL of the Soroban RPC endpoint to probe.
  * @param samples   - Number of sequential samples to collect. Defaults to 5.
  * @param timeoutMs - Per-sample timeout in ms. Defaults to 4 000.
+ * @param options   - `fresh` forces a re-probe; `cache: false` also skips storing.
  * @returns LatencyStats with percentile breakdown and error rate.
  *
  * @example
@@ -242,12 +286,24 @@ export async function getRPCLatency(
   url: string,
   samples: number = DEFAULT_LATENCY_SAMPLES,
   timeoutMs: number = 4_000,
+  options: { fresh?: boolean; cache?: boolean } = {},
 ): Promise<LatencyStats> {
   if (!url || typeof url !== 'string') {
     return { meanMs: NaN, p50Ms: NaN, p95Ms: NaN, p99Ms: NaN, errorRate: 1, sampleCount: 0 };
   }
 
-  let server: SorobanRpc.Server;
+  // Sweep expired windows before every read so nothing is retained past its TTL.
+  const now = Date.now();
+  evictStaleLatencyWindows(now);
+
+  const cacheKey = latencyCacheKey(url, samples);
+  const useCache = options.cache !== false;
+  if (useCache && !options.fresh) {
+    const cached = latencyWindowCache.get(cacheKey);
+    if (cached) return { ...cached.stats };
+  }
+
+  let server: rpc.Server;
   try {
     server = makeServer(url);
   } catch {
@@ -260,38 +316,43 @@ export async function getRPCLatency(
   for (let i = 0; i < samples; i++) {
     const start = Date.now();
     try {
-      await Promise.race([
-        server.getLatestLedger(),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('latency probe timeout')), timeoutMs),
-        ),
-      ]);
+      await raceWithTimeout(server.getLatestLedger(), timeoutMs, 'latency probe timeout');
       latencies.push(Date.now() - start);
     } catch {
       failures++;
     }
   }
 
-  if (latencies.length === 0) {
-    return {
-      meanMs: NaN,
-      p50Ms: NaN,
-      p95Ms: NaN,
-      p99Ms: NaN,
-      errorRate: 1,
-      sampleCount: samples,
-    };
+  const stats: LatencyStats =
+    latencies.length === 0
+      ? {
+          meanMs: NaN,
+          p50Ms: NaN,
+          p95Ms: NaN,
+          p99Ms: NaN,
+          errorRate: 1,
+          sampleCount: samples,
+        }
+      : (() => {
+          latencies.sort((a, b) => a - b);
+          const sum = latencies.reduce((acc, v) => acc + v, 0);
+          return {
+            meanMs: sum / latencies.length,
+            p50Ms: percentile(latencies, 50),
+            p95Ms: percentile(latencies, 95),
+            p99Ms: percentile(latencies, 99),
+            errorRate: failures / samples,
+            sampleCount: samples,
+          };
+        })();
+
+  if (useCache) {
+    // Record the measurement time, not the read time, so the TTL measures the
+    // age of the samples themselves.
+    latencyWindowCache.set(cacheKey, { stats, recordedAt: Date.now() });
   }
 
-  latencies.sort((a, b) => a - b);
-  const sum = latencies.reduce((acc, v) => acc + v, 0);
-  const meanMs = sum / latencies.length;
-  const p50Ms = percentile(latencies, 50);
-  const p95Ms = percentile(latencies, 95);
-  const p99Ms = percentile(latencies, 99);
-  const errorRate = failures / samples;
-
-  return { meanMs, p50Ms, p95Ms, p99Ms, errorRate, sampleCount: samples };
+  return { ...stats };
 }
 
 /**
@@ -359,7 +420,7 @@ async function probeContractStatusAtUrl(
     return newContractStatus(false, false, 0, 0, 'Invalid RPC URL');
   }
 
-  let server: SorobanRpc.Server;
+  let server: rpc.Server;
   try {
     server = makeServer(url);
   } catch (err) {
@@ -371,12 +432,11 @@ async function probeContractStatusAtUrl(
     const rawContractId = StrKey.decodeContract(contractId);
     const key = xdr.ScVal.scvBytes(Buffer.from(rawContractId));
 
-    const response = await Promise.race([
+    const response = await raceWithTimeout(
       server.getContractData(contract, key),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('contract status probe timeout')), 8_000),
-      ),
-    ]);
+      8_000,
+      'contract status probe timeout',
+    );
 
     const entry = response as { liveUntilLedgerSeq?: number; latestLedger?: number; lastModifiedLedgerSeq?: number };
     const liveUntilLedger = entry.liveUntilLedgerSeq ?? 0;
@@ -431,7 +491,7 @@ function newContractStatus(
 }
 
 async function simulateReadOnlyContract(
-  server: SorobanRpc.Server,
+  server: rpc.Server,
   contractAddress: string,
   kind: 'factory' | 'router' | 'custom',
 ): Promise<boolean> {
@@ -466,7 +526,7 @@ async function simulateReadOnlyContract(
       ),
     ]);
 
-    return SorobanRpc.Api.isSimulationSuccess(sim);
+    return rpc.Api.isSimulationSuccess(sim);
   } catch {
     return false;
   }
@@ -511,35 +571,19 @@ export async function getBestEndpoint(urls: string[]): Promise<string | null> {
 
     let score = health.latencyMs;
     try {
-      const server = makeServer(url);
-      const failuresBefore = 0;
-      const latencySamples: number[] = [];
-      let failures = 0;
+      // Shares getRPCLatency's TTL-bounded window, so ranking a pool of
+      // endpoints repeatedly does not re-probe every one of them each time —
+      // while still never scoring on samples older than the TTL.
+      const stats = await getRPCLatency(
+        url,
+        ENDPOINT_SCORE_SAMPLES,
+        ENDPOINT_SCORE_TIMEOUT_MS,
+      );
 
-      for (let i = 0; i < 3; i++) {
-        const start = Date.now();
-        try {
-          await Promise.race([
-            server.getLatestLedger(),
-            new Promise<never>((_, reject) =>
-              setTimeout(() => reject(new Error('score probe timeout')), 3_000),
-            ),
-          ]);
-          latencySamples.push(Date.now() - start);
-        } catch {
-          failures++;
-        }
-      }
-
-      const errRate = failures / 3;
-      const avgLatency =
-        latencySamples.length > 0
-          ? latencySamples.reduce((acc, v) => acc + v, 0) / latencySamples.length
-          : health.latencyMs;
+      const avgLatency = Number.isFinite(stats.meanMs) ? stats.meanMs : health.latencyMs;
 
       // Penalise endpoints with partial errors
-      score = avgLatency * (1 + errRate * 10);
-      void failuresBefore;
+      score = avgLatency * (1 + stats.errorRate * 10);
     } catch {
       score = health.latencyMs;
     }
@@ -604,8 +648,36 @@ export class HealthCheckModule {
   }
 }
 
-/** Internal test helper — resets any cached latency windows. */
-export function __resetLatencyCache(): void {
-  void LATENCY_WINDOW_TTL_MS;
-  // Hook for future cached-window logic.
+/**
+ * Discard every cached latency window.
+ *
+ * Primarily a test helper, but also useful after a network switch when the
+ * previously measured endpoints are no longer relevant.
+ *
+ * @returns The number of windows discarded.
+ */
+export function __resetLatencyCache(): number {
+  const size = latencyWindowCache.size;
+  latencyWindowCache.clear();
+  return size;
+}
+
+/**
+ * Evict only the windows that have outlived {@link LATENCY_WINDOW_TTL_MS}.
+ *
+ * @param now - Current wall-clock time in ms. Injectable for tests.
+ * @returns The number of windows evicted.
+ */
+export function __evictStaleLatencyWindows(now?: number): number {
+  return evictStaleLatencyWindows(now);
+}
+
+/** Number of latency windows currently cached. Internal/test introspection. */
+export function __latencyCacheSize(): number {
+  return latencyWindowCache.size;
+}
+
+/** The latency-window TTL in milliseconds. Internal/test introspection. */
+export function __latencyWindowTtlMs(): number {
+  return LATENCY_WINDOW_TTL_MS;
 }

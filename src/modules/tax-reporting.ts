@@ -1,7 +1,12 @@
 import { CoralSwapClient } from "@/client";
 import { fromSorobanAmount } from "@/utils/amounts";
 import { validateAddress } from "@/utils/validation";
-import { SorobanRpc } from "@stellar/stellar-sdk";
+import { EventCursor, decodeEventTopic, MIN_START_LEDGER } from "@/utils/event-cursor";
+import {
+  ledgerToApproxTime,
+  LedgerHead,
+  LEDGER_CLOSE_INTERVAL_SECONDS,
+} from "@/utils/ledger";
 
 /**
  * Options for exporting trade history.
@@ -92,8 +97,11 @@ const CSV_HEADERS = [
 
 const TOKEN_DECIMALS = 7;
 
-/** Default ledger history window when no date range is provided. */
-const DEFAULT_HISTORY_WINDOW = 17280; // ~1 day of ledgers
+/** Default ledger history window when no date range is provided (~1 day of ledgers). */
+const DEFAULT_HISTORY_WINDOW = 86400 / LEDGER_CLOSE_INTERVAL_SECONDS;
+
+/** Upper bound on events pulled per topic for a single report. */
+const MAX_HISTORY_EVENTS = 200;
 
 /**
  * Tax reporting module for CoralSwap.
@@ -132,11 +140,19 @@ export class TaxReportingModule {
     const { format = "csv", fromDate, toDate, timezone = "UTC" } = options;
 
     const currentLedger = await this.client.getCurrentLedger();
-    const startLedger = Math.max(0, currentLedger - DEFAULT_HISTORY_WINDOW);
+    // Anchored against the chain head rather than clamped to ledger 0, which
+    // is not a cursor the RPC accepts.
+    const startLedger = Math.max(MIN_START_LEDGER, currentLedger - DEFAULT_HISTORY_WINDOW);
+    // Reference head for approximating an event's close time when the RPC
+    // response omits `ledgerClosedAt`. The chain head is ~now.
+    const head: LedgerHead = {
+      ledger: currentLedger,
+      closeTime: Math.floor(Date.now() / 1000),
+    };
 
     const [swapEvents, liquidityEvents] = await Promise.all([
-      this.fetchSwapEvents(address, startLedger),
-      this.fetchLiquidityEvents(address, startLedger),
+      this.fetchSwapEvents(address, startLedger, head),
+      this.fetchLiquidityEvents(address, startLedger, head),
     ]);
 
     const rows: TaxReportRow[] = [
@@ -169,6 +185,7 @@ export class TaxReportingModule {
   private async fetchSwapEvents(
     address: string,
     startLedger: number,
+    head: LedgerHead,
   ): Promise<TaxReportRow[]> {
     const response = await this.fetchEvents(startLedger, ["swap"]);
     const rows: TaxReportRow[] = [];
@@ -186,7 +203,7 @@ export class TaxReportingModule {
       const feeAmount = (amountIn * BigInt(feeBps)) / 10000n;
 
       rows.push({
-        date: new Date(ev.ledgerClosedAt ?? 0).toISOString(),
+        date: eventDate(ev, head),
         type: "swap",
         tokenIn: readAddress(data, "token_in") ?? "",
         amountIn: fromSorobanAmount(amountIn, TOKEN_DECIMALS),
@@ -204,6 +221,7 @@ export class TaxReportingModule {
   private async fetchLiquidityEvents(
     address: string,
     startLedger: number,
+    head: LedgerHead,
   ): Promise<TaxReportRow[]> {
     const [addEvents, removeEvents] = await Promise.all([
       this.fetchEvents(startLedger, ["add_liquidity"]),
@@ -213,7 +231,9 @@ export class TaxReportingModule {
     const rows: TaxReportRow[] = [];
 
     for (const ev of [...addEvents, ...removeEvents]) {
-      const isAdd = (ev.topic?.[0] ?? "") === "add_liquidity";
+      // Event topics are XDR ScVals: comparing them to a bare string always
+      // failed, which silently reported every add_liquidity as a removal.
+      const isAdd = decodeEventTopic(ev.topic?.[0]) === "add_liquidity";
       const data = decodeMapEvent(ev.value);
       if (!data) continue;
 
@@ -226,7 +246,7 @@ export class TaxReportingModule {
       const tokenB = readAddress(data, "token_b") ?? "";
 
       rows.push({
-        date: new Date(ev.ledgerClosedAt ?? 0).toISOString(),
+        date: eventDate(ev, head),
         type: isAdd ? "add_liquidity" : "remove_liquidity",
         tokenIn: tokenA,
         amountIn: fromSorobanAmount(amountA, TOKEN_DECIMALS),
@@ -300,11 +320,6 @@ export class TaxReportingModule {
         const disposalQty = BigInt(
           Math.floor(parseFloat(row.amountIn) * 10_000_000)
         );
-        const salePrice = (
-          BigInt(Math.floor(parseFloat(row.amountOut) * 10_000_000)) /
-          disposalQty
-        ).toString();
-
         const orderedPurchases = method === "FIFO" ? purchases : [...purchases].reverse();
         let remainingDisposal = disposalQty;
         let disposalCostBasis = 0n;
@@ -458,19 +473,22 @@ export class TaxReportingModule {
     };
   }
 
-  private async fetchEvents(
-    startLedger: number,
-    topics: string[],
-  ): Promise<RawEvent[]> {
-    const request: SorobanRpc.Server.GetEventsRequest = {
-      startLedger,
-      filters: [{ type: "contract", contractIds: [], topics: [topics] }],
-      limit: 200,
-    };
+  /**
+   * Fetch contract events for the given topics through the shared EventCursor.
+   *
+   * The cursor encodes topics as base64 XDR ScVals and keeps the ledger cursor
+   * anchored to the chain head — hand-rolling either here is what produced the
+   * raw-string filter bug this module was audited for.
+   */
+  private async fetchEvents(startLedger: number, topics: string[]): Promise<RawEvent[]> {
+    const cursor = new EventCursor(this.client.server);
+    const events = await cursor.scan({
+      topics,
+      fromLedger: startLedger,
+      limit: MAX_HISTORY_EVENTS,
+    });
 
-    const response = await this.client.server.getEvents(request);
-    if (!response || !Array.isArray(response.events)) return [];
-    return response.events as unknown as RawEvent[];
+    return events as unknown as RawEvent[];
   }
 }
 
@@ -480,10 +498,26 @@ export class TaxReportingModule {
 
 interface RawEvent {
   value: unknown;
-  topic?: string[];
+  /** Topic entries are XDR ScVals (or base64 XDR on raw responses). */
+  topic?: unknown[];
   txHash?: string;
   ledgerClosedAt?: string | number;
   ledger?: number;
+}
+
+/**
+ * Resolve an event's close time as an ISO string. Prefers the on-chain
+ * `ledgerClosedAt`; when absent, approximates it from the event's ledger
+ * sequence via the shared {@link ledgerToApproxTime} helper.
+ */
+function eventDate(ev: RawEvent, head: LedgerHead): string {
+  if (ev.ledgerClosedAt != null) {
+    return new Date(ev.ledgerClosedAt).toISOString();
+  }
+  if (typeof ev.ledger === "number") {
+    return new Date(ledgerToApproxTime(ev.ledger, head) * 1000).toISOString();
+  }
+  return new Date(0).toISOString();
 }
 
 function decodeMapEvent(value: unknown): Map<string, unknown> | null {
