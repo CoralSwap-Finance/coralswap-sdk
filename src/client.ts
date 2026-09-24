@@ -20,6 +20,7 @@ import { ConnectionPool } from '@/utils/connection-pool';
 import { buildSimulationResult } from '@/utils/simulation';
 import { RateLimiter } from '@/utils/rate-limiter';
 import { withRetry, RetryOptions, isRetryable } from '@/utils/retry';
+import { validateRpcUrls, getRpcUrlScheme } from '@/utils/rpc-url';
 import { TransactionComposer } from '@/transaction-composer';
 import { TypedEventCursor } from '@/utils/event-cursor';
 import { EventCursorOptions } from '@/utils/event-cursor';
@@ -48,6 +49,11 @@ export class CoralSwapClient {
   private _connectionPool: ConnectionPool;
   private signer: Signer | null = null;
   private _publicKeyCache: string | null = null;
+  /**
+   * Serializes transaction lifecycles so concurrent submissions cannot build
+   * transactions from the same account sequence number (nonce).
+   */
+  private _submissionQueue: Promise<void> = Promise.resolve();
   private _factory: FactoryClient | null = null;
   private _router: RouterClient | null = null;
   private _factoryModule: FactoryModule | null = null;
@@ -80,7 +86,8 @@ export class CoralSwapClient {
         this.server = this.createRpcServer(rpcUrl);
         this._poller = null;
         this._activeRpcUrl = rpcUrl;
-        this.networkConfig.rpcUrl = rpcUrl;
+        this._factory = null;
+        this._router = null;
       }
 
       try {
@@ -140,9 +147,13 @@ export class CoralSwapClient {
    * @private
    */
   private createRpcServer(url: string): rpc.Server {
+    // Cleartext (http/ws) and wss endpoints must opt in to `allowHttp` --
+    // stellar-sdk otherwise throws for anything that is not https.
+    const scheme = getRpcUrlScheme(url);
     const options: Record<string, unknown> = {
       headers: this.config.rpcHeaders,
       ...this.config.fetchOptions,
+      allowHttp: scheme !== 'https',
     };
     return new rpc.Server(url, options);
   }
@@ -180,6 +191,9 @@ export class CoralSwapClient {
     } else {
       this._rpcUrls = [this.networkConfig.rpcUrl];
     }
+
+    // Reject cleartext / invalid RPC endpoints before anything can be sent.
+    validateRpcUrls(this._rpcUrls, this.network);
 
     // Keep networkConfig.rpcUrl in sync with the active RPC URL
     this.networkConfig.rpcUrl = this._rpcUrls[0];
@@ -360,6 +374,9 @@ export class CoralSwapClient {
       this._rpcUrls = [this.networkConfig.rpcUrl];
     }
 
+    // Reject cleartext / invalid RPC endpoints before anything can be sent.
+    validateRpcUrls(this._rpcUrls, network);
+
     // Keep networkConfig.rpcUrl in sync with the active RPC URL
     this.networkConfig.rpcUrl = this._rpcUrls[0];
 
@@ -449,6 +466,26 @@ export class CoralSwapClient {
    * const result = await client.submitTransaction([op]);
    */
   async submitTransaction(
+      operations: xdr.Operation[],
+      source?: string,
+  ): Promise<Result<{ txHash: string; ledger: number }>> {
+    // Soroban account sequences are nonces. Queue the complete
+    // getAccount -> build -> simulate -> sign -> send -> poll lifecycle,
+    // rather than only the final send, so two callers cannot use the same
+    // sequence number. The queue is settled on both success and failure so a
+    // failed submission never permanently blocks later submissions.
+    const submission = this._submissionQueue.then(() =>
+      this.submitTransactionUnlocked(operations, source),
+    );
+    this._submissionQueue = submission.then(
+      () => undefined,
+      () => undefined,
+    );
+    return submission;
+  }
+
+  /** Execute one transaction lifecycle. Calls are serialized by submitTransaction. */
+  private async submitTransactionUnlocked(
       operations: xdr.Operation[],
       source?: string,
   ): Promise<Result<{ txHash: string; ledger: number }>> {

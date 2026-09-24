@@ -10,6 +10,7 @@
   - `sendWebhook(webhookId, payload, { event })` honours the webhook's event subscription: an event the endpoint did not subscribe to is skipped without an HTTP request (`filtered: true`)
 - `Webhook` and `WebhookUpdate` types for the above
 - CI check requiring a CHANGELOG entry under `[Unreleased]` for PRs that change `src/`
+- `MonitoringModule.getSystemMetrics(period)`: TVL, swap volume, fee revenue, and unique-user change vs. the previous equal-length window, plus top growing/declining pools. Historical figures are read through the shared `TypedEventCursor` (#478)
 
 ### Fixed
 - Restored source, config, and test files corrupted when #784, #785, #786, #789, #790, and #792 were merged (overwritten code, invalid `package.json` / `package-lock.json`), which left `main` unable to install, compile, or pass CI
