@@ -55,8 +55,7 @@ jobs:
               B=$(node -e "const s=require('./$SUMMARY_FILE'); const m=s['$mod']; console.log(m.branches.pct)")
               F=$(node -e "const s=require('./$SUMMARY_FILE'); const m=s['$mod']; console.log(m.functions.pct)")
               L=$(node -e "const s=require('./$SUMMARY_FILE'); const m=s['$mod']; console.log(m.lines.pct)")
-              MODULE_ROWS="${MODULE_ROWS}| \`${mod}\` | ${S}% | ${B}% | ${F}% | ${L}% |
-"
+              MODULE_ROWS="${MODULE_ROWS}| \`${mod}\` | ${S}% | ${B}% | ${F}% | ${L}% |"$'\n'
             fi
           done
 
