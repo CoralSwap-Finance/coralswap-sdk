@@ -4,6 +4,7 @@
 
 ### Added
 - CI check requiring a CHANGELOG entry under `[Unreleased]` for PRs that change `src/`
+- `MonitoringModule.getSystemMetrics(period)`: TVL, swap volume, fee revenue, and unique-user change vs. the previous equal-length window, plus top growing/declining pools. Historical figures are read through the shared `TypedEventCursor` (#478)
 
 ### Changed
 - Liquidity module validates add/remove-liquidity and add-liquidity-quote inputs with Zod schemas via `validateWithSchema`, replacing the hand-written guards while preserving every existing rule and error message

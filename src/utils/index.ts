@@ -74,6 +74,16 @@ export {
 } from './validation';
 
 export {
+  getRpcUrlScheme,
+  isSecureRpcUrl,
+  isCleartextRpcAllowed,
+  validateRpcUrls,
+  SECURE_RPC_SCHEMES,
+  ALLOWED_RPC_SCHEMES,
+} from './rpc-url';
+export type { RpcUrlScheme } from './rpc-url';
+
+export {
   batchRequest,
   batchRequestOrThrow,
   batchCall,

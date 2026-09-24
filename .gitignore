@@ -11,3 +11,7 @@ coverage/
 docs/*
 !docs/PERFORMANCE.md
 !docs/error-taxonomy.md
+
+# Rust build output (1.2GB of Cargo artifacts was previously tracked here)
+target/
+**/target/
