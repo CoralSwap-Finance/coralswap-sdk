@@ -5,6 +5,7 @@ import {
   PortfolioEntrySnapshot,
   PortfolioPnL,
   PortfolioPosition,
+  UnavailablePortfolioPosition,
 } from "@/types/portfolio";
 import { TreasuryModule, TreasuryModuleOptions } from "@/modules/treasury";
 import { PositionsModule } from "@/modules/positions";
@@ -16,7 +17,48 @@ import {
   CoralSwapSDKError,
 } from "@/errors";
 
-const STROOP = 1e7;
+const STROOP_SCALE = 10_000_000n; // 1e7, matches the SDK's 7-decimal token precision
+
+/**
+ * Fixed-point decimal places used to represent a floating-point spot price
+ * as an exact BigInt. 15 is comfortably inside float64's ~15-17 significant
+ * decimal digits, so this never claims precision the price itself doesn't
+ * actually have.
+ */
+const PRICE_SCALE_DECIMALS = 15;
+const PRICE_SCALE = 10n ** BigInt(PRICE_SCALE_DECIMALS);
+
+/**
+ * Represent a floating-point price as an exact, fixed-point BigInt scaled by
+ * {@link PRICE_SCALE}, via string parsing rather than float multiplication
+ * (`price * 1e15` would itself overflow Number.MAX_SAFE_INTEGER for
+ * ordinary prices and round unpredictably).
+ */
+function scalePrice(price: number): bigint {
+  const negative = price < 0;
+  const [intPart, fracPart = ""] = Math.abs(price)
+    .toFixed(PRICE_SCALE_DECIMALS)
+    .split(".");
+  const scaled =
+    BigInt(intPart) * PRICE_SCALE + BigInt(fracPart.padEnd(PRICE_SCALE_DECIMALS, "0"));
+  return negative ? -scaled : scaled;
+}
+
+/**
+ * Exact USD value (scaled by {@link PRICE_SCALE}) of `amountStroops` at
+ * `price`, computed entirely in BigInt -- `amountStroops` is never routed
+ * through `Number`, so a position's raw on-chain amount (which can exceed
+ * Number.MAX_SAFE_INTEGER for large holdings) never loses stroop-level
+ * precision before the price is applied.
+ */
+function scaledPositionValue(amountStroops: bigint, price: number): bigint {
+  return (amountStroops * scalePrice(price)) / STROOP_SCALE;
+}
+
+/** Convert a {@link PRICE_SCALE}-scaled BigInt back to a display `number`. */
+function toDisplayUSD(scaled: bigint): number {
+  return Number(scaled) / Number(PRICE_SCALE);
+}
 
 /**
  * Aggregates an owner's LP positions across CoralSwap pools into a
@@ -105,20 +147,29 @@ export class PortfolioModule extends TreasuryModule {
    * aggregated {@link Portfolio} with per-pool breakdowns and a total USD
    * value.
    *
+   * Per-position USD values (and their sum, `totalValueUSD`) are computed
+   * entirely in BigInt from the on-chain stroop amounts, converting to a
+   * display `number` only once at the very end -- large positions never
+   * lose stroop-level precision through a premature `Number()` conversion,
+   * and per-position rounding never compounds across the total.
+   *
+   * A position without price coverage for one of its tokens, or that
+   * otherwise fails to value, is excluded from `positions` and
+   * `totalValueUSD` and reported in `unavailablePositions` instead -- it
+   * never aborts the call or zeroes out the rest of an otherwise-valid
+   * portfolio.
+   *
    * This is an alias for {@link get} provided for readability.
    *
    * @param owner - Stellar address (`G…` or `C…`) of the wallet to query.
    * @param options - Optional filter. Supply `pairAddresses` to restrict the
    *   query to specific pools instead of scanning all factory pairs.
-   * @returns Resolved {@link Portfolio} containing `positions` and
-   *   `totalValueUSD`.
+   * @returns Resolved {@link Portfolio} containing `positions`,
+   *   `totalValueUSD` (over available positions only), and
+   *   `unavailablePositions`.
    *
    * @throws {@link ValidationError} if `owner` is not a valid Stellar address.
    * @throws {@link AddressNotFoundError} if the address has no on-chain state.
-   * @throws {@link MissingPriceFeedError} if a token in one of the positions
-   *   has no stablecoin-paired pool (and therefore no derivable USD price).
-   * @throws {@link PortfolioCalculationError} if reserve/balance fetching
-   *   fails for a specific pool.
    *
    * @example
    * ```ts
@@ -200,21 +251,46 @@ export class PortfolioModule extends TreasuryModule {
     const { priceMap } = await this.buildPriceMapTracked(allPairs);
 
     const positions: PortfolioPosition[] = [];
-    for (const pos of summary.positions) {
-      const price0 = priceMap.get(pos.token0) ?? 0;
-      const price1 = priceMap.get(pos.token1) ?? 0;
+    const unavailablePositions: UnavailablePortfolioPosition[] = [];
+    // Accumulated in BigInt (scaled by PRICE_SCALE) across the whole loop,
+    // and converted to a display Number exactly once at the end -- summing
+    // already-rounded per-position floats here would let rounding error
+    // compound across many positions instead of only at the final display
+    // step.
+    let totalScaled = 0n;
 
-      if (!priceMap.has(pos.token0)) {
-        throw new MissingPriceFeedError(pos.token0, false);
-      }
-      if (!priceMap.has(pos.token1)) {
-        throw new MissingPriceFeedError(pos.token1, false);
+    for (const pos of summary.positions) {
+      const unavailable = (reason: string): UnavailablePortfolioPosition => ({
+        pairAddress: pos.pairAddress,
+        lpTokenAddress: pos.lpTokenAddress,
+        token0: pos.token0,
+        token1: pos.token1,
+        lpBalance: pos.balance,
+        token0Amount: pos.token0Amount,
+        token1Amount: pos.token1Amount,
+        reason,
+      });
+
+      const price0 = priceMap.get(pos.token0);
+      const price1 = priceMap.get(pos.token1);
+
+      if (price0 === undefined || price1 === undefined) {
+        // No price coverage for one of this position's tokens -- isolate it
+        // rather than aborting the whole portfolio (a bad/uncovered position
+        // must not zero out an otherwise-valid total).
+        const missing = price0 === undefined ? pos.token0 : pos.token1;
+        unavailablePositions.push(
+          unavailable(new MissingPriceFeedError(missing, false).message),
+        );
+        continue;
       }
 
       try {
-        const valueUSD =
-          (Number(pos.token0Amount) / STROOP) * price0 +
-          (Number(pos.token1Amount) / STROOP) * price1;
+        const valueScaled =
+          scaledPositionValue(pos.token0Amount, price0) +
+          scaledPositionValue(pos.token1Amount, price1);
+
+        totalScaled += valueScaled;
 
         positions.push({
           pairAddress: pos.pairAddress,
@@ -224,20 +300,30 @@ export class PortfolioModule extends TreasuryModule {
           lpBalance: pos.balance,
           token0Amount: pos.token0Amount,
           token1Amount: pos.token1Amount,
-          valueUSD,
+          valueUSD: toDisplayUSD(valueScaled),
         });
       } catch (err) {
-        if (err instanceof CoralSwapSDKError) throw err;
-        throw new PortfolioCalculationError(
-          pos.pairAddress,
-          err instanceof Error ? err.message : String(err),
+        // Any failure computing this position's value -- including a
+        // CoralSwapSDKError -- isolates just this position. Aborting the
+        // whole call on one bad position is exactly the failure mode this
+        // issue exists to remove.
+        unavailablePositions.push(
+          unavailable(
+            new PortfolioCalculationError(
+              pos.pairAddress,
+              err instanceof Error ? err.message : String(err),
+            ).message,
+          ),
         );
       }
     }
 
-    const totalValueUSD = positions.reduce((sum, p) => sum + p.valueUSD, 0);
-
-    return { owner, positions, totalValueUSD };
+    return {
+      owner,
+      positions,
+      totalValueUSD: toDisplayUSD(totalScaled),
+      unavailablePositions,
+    };
   }
 
   /**

@@ -102,6 +102,30 @@ export interface PortfolioPosition {
 }
 
 /**
+ * An LP position that could not be valued -- missing price coverage for one
+ * of its tokens, or a value-calculation failure -- and so was excluded from
+ * {@link Portfolio.totalValueUSD}.
+ */
+export interface UnavailablePortfolioPosition {
+  /** Pair contract address */
+  pairAddress: string;
+  /** LP token contract address */
+  lpTokenAddress: string;
+  /** Token 0 address in the pair */
+  token0: string;
+  /** Token 1 address in the pair */
+  token1: string;
+  /** LP token balance held by the owner */
+  lpBalance: bigint;
+  /** Implied token 0 amount belonging to the owner */
+  token0Amount: bigint;
+  /** Implied token 1 amount belonging to the owner */
+  token1Amount: bigint;
+  /** Human-readable explanation of why this position could not be valued */
+  reason: string;
+}
+
+/**
  * Aggregated portfolio view for an address across all (or selected)
  * CoralSwap pools.
  *
@@ -127,18 +151,29 @@ export interface Portfolio {
   owner: string;
 
   /**
-   * All non-zero LP positions held by `owner` at query time.
-   * Positions with a zero LP balance are excluded.
+   * All non-zero LP positions held by `owner` at query time that were
+   * successfully valued. Positions with a zero LP balance are excluded;
+   * positions that could not be valued are reported in
+   * {@link unavailablePositions} instead.
    */
   positions: PortfolioPosition[];
 
   /**
-   * Sum of all `position.valueUSD` values.
+   * Sum of `position.valueUSD` over {@link positions} only (excluding
+   * {@link unavailablePositions}).
    *
-   * Represents the total estimated USD value of the portfolio at the
-   * time of the query. Will be `0` if no stablecoin anchors are configured.
+   * Represents the total estimated USD value of the successfully-valued
+   * portion of the portfolio at the time of the query. A position without
+   * price coverage or that fails to value never zeroes or aborts this
+   * total. Will be `0` if no stablecoin anchors are configured.
    */
   totalValueUSD: number;
+  /**
+   * Positions held by the owner that could not be valued and are excluded
+   * from {@link totalValueUSD} -- e.g. no price feed for one of the tokens.
+   * Empty when every held position was valued successfully.
+   */
+  unavailablePositions: UnavailablePortfolioPosition[];
 }
 
 /**
