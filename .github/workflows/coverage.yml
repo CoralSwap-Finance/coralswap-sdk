@@ -89,6 +89,10 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Comment coverage on PR
+        # Posting the comment is a convenience, not a gate. It calls the GitHub
+        # API, which can 403 on the installation's hourly limit during a busy
+        # merge run, and a failed comment must not fail the coverage check.
+        continue-on-error: true
         if: always() && steps.coverage.outputs.summary != ''
         uses: actions/github-script@v7
         with:
