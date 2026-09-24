@@ -9,7 +9,7 @@
  * Tests are grouped by the four main probe functions.
  */
 
-import { SorobanRpc, TransactionBuilder } from '@stellar/stellar-sdk';
+import { rpc as SorobanRpc, TransactionBuilder } from '@stellar/stellar-sdk';
 
 import {
   checkRPCHealth,

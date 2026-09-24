@@ -26,7 +26,6 @@ import {
 
 import { NETWORK_CONFIGS, TESTNET_NETWORK } from '@/config';
 import { Network } from '@/types/common';
-import { sleep } from '@/utils/retry';
 
 /** Default RPC health-probe timeout in milliseconds. */
 const DEFAULT_RPC_TIMEOUT_MS = 5_000;
