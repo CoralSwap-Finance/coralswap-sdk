@@ -215,6 +215,19 @@ export class ValidationError extends CoralSwapSDKError {
 }
 
 /**
+ * Threshold value is invalid.
+ */
+export class InvalidThresholdError extends ValidationError {
+  constructor(alertType: string, value: number, min: number, max: number) {
+    super(
+      `${alertType} threshold ${value} is out of range (${min}-${max})`,
+      { alertType, value, min, max },
+    );
+    this.name = "InvalidThresholdError";
+  }
+}
+
+/**
  * Raised when decoding contract storage or XDR for a specific slot fails.
  * Carries the offending slot identifier in `details.slot` so callers can
  * distinguish decode failures from empty/missing slots.

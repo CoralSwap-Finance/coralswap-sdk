@@ -417,7 +417,7 @@ export class StopLossModule {
 
     // Enrich only the non-empty decoded orders, preserving successful decoding semantics
     const enriched = await Promise.all(
-      decodedSlots.map(async (s) => (s.order ? await this.enrichOrder(s.order) : null)),
+      decodedSlots.map(async (s) => (s.order ? await this.enrichOrder(s.order, options) : null)),
     );
 
     const filtered = enriched.filter((o): o is StopLossOrder => o !== null);
