@@ -2,7 +2,7 @@ import { CoralSwapClient } from '@/client';
 import { PairInfo } from '@/types/pool';
 import { sortTokens } from '@/utils/addresses';
 import { ValidationError, PairNotFoundError } from '@/errors';
-import { SorobanRpc } from '@stellar/stellar-sdk';
+import { rpc as SorobanRpc } from '@stellar/stellar-sdk';
 
 /** Default cache TTL in milliseconds (60 seconds). */
 const DEFAULT_CACHE_TTL_MS = 60_000;
