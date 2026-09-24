@@ -45,7 +45,8 @@ export {
 
 // Type exports
 export * from "@/types";
-export type { Logger } from "@/types/common";
+export type { Logger, Signer } from "@/types/common";
+export type { FeeEstimates } from "@/types/fee-estimates";
 
 // Contract clients
 export {
@@ -57,6 +58,12 @@ export {
   decodeFlashLoanData,
   calculateRepayment,
   validateFeeFloor,
+  verifyReserveConservation,
+} from "@/contracts";
+export type {
+  PairReserves,
+  ReserveConservationOptions,
+  ReserveConservationResult,
 } from "@/contracts";
 
 // Feature modules
@@ -68,6 +75,8 @@ export {
   OracleModule,
   PortfolioModule,
   RiskMetricsModule,
+  RiskScoringModule,
+  RiskLabel,
   TokenListModule,
   FactoryModule,
   RouterModule,
@@ -83,10 +92,14 @@ export {
   GovernanceModule,
   DCAModule,
   LimitOrderModule,
+  SquidModule,
+  BlendModule,
 } from "@/modules";
 export type { OptimalPath } from "@/modules/router";
 export type { TWAPObservation, TWAPResult, TraderRanking, GetTopTradersOptions } from "@/modules";
+export { MIN_TWAP_WINDOW_SECONDS, MAX_OBSERVATIONS } from "@/modules";
 export type { TreasuryModuleOptions, LeaderboardEntry, LeaderboardOptions } from "@/modules";
+export type { ConcentrationRiskReport, PortfolioRiskReport } from "@/modules/risk-scoring";
 
 // Utilities
 export {
@@ -122,34 +135,54 @@ export {
   withRetry,
   isRetryable,
   sleep,
+  getTransactionStatus,
+  shouldRetrySubmission,
   validateAddress,
   validatePositiveAmount,
   validateNonNegativeAmount,
   validateSlippage,
   validateDistinctTokens,
   isValidPath,
+  getRpcUrlScheme,
+  isSecureRpcUrl,
+  isCleartextRpcAllowed,
+  validateRpcUrls,
   EventParser,
   EVENT_TOPICS,
   decodeEvents,
   decodeEventsFromXdr,
+  EventCursor,
+  TypedEventCursor,
+  decodeEventTopic,
+  MIN_START_LEDGER,
   batchCall,
   batchCallSequential,
   batchRequest,
   batchRequestOrThrow,
   DEFAULT_BATCH_CONCURRENCY,
+  ConnectionPool,
+  ledgerToApproxTime,
+  LEDGER_CLOSE_INTERVAL_SECONDS,
 } from './utils';
-
 
 export type {
   RetryConfig,
   SimulationResult,
   SimulationResourceEstimate,
   WaitNextLedgerOptions,
+  LedgerHead,
   DecodeEventsOptions,
   SimulateFn,
   BatchRequestOptions,
   BatchResult,
+  TransactionStatus,
+  RetryDecision,
+  EventCursorOptions,
+  TypedEventScanParams,
 } from "./utils";
+
+// Schema validation
+export { validateWithSchema, OrderBookAddressSchema, TradeFilterSchema, GetOpenOrdersSchema, GetOrderSummarySchema } from "@/schemas";
 
 // Errors
 export {
@@ -165,6 +198,7 @@ export {
   ValidationError,
   FlashLoanError,
   FlashLoanFailedError,
+  CrossChainError,
   CircuitBreakerError,
   SignerError,
   MissingPriceFeedError,
@@ -174,3 +208,5 @@ export {
   WebhookDisabledError,
   mapError,
 } from "@/errors";
+
+export { TransactionComposer } from "./transaction-composer";

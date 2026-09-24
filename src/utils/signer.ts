@@ -19,6 +19,6 @@ export class KeypairSigner implements Signer {
   async signTransaction(txXdr: string): Promise<string> {
     const tx = new Transaction(txXdr, this.networkPassphrase);
     tx.sign(this.keypair);
-    return tx.toXDR();
+    return tx.toXdr();
   }
 }
