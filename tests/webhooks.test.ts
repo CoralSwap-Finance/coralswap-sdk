@@ -669,6 +669,507 @@ describe('WebhookModule', () => {
     });
   });
 
+  describe('verification state (verified flag)', () => {
+    it('marks a freshly registered webhook as unverified', async () => {
+      const webhooks = new WebhookModule({ logger: silentLogger });
+      const id = await webhooks.registerWebhook(VALID_URL, ['price']);
+      expect(webhooks.isWebhookVerified(id)).toBe(false);
+      expect(webhooks.getWebhook(id)?.verified).toBe(false);
+      expect(webhooks.listWebhooks()[0].verified).toBe(false);
+    });
+
+    it('reports unknown ids as unverified', () => {
+      const webhooks = new WebhookModule();
+      expect(webhooks.isWebhookVerified('not-registered')).toBe(false);
+    });
+
+    it('marks the webhook verified after a 200 handshake', async () => {
+      const mock = installFetchMock([() => responseWithStatus(200, { ok: true })]);
+      try {
+        const webhooks = new WebhookModule({ logger: silentLogger });
+        const id = await webhooks.registerWebhook(VALID_URL, ['price']);
+        const result = await webhooks.verifyWebhook(id);
+        expect(result.verified).toBe(true);
+        expect(webhooks.isWebhookVerified(id)).toBe(true);
+        expect(webhooks.getWebhook(id)?.verified).toBe(true);
+      } finally {
+        mock.restore();
+      }
+    });
+
+    it('accepts any other 2xx status as a successful handshake', async () => {
+      // 204 carries no body, so it cannot go through responseWithStatus().
+      const mock = installFetchMock([() => new Response(null, { status: 204 })]);
+      try {
+        const webhooks = new WebhookModule({ logger: silentLogger });
+        const id = await webhooks.registerWebhook(VALID_URL, ['price']);
+        const result = await webhooks.verifyWebhook(id);
+        expect(result.statusCode).toBe(204);
+        expect(result.verified).toBe(true);
+        expect(webhooks.isWebhookVerified(id)).toBe(true);
+      } finally {
+        mock.restore();
+      }
+    });
+
+    it('marks the webhook unverified when the endpoint answers 4xx', async () => {
+      const mock = installFetchMock([() => responseWithStatus(401)]);
+      try {
+        const webhooks = new WebhookModule({ logger: silentLogger });
+        const id = await webhooks.registerWebhook(VALID_URL, ['price']);
+        const result = await webhooks.verifyWebhook(id);
+        expect(result.verified).toBe(false);
+        expect(webhooks.isWebhookVerified(id)).toBe(false);
+        expect(webhooks.getWebhook(id)?.verified).toBe(false);
+      } finally {
+        mock.restore();
+      }
+    });
+
+    it('marks the webhook unverified when the handshake cannot connect', async () => {
+      const mock = installFetchMock([() => Promise.reject(new Error('ECONNREFUSED'))]);
+      try {
+        const webhooks = new WebhookModule({ logger: silentLogger });
+        const id = await webhooks.registerWebhook(VALID_URL, ['price']);
+        const result = await webhooks.verifyWebhook(id);
+        expect(result.verified).toBe(false);
+        expect(webhooks.isWebhookVerified(id)).toBe(false);
+      } finally {
+        mock.restore();
+      }
+    });
+
+    it('flips an already verified webhook back to unverified after a failing handshake', async () => {
+      const mock = installFetchMock([
+        () => responseWithStatus(200),
+        () => responseWithStatus(500),
+      ]);
+      try {
+        const webhooks = new WebhookModule({ logger: silentLogger });
+        const id = await webhooks.registerWebhook(VALID_URL, ['price']);
+        expect((await webhooks.verifyWebhook(id)).verified).toBe(true);
+        expect(webhooks.isWebhookVerified(id)).toBe(true);
+        expect((await webhooks.verifyWebhook(id)).verified).toBe(false);
+        expect(webhooks.isWebhookVerified(id)).toBe(false);
+      } finally {
+        mock.restore();
+      }
+    });
+
+    it('re-verifies a webhook that failed an earlier handshake', async () => {
+      const mock = installFetchMock([
+        () => responseWithStatus(401),
+        () => responseWithStatus(200),
+      ]);
+      try {
+        const webhooks = new WebhookModule({ logger: silentLogger });
+        const id = await webhooks.registerWebhook(VALID_URL, ['price']);
+        expect((await webhooks.verifyWebhook(id)).verified).toBe(false);
+        expect((await webhooks.verifyWebhook(id)).verified).toBe(true);
+        expect(webhooks.isWebhookVerified(id)).toBe(true);
+      } finally {
+        mock.restore();
+      }
+    });
+  });
+
+  describe('updateWebhook()', () => {
+    it('throws WebhookError when the webhook id is unknown', async () => {
+      const webhooks = new WebhookModule();
+      await expect(
+        webhooks.updateWebhook('not-registered', { url: VALID_URL }),
+      ).rejects.toThrow(WebhookError);
+    });
+
+    it('throws ValidationError when updates is not an object', async () => {
+      const webhooks = new WebhookModule({ logger: silentLogger });
+      const id = await webhooks.registerWebhook(VALID_URL, ['price']);
+      await expect(
+        webhooks.updateWebhook(id, null as unknown as { url: string }),
+      ).rejects.toThrow(ValidationError);
+    });
+
+    it('updates the url while preserving id and createdAt', async () => {
+      const webhooks = new WebhookModule({ logger: silentLogger });
+      const id = await webhooks.registerWebhook(VALID_URL, ['price']);
+      const before = webhooks.getWebhook(id)!;
+      const nextUrl = 'https://hooks.example.com/v2';
+      await webhooks.updateWebhook(id, { url: nextUrl });
+      const after = webhooks.getWebhook(id)!;
+      expect(after.url).toBe(nextUrl);
+      expect(after.id).toBe(id);
+      expect(after.createdAt).toBe(before.createdAt);
+      expect(after.events).toEqual(['price']);
+      expect(after.updatedAt).toBeGreaterThanOrEqual(before.createdAt);
+    });
+
+    it('normalizes the url through the URL parser', async () => {
+      const webhooks = new WebhookModule({ logger: silentLogger });
+      const id = await webhooks.registerWebhook(VALID_URL, ['price']);
+      await webhooks.updateWebhook(id, { url: 'HTTPS://hooks.example.com/other' });
+      expect(webhooks.getWebhook(id)?.url).toBe('https://hooks.example.com/other');
+    });
+
+    it('rejects non-HTTPS urls and leaves the stored webhook untouched', async () => {
+      const webhooks = new WebhookModule({ logger: silentLogger });
+      const id = await webhooks.registerWebhook(VALID_URL, ['price']);
+      await expect(
+        webhooks.updateWebhook(id, { url: 'http://hooks.example.com/coral' }),
+      ).rejects.toThrow(ValidationError);
+      expect(webhooks.getWebhook(id)?.url).toBe(VALID_URL);
+      expect(webhooks.getWebhook(id)?.updatedAt).toBeUndefined();
+    });
+
+    it('rejects malformed and empty urls', async () => {
+      const webhooks = new WebhookModule({ logger: silentLogger });
+      const id = await webhooks.registerWebhook(VALID_URL, ['price']);
+      await expect(webhooks.updateWebhook(id, { url: 'not-a-url' })).rejects.toThrow(ValidationError);
+      await expect(webhooks.updateWebhook(id, { url: '   ' })).rejects.toThrow(ValidationError);
+      expect(webhooks.getWebhook(id)?.url).toBe(VALID_URL);
+    });
+
+    it('replaces the event subscription', async () => {
+      const webhooks = new WebhookModule({ logger: silentLogger });
+      const id = await webhooks.registerWebhook(VALID_URL, ['price']);
+      await webhooks.updateWebhook(id, { events: ['il', 'flash-loan'] });
+      expect(webhooks.getWebhook(id)?.events).toEqual(['il', 'flash-loan']);
+    });
+
+    it('trims and de-duplicates event names', async () => {
+      const webhooks = new WebhookModule({ logger: silentLogger });
+      const id = await webhooks.registerWebhook(VALID_URL, ['price']);
+      await webhooks.updateWebhook(id, { events: [' il ', 'price', 'il'] });
+      expect(webhooks.getWebhook(id)?.events).toEqual(['il', 'price']);
+    });
+
+    it('rejects empty event arrays and empty event names', async () => {
+      const webhooks = new WebhookModule({ logger: silentLogger });
+      const id = await webhooks.registerWebhook(VALID_URL, ['price']);
+      await expect(webhooks.updateWebhook(id, { events: [] })).rejects.toThrow(ValidationError);
+      await expect(webhooks.updateWebhook(id, { events: ['price', ' '] })).rejects.toThrow(ValidationError);
+      expect(webhooks.getWebhook(id)?.events).toEqual(['price']);
+    });
+
+    it('rejects empty secrets and accepts a new non-empty secret', async () => {
+      const webhooks = new WebhookModule({ logger: silentLogger });
+      const id = await webhooks.registerWebhook(VALID_URL, ['price']);
+      await expect(webhooks.updateWebhook(id, { secret: '' })).rejects.toThrow(ValidationError);
+      await webhooks.updateWebhook(id, { secret: 'rotated' });
+      expect(webhooks.getWebhook(id)?.secret).toBe('rotated');
+    });
+
+    it('signs subsequent deliveries with the rotated secret', async () => {
+      const mock = installFetchMock([() => responseWithStatus(200)]);
+      try {
+        const webhooks = new WebhookModule({ logger: silentLogger });
+        const id = await webhooks.registerWebhook(VALID_URL, ['price'], 'old-secret');
+        await webhooks.updateWebhook(id, { secret: 'new-secret' });
+        await webhooks.sendWebhook(id, { foo: 'bar' });
+        const headers = mock.calls[0].init.headers as Record<string, string>;
+        const body = mock.calls[0].init.body as string;
+        const expected = `${WEBHOOK_SIGNATURE_ALGORITHM}=${createHmac(WEBHOOK_SIGNATURE_ALGORITHM, 'new-secret')
+          .update(body)
+          .digest('hex')}`;
+        expect(headers[WEBHOOK_SIGNATURE_HEADER]).toBe(expected);
+      } finally {
+        mock.restore();
+      }
+    });
+
+    it('keeps the verified flag when only events/secret change', async () => {
+      const mock = installFetchMock([() => responseWithStatus(200)]);
+      try {
+        const webhooks = new WebhookModule({ logger: silentLogger });
+        const id = await webhooks.registerWebhook(VALID_URL, ['price']);
+        await webhooks.verifyWebhook(id);
+        expect(webhooks.isWebhookVerified(id)).toBe(true);
+        await webhooks.updateWebhook(id, { events: ['il'], secret: 'shh' });
+        expect(webhooks.isWebhookVerified(id)).toBe(true);
+      } finally {
+        mock.restore();
+      }
+    });
+
+    it('resets verified to false when the url changes', async () => {
+      const mock = installFetchMock([() => responseWithStatus(200)]);
+      try {
+        const webhooks = new WebhookModule({ logger: silentLogger });
+        const id = await webhooks.registerWebhook(VALID_URL, ['price']);
+        await webhooks.verifyWebhook(id);
+        expect(webhooks.isWebhookVerified(id)).toBe(true);
+        await webhooks.updateWebhook(id, { url: 'https://hooks.example.com/moved' });
+        expect(webhooks.isWebhookVerified(id)).toBe(false);
+        expect(webhooks.getWebhook(id)?.verified).toBe(false);
+      } finally {
+        mock.restore();
+      }
+    });
+
+    it('clears the failure counter and re-enables an auto-disabled webhook when the url changes', async () => {
+      const mock = installFetchMock(buildResponseQueue(64, 500));
+      try {
+        const webhooks = new WebhookModule({ logger: silentLogger });
+        const id = await webhooks.registerWebhook(VALID_URL, ['price']);
+        for (let i = 0; i < WEBHOOK_DISABLE_FAILURE_THRESHOLD; i += 1) {
+          await webhooks.sendWebhook(id, { i }, { baseDelayMs: 1 });
+        }
+        expect(webhooks.isWebhookDisabled(id)).toBe(true);
+        expect(webhooks.getWebhook(id)?.failCount).toBe(WEBHOOK_DISABLE_FAILURE_THRESHOLD);
+
+        await webhooks.updateWebhook(id, { url: 'https://hooks.example.com/fixed' });
+
+        expect(webhooks.isWebhookDisabled(id)).toBe(false);
+        expect(webhooks.getWebhook(id)?.failCount).toBe(0);
+      } finally {
+        mock.restore();
+      }
+    });
+
+    it('does NOT re-enable a manually disabled webhook when the url changes', async () => {
+      const webhooks = new WebhookModule({ logger: silentLogger });
+      const id = await webhooks.registerWebhook(VALID_URL, ['price']);
+      webhooks.disableWebhook(id);
+      await webhooks.updateWebhook(id, { url: 'https://hooks.example.com/elsewhere' });
+      expect(webhooks.isWebhookDisabled(id)).toBe(true);
+    });
+  });
+
+  describe('listWebhooks() and the Webhook view', () => {
+    it('exposes id, url, events, verified, failCount and createdAt', async () => {
+      const webhooks = new WebhookModule({ logger: silentLogger });
+      const id = await webhooks.registerWebhook(VALID_URL, ['price', 'il']);
+      const [view] = webhooks.listWebhooks();
+      expect(view).toMatchObject({
+        id,
+        url: VALID_URL,
+        events: ['price', 'il'],
+        verified: false,
+        failCount: 0,
+      });
+      expect(typeof view.createdAt).toBe('number');
+      expect(view.lastDelivery).toBeUndefined();
+    });
+
+    it('reflects consecutive failures in failCount', async () => {
+      const mock = installFetchMock(buildResponseQueue(12, 500));
+      try {
+        const webhooks = new WebhookModule({ logger: silentLogger });
+        const id = await webhooks.registerWebhook(VALID_URL, ['price']);
+        await webhooks.sendWebhook(id, {}, { baseDelayMs: 1 });
+        await webhooks.sendWebhook(id, {}, { baseDelayMs: 1 });
+        expect(webhooks.getWebhook(id)?.failCount).toBe(2);
+        expect(webhooks.listWebhooks()[0].failCount).toBe(2);
+      } finally {
+        mock.restore();
+      }
+    });
+
+    it('records lastDelivery on the first delivery attempt', async () => {
+      const mock = installFetchMock([() => responseWithStatus(200)]);
+      try {
+        const webhooks = new WebhookModule({ logger: silentLogger });
+        const id = await webhooks.registerWebhook(VALID_URL, ['price']);
+        const before = Date.now();
+        await webhooks.sendWebhook(id, { foo: 'bar' });
+        const lastDelivery = webhooks.getWebhook(id)?.lastDelivery;
+        expect(typeof lastDelivery).toBe('number');
+        expect(lastDelivery).toBeGreaterThanOrEqual(before);
+      } finally {
+        mock.restore();
+      }
+    });
+
+    it('leaves lastDelivery untouched when the delivery is filtered out', async () => {
+      // A delivery that is filtered by subscription never reaches the network
+      // and therefore must not touch lastDelivery.
+      const mock = installFetchMock([() => responseWithStatus(200)]);
+      try {
+        const webhooks = new WebhookModule({ logger: silentLogger });
+        const id = await webhooks.registerWebhook(VALID_URL, ['price']);
+        await webhooks.sendWebhook(id, {}, { event: 'il' });
+        expect(webhooks.getWebhook(id)?.lastDelivery).toBeUndefined();
+      } finally {
+        mock.restore();
+      }
+    });
+
+    it('resets failCount after a successful delivery', async () => {
+      const mock = installFetchMock([
+        ...buildResponseQueue(12, 500),
+        () => responseWithStatus(200),
+      ]);
+      try {
+        const webhooks = new WebhookModule({ logger: silentLogger });
+        const id = await webhooks.registerWebhook(VALID_URL, ['price']);
+        for (let i = 0; i < 3; i += 1) {
+          await webhooks.sendWebhook(id, {}, { baseDelayMs: 1 });
+        }
+        expect(webhooks.getWebhook(id)?.failCount).toBe(3);
+        await webhooks.sendWebhook(id, {}, { baseDelayMs: 1 });
+        expect(webhooks.getWebhook(id)?.failCount).toBe(0);
+      } finally {
+        mock.restore();
+      }
+    });
+
+    it('keeps the webhook disabled past the failure threshold and reports the count', async () => {
+      const mock = installFetchMock(buildResponseQueue(64, 500));
+      try {
+        const webhooks = new WebhookModule({ logger: silentLogger });
+        const id = await webhooks.registerWebhook(VALID_URL, ['price']);
+        for (let i = 0; i < WEBHOOK_DISABLE_FAILURE_THRESHOLD + 1; i += 1) {
+          await webhooks.sendWebhook(id, { i }, { baseDelayMs: 1 }).catch(() => undefined);
+        }
+        expect(webhooks.isWebhookDisabled(id)).toBe(true);
+        expect(webhooks.getWebhook(id)?.failCount).toBeGreaterThanOrEqual(
+          WEBHOOK_DISABLE_FAILURE_THRESHOLD,
+        );
+      } finally {
+        mock.restore();
+      }
+    });
+
+    it('returns defensive copies that cannot mutate module state', async () => {
+      const webhooks = new WebhookModule({ logger: silentLogger });
+      const id = await webhooks.registerWebhook(VALID_URL, ['price'], 'shh');
+      const [view] = webhooks.listWebhooks();
+      view.events.push('tampered');
+      view.verified = true;
+      view.url = 'https://evil.example.com/';
+      const [fresh] = webhooks.listWebhooks();
+      expect(fresh.events).toEqual(['price']);
+      expect(fresh.verified).toBe(false);
+      expect(fresh.url).toBe(VALID_URL);
+      expect(fresh.secret).toBe('shh');
+      expect(webhooks.isWebhookVerified(id)).toBe(false);
+    });
+
+    it('returns an empty list once every webhook is deleted', async () => {
+      const webhooks = new WebhookModule({ logger: silentLogger });
+      const id = await webhooks.registerWebhook(VALID_URL, ['price']);
+      expect(webhooks.listWebhooks()).toHaveLength(1);
+      webhooks.deleteWebhook(id);
+      expect(webhooks.listWebhooks()).toHaveLength(0);
+    });
+
+    it('getWebhook returns undefined for unknown ids', () => {
+      const webhooks = new WebhookModule();
+      expect(webhooks.getWebhook('not-registered')).toBeUndefined();
+    });
+  });
+
+  describe('event filtering (events decide which alerts fire)', () => {
+    it('delivers when the requested event is subscribed and stamps the envelope', async () => {
+      const mock = installFetchMock([() => responseWithStatus(200)]);
+      try {
+        const webhooks = new WebhookModule({ logger: silentLogger });
+        const id = await webhooks.registerWebhook(VALID_URL, ['price', 'il']);
+        const result = await webhooks.sendWebhook(id, { foo: 'bar' }, { event: 'il' });
+        expect(result.delivered).toBe(true);
+        expect(result.filtered).toBeUndefined();
+        const headers = mock.calls[0].init.headers as Record<string, string>;
+        expect(headers['X-Webhook-Event']).toBe('il');
+        const envelope = JSON.parse(mock.calls[0].init.body as string);
+        expect(envelope.event).toBe('il');
+      } finally {
+        mock.restore();
+      }
+    });
+
+    it('skips the delivery — and issues no HTTP request — for an unsubscribed event', async () => {
+      const mock = installFetchMock([() => responseWithStatus(200)]);
+      try {
+        const webhooks = new WebhookModule({ logger: silentLogger });
+        const id = await webhooks.registerWebhook(VALID_URL, ['price']);
+        const result = await webhooks.sendWebhook(id, { foo: 'bar' }, { event: 'governance' });
+        expect(result).toEqual({
+          statusCode: 0,
+          delivered: false,
+          retryCount: 0,
+          filtered: true,
+        });
+        expect(mock.calls).toHaveLength(0);
+        expect(webhooks.getWebhookHistory(id).total).toBe(0);
+      } finally {
+        mock.restore();
+      }
+    });
+
+    it('does not count a filtered delivery as a failure', async () => {
+      const mock = installFetchMock([() => responseWithStatus(200)]);
+      try {
+        const webhooks = new WebhookModule({ logger: silentLogger });
+        const id = await webhooks.registerWebhook(VALID_URL, ['price']);
+        for (let i = 0; i < 10; i += 1) {
+          await webhooks.sendWebhook(id, {}, { event: 'nope' });
+        }
+        expect(webhooks.getWebhook(id)?.failCount).toBe(0);
+        expect(webhooks.isWebhookDisabled(id)).toBe(false);
+      } finally {
+        mock.restore();
+      }
+    });
+
+    it('falls back to the first subscribed event when no event is supplied', async () => {
+      const mock = installFetchMock([() => responseWithStatus(200)]);
+      try {
+        const webhooks = new WebhookModule({ logger: silentLogger });
+        const id = await webhooks.registerWebhook(VALID_URL, ['price', 'il']);
+        await webhooks.sendWebhook(id, { foo: 'bar' });
+        const headers = mock.calls[0].init.headers as Record<string, string>;
+        expect(headers['X-Webhook-Event']).toBe('price');
+      } finally {
+        mock.restore();
+      }
+    });
+
+    it('matches a trimmed event name', async () => {
+      const mock = installFetchMock([() => responseWithStatus(200)]);
+      try {
+        const webhooks = new WebhookModule({ logger: silentLogger });
+        const id = await webhooks.registerWebhook(VALID_URL, ['price']);
+        const result = await webhooks.sendWebhook(id, {}, { event: '  price  ' });
+        expect(result.delivered).toBe(true);
+        const headers = mock.calls[0].init.headers as Record<string, string>;
+        expect(headers['X-Webhook-Event']).toBe('price');
+      } finally {
+        mock.restore();
+      }
+    });
+
+    it('rejects an empty event name', async () => {
+      const webhooks = new WebhookModule({ logger: silentLogger });
+      const id = await webhooks.registerWebhook(VALID_URL, ['price']);
+      await expect(webhooks.sendWebhook(id, {}, { event: '   ' })).rejects.toThrow(ValidationError);
+    });
+
+    it('listWebhooksForEvent returns only the endpoints subscribed to that event', async () => {
+      const webhooks = new WebhookModule({ logger: silentLogger });
+      const both = await webhooks.registerWebhook(VALID_URL, ['price', 'il']);
+      const priceOnly = await webhooks.registerWebhook('https://a.example.com/h', ['price']);
+      await webhooks.registerWebhook('https://b.example.com/h', ['governance']);
+
+      expect(webhooks.listWebhooksForEvent('price').map((w) => w.id).sort()).toEqual(
+        [both, priceOnly].sort(),
+      );
+      expect(webhooks.listWebhooksForEvent('il').map((w) => w.id)).toEqual([both]);
+      expect(webhooks.listWebhooksForEvent('flash-loan')).toEqual([]);
+    });
+
+    it('listWebhooksForEvent excludes disabled webhooks', async () => {
+      const webhooks = new WebhookModule({ logger: silentLogger });
+      const id = await webhooks.registerWebhook(VALID_URL, ['price']);
+      expect(webhooks.listWebhooksForEvent('price')).toHaveLength(1);
+      webhooks.disableWebhook(id);
+      expect(webhooks.listWebhooksForEvent('price')).toHaveLength(0);
+    });
+
+    it('listWebhooksForEvent rejects empty event names', () => {
+      const webhooks = new WebhookModule();
+      expect(() => webhooks.listWebhooksForEvent('')).toThrow(ValidationError);
+    });
+  });
+
   describe('getWebhookHistory()', () => {
     it('throws WebhookError when the webhook id is unknown', () => {
       const webhooks = new WebhookModule();
