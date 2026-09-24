@@ -130,6 +130,15 @@ describe("TaxReportingModule.exportTradeHistory()", () => {
     // Stub getCurrentLedger
     jest.spyOn(client, "getCurrentLedger").mockResolvedValue(5000);
 
+    // EventCursor.anchorIfNeeded() reads the chain tip straight off the server.
+    // Without this stub the suite makes a live RPC call, so it passes slowly,
+    // times out, or fails depending on network reachability.
+    jest
+      .spyOn(client.server, "getLatestLedger")
+      .mockResolvedValue({ sequence: 5000 } as unknown as Awaited<
+        ReturnType<typeof client.server.getLatestLedger>
+      >);
+
     tax = new TaxReportingModule(client);
   });
 
@@ -421,6 +430,15 @@ describe("TaxReportingModule.getCostBasis()", () => {
     });
 
     jest.spyOn(client, "getCurrentLedger").mockResolvedValue(5000);
+
+    // EventCursor.anchorIfNeeded() reads the chain tip straight off the server.
+    // Without this stub the suite makes a live RPC call, so it passes slowly,
+    // times out, or fails depending on network reachability.
+    jest
+      .spyOn(client.server, "getLatestLedger")
+      .mockResolvedValue({ sequence: 5000 } as unknown as Awaited<
+        ReturnType<typeof client.server.getLatestLedger>
+      >);
     tax = new TaxReportingModule(client);
   });
 
@@ -515,6 +533,15 @@ describe("TaxReportingModule.getCapitalGains()", () => {
     });
 
     jest.spyOn(client, "getCurrentLedger").mockResolvedValue(5000);
+
+    // EventCursor.anchorIfNeeded() reads the chain tip straight off the server.
+    // Without this stub the suite makes a live RPC call, so it passes slowly,
+    // times out, or fails depending on network reachability.
+    jest
+      .spyOn(client.server, "getLatestLedger")
+      .mockResolvedValue({ sequence: 5000 } as unknown as Awaited<
+        ReturnType<typeof client.server.getLatestLedger>
+      >);
     tax = new TaxReportingModule(client);
   });
 
@@ -585,6 +612,15 @@ describe("TaxReportingModule getEvents encoding", () => {
   beforeEach(() => {
     client = new CoralSwapClient({ network: Network.TESTNET, secretKey: TEST_SECRET });
     jest.spyOn(client, "getCurrentLedger").mockResolvedValue(50_000);
+
+    // EventCursor.anchorIfNeeded() reads the chain tip straight off the server.
+    // Without this stub the suite makes a live RPC call, so its result depends
+    // on network reachability rather than on the code under test.
+    jest
+      .spyOn(client.server, "getLatestLedger")
+      .mockResolvedValue({ sequence: 50_000 } as unknown as Awaited<
+        ReturnType<typeof client.server.getLatestLedger>
+      >);
     tax = new TaxReportingModule(client);
   });
 
@@ -608,6 +644,15 @@ describe("TaxReportingModule getEvents encoding", () => {
   it("anchors startLedger to the chain head, never to ledger 0", async () => {
     // Head below the default history window: the old code clamped this to 0.
     jest.spyOn(client, "getCurrentLedger").mockResolvedValue(100);
+
+    // EventCursor.anchorIfNeeded() reads the chain tip straight off the server.
+    // Without this stub the suite makes a live RPC call, so its result depends
+    // on network reachability rather than on the code under test.
+    jest
+      .spyOn(client.server, "getLatestLedger")
+      .mockResolvedValue({ sequence: 100 } as unknown as Awaited<
+        ReturnType<typeof client.server.getLatestLedger>
+      >);
     const spy = jest
       .spyOn(client.server, "getEvents")
       .mockResolvedValue(mockEventsResponse([]));
