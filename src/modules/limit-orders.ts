@@ -74,6 +74,7 @@
  * console.log(`Refunded: ${cancel.refundedAmount}, Filled: ${cancel.filledAmount}`);
  */
 
+import { z } from 'zod';
 import { CoralSwapSDKError } from "@/errors";
 import {
   Contract,
@@ -336,29 +337,149 @@ export function parseOrderDetails(result: xdr.ScVal): LimitOrderDetails {
 
 
 
-function validateLimitOrderParams(
-  params: LimitOrderParams,
-): LimitOrderParams {
-  if (
-    !Number.isFinite(params.targetPrice) ||
-    params.targetPrice <= 0
-  ) {
-    throw new ValidationError("targetPrice must be a positive number; 0 is not a valid execution bound");
-  }
+/**
+ * Zod schemas for this module's user-supplied inputs (#486).
+ *
+ * They live in this file rather than in `src/schemas/` so that a concurrent
+ * change to another module's validation cannot collide with these definitions.
+ * Every rule below was migrated one-for-one from the hand-written `if` guards
+ * that used to sit in this module, keeping their exact messages — a rule was
+ * moved, never dropped or loosened.
+ */
 
-  if (params.targetPrice > 1_000_000) {
-    throw new ValidationError(
-      "targetPrice exceeds maximum allowed range (1,000,000)"
-    );
-  }
+/** Upper bound accepted for `targetPrice`, matching the contract's price range. */
+const MAX_TARGET_PRICE = 1_000_000;
 
-  if (params.expiry <= Math.floor(Date.now() / 1000)) {
-    throw new ValidationError(
-      "expiry must be a Unix timestamp in the future"
-    );
+/**
+ * Run a value through a zod schema and surface failures as the SDK's own
+ * {@link ValidationError}.
+ *
+ * The first issue's message is rethrown verbatim, so callers keep seeing the
+ * exact error text they saw before the migration; the full issue list rides
+ * along as `zodErrors` for programmatic inspection.
+ */
+function validateLimitOrderInput<T>(
+  schema: z.ZodType<T>,
+  value: unknown,
+  details?: Record<string, unknown>,
+): T {
+  const result = schema.safeParse(value);
+  if (!result.success) {
+    const { issues } = result.error;
+    throw new ValidationError(issues[0]?.message ?? 'Validation failed', {
+      ...details,
+      zodErrors: issues,
+    });
   }
+  return result.data;
+}
 
-  return params;
+/**
+ * A Stellar address parameter.
+ *
+ * Delegates to {@link validateAddress} so that helper stays the single source
+ * of truth for address messages.
+ */
+function addressSchema(name: string): z.ZodType<string> {
+  return z.string({ error: `${name} must not be empty` }).superRefine((value, ctx) => {
+    try {
+      validateAddress(value, name);
+    } catch (err) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          err instanceof Error ? err.message : `${name} is not a valid Stellar address: ${value}`,
+      });
+    }
+  });
+}
+
+/** An optional address parameter: `undefined` means "use the client default". */
+function optionalAddressSchema(name: string) {
+  return addressSchema(name).optional();
+}
+
+/** `orderId` must be a non-empty string. */
+const OrderIdSchema = z
+  .string({ error: 'orderId must be a non-empty string' })
+  .refine((value) => value.trim().length > 0, {
+    error: 'orderId must be a non-empty string',
+  });
+
+/** `watchOrder`'s polling interval in milliseconds. */
+const IntervalMsSchema = z
+  .number({ error: 'intervalMs must be a positive number' })
+  .positive('intervalMs must be a positive number')
+  .optional();
+
+/**
+ * Parameters of {@link LimitOrderModule.placeLimitOrder} and of
+ * {@link LimitOrderModule.cancelAndReplaceLimitOrder}'s replacement order.
+ *
+ * Fields are declared in the order the old checks ran, so the first reported
+ * issue is still the first rule that used to fail.
+ */
+const LimitOrderParamsSchema = z
+  .object({
+    targetPrice: z
+      .number({ error: 'targetPrice must be a positive number; 0 is not a valid execution bound' })
+      .finite('targetPrice must be a positive number; 0 is not a valid execution bound')
+      .positive('targetPrice must be a positive number; 0 is not a valid execution bound')
+      .max(MAX_TARGET_PRICE, 'targetPrice exceeds maximum allowed range (1,000,000)'),
+    expiry: z
+      .number({ error: 'expiry must be a Unix timestamp in the future' })
+      .refine((value) => value > Math.floor(Date.now() / 1000), {
+        error: 'expiry must be a Unix timestamp in the future',
+      }),
+    tokenIn: addressSchema('tokenIn'),
+    tokenOut: addressSchema('tokenOut'),
+    pairAddress: addressSchema('pairAddress'),
+    amountIn: z.bigint().superRefine((value, ctx) => {
+      try {
+        validatePositiveAmount(value, 'amountIn');
+      } catch (err) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            err instanceof Error ? err.message : 'amountIn must be greater than 0',
+        });
+      }
+    }),
+  })
+  .superRefine((params, ctx) => {
+    try {
+      validateDistinctTokens(params.tokenIn, params.tokenOut);
+    } catch (err) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['tokenOut'],
+        message:
+          err instanceof Error ? err.message : 'tokenIn and tokenOut must be different addresses',
+      });
+    }
+  });
+
+/** `watchOrder(orderId, callback, intervalMs)`. */
+const WatchOrderArgsSchema = z.object({
+  orderId: OrderIdSchema,
+  callback: z.custom<(status: OrderStatus) => void>(
+    (value) => typeof value === 'function',
+    { message: 'callback must be a function' },
+  ),
+  intervalMs: IntervalMsSchema,
+});
+
+/** `getOpenOrders(address)`. */
+const OpenOrdersAddressSchema = addressSchema('address');
+
+/** Constructor guard: a usable {@link CoralSwapClient}. */
+const ClientSchema = z.custom<CoralSwapClient>(
+  (value) => !!value && typeof value === 'object',
+  { message: 'client must be a valid CoralSwapClient instance' },
+);
+
+function validateLimitOrderParams(params: LimitOrderParams): LimitOrderParams {
+  return validateLimitOrderInput(LimitOrderParamsSchema, params);
 }
 /**
  * Error codes that mean "the contract has no such order".
@@ -422,13 +543,10 @@ export class LimitOrderModule {
     client: CoralSwapClient,
     contractAddress?: string,
   ) {
-    if (!client || typeof client !== 'object') {
-      throw new ValidationError('client must be a valid CoralSwapClient instance');
-    }
     if (contractAddress !== undefined) {
-      validateAddress(contractAddress, 'contractAddress');
+      validateLimitOrderInput(optionalAddressSchema('contractAddress'), contractAddress);
     }
-    this.client = client;
+    this.client = validateLimitOrderInput(ClientSchema, client);
     const address = contractAddress ?? client.networkConfig.limitOrderAddress;
     if (!address) {
       throw new CoralSwapSDKError(
@@ -464,9 +582,7 @@ export class LimitOrderModule {
    * }
    */
   async getLimitOrderStatus(orderId: string): Promise<OrderStatus> {
-    if (!orderId || typeof orderId !== 'string' || orderId.trim().length === 0) {
-      throw new ValidationError('orderId must be a non-empty string', { orderId });
-    }
+    orderId = validateLimitOrderInput(OrderIdSchema, orderId, { orderId });
 
     const op = this.contract.call(
       'status',
@@ -535,24 +651,20 @@ export class LimitOrderModule {
     callback: (status: OrderStatus) => void,
     intervalMs?: number,
   ): () => void {
-    if (!orderId || typeof orderId !== 'string' || orderId.trim().length === 0) {
-      throw new ValidationError('orderId must be a non-empty string', { orderId });
-    }
-    if (typeof callback !== 'function') {
-      throw new ValidationError('callback must be a function');
-    }
-    if (intervalMs !== undefined && (typeof intervalMs !== 'number' || isNaN(intervalMs) || !isFinite(intervalMs) || intervalMs <= 0)) {
-      throw new ValidationError('intervalMs must be a positive number', { intervalMs });
-    }
-    const interval = intervalMs ?? 5000;
+    const args = validateLimitOrderInput(WatchOrderArgsSchema, {
+      orderId,
+      callback,
+      intervalMs,
+    });
+    const interval = args.intervalMs ?? 5000;
     let active = true;
 
     const poll = async () => {
       if (!active) return;
       try {
-        const status = await this.getLimitOrderStatus(orderId);
+        const status = await this.getLimitOrderStatus(args.orderId);
         if (!active) return;
-        callback(status);
+        args.callback(status);
       } catch {
       }
     };
@@ -628,12 +740,8 @@ export class LimitOrderModule {
     orderId: string,
     signer?: string,
   ): Promise<{ operation: xdr.Operation; refundedAmount: bigint; filledAmount: bigint }> {
-    if (!orderId || typeof orderId !== 'string' || orderId.trim().length === 0) {
-      throw new ValidationError('orderId must be a non-empty string', { orderId });
-    }
-    if (signer !== undefined) {
-      validateAddress(signer, 'signer');
-    }
+    orderId = validateLimitOrderInput(OrderIdSchema, orderId, { orderId });
+    signer = validateLimitOrderInput(optionalAddressSchema('signer'), signer);
 
     const status = await this.getLimitOrderStatus(orderId);
 
@@ -746,16 +854,7 @@ export class LimitOrderModule {
     signer?: string,
   ): Promise<{ operation: xdr.Operation; orderId: string }> {
     params = validateLimitOrderParams(params);
-
-    validateAddress(params.tokenIn, 'tokenIn');
-    validateAddress(params.tokenOut, 'tokenOut');
-    validateDistinctTokens(params.tokenIn, params.tokenOut);
-    validateAddress(params.pairAddress, 'pairAddress');
-    validatePositiveAmount(params.amountIn, 'amountIn');
-
-    if (signer !== undefined) {
-      validateAddress(signer, 'signer');
-    }
+    signer = validateLimitOrderInput(optionalAddressSchema('signer'), signer);
 
     if (typeof this.client.getPairAddress === 'function') {
       const onChainPair = await this.client.getPairAddress(params.tokenIn, params.tokenOut);
@@ -1009,9 +1108,7 @@ export class LimitOrderModule {
    * console.log(`Filled: ${details.amountFilled} / Remaining: ${details.amountRemaining}`);
    */
   async getLimitOrder(orderId: string): Promise<LimitOrderDetails> {
-    if (!orderId || typeof orderId !== 'string' || orderId.trim().length === 0) {
-      throw new ValidationError('orderId must be a non-empty string', { orderId });
-    }
+    orderId = validateLimitOrderInput(OrderIdSchema, orderId, { orderId });
 
     const op = this.contract.call(
       'get_order',
@@ -1068,7 +1165,7 @@ export class LimitOrderModule {
    * }
    */
   async getOpenOrders(address: string): Promise<LimitOrderDetails[]> {
-    validateAddress(address, 'address');
+    address = validateLimitOrderInput(OpenOrdersAddressSchema, address);
 
     const op = this.contract.call(
       'orders_for_user',

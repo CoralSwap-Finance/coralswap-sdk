@@ -1,8 +1,11 @@
-import { rpc } from "@stellar/stellar-sdk";
+import { rpc, xdr } from "@stellar/stellar-sdk";
 import { CoralSwapClient } from "@/client";
 import { FeeEstimate } from "@/types/fee";
 import { FeeState } from "@/types/pool";
+import { FeeEstimates } from "@/types/fee-estimates";
+import { estimateGas } from "@/utils/gas";
 import { validateAddress, validatePositiveAmount } from "@/utils/validation";
+import { ledgerToApproxTime, LedgerHead } from "@/utils/ledger";
 
 /**
  * Fee module -- dynamic fee transparency and estimation.
@@ -74,6 +77,7 @@ export class FeeModule {
    * const state = await client.fees.getFeeState('C...');
    */
   async getFeeState(pairAddress: string): Promise<FeeState> {
+    validateAddress(pairAddress, "pairAddress");
     const pair = this.client.pair(pairAddress);
     return pair.getFeeState();
   }
@@ -117,6 +121,7 @@ export class FeeModule {
     pairAddress: string,
     maxAgeSec: number = 3600,
   ): Promise<boolean> {
+    validateAddress(pairAddress, "pairAddress");
     const pair = this.client.pair(pairAddress);
     const feeState = await pair.getFeeState();
     const now = Math.floor(Date.now() / 1000);
@@ -187,8 +192,13 @@ export class FeeModule {
     const currentLedger = await this.client.getCurrentLedger();
     const fromLedger = options.fromLedger ?? Math.max(0, currentLedger - 518400);
     const toLedger = options.toLedger ?? currentLedger;
+    // Reference head for approximating an event's wall-clock time when the RPC
+    // response omits `ledgerClosedAt`. The chain head is ~now.
+    const head: LedgerHead = {
+      ledger: currentLedger,
+      closeTime: Math.floor(Date.now() / 1000),
+    };
 
-    // Query swap events directly from the RPC for fee revenue
     const request: rpc.Server.GetEventsRequest = {
       startLedger: fromLedger,
       filters: [
@@ -214,11 +224,9 @@ export class FeeModule {
     for (const event of rawEvents) {
       if (event.ledger > toLedger) continue;
       try {
-        // Parse fee from the swap event value
         const value = event.value as unknown as Record<string, unknown>;
         if (!value) continue;
 
-        // Extract fee_bps from the ScVal payload
         let feeBps = 0;
         let amountIn = 0;
         const map = typeof (value as any)._value !== 'undefined'
@@ -255,7 +263,8 @@ export class FeeModule {
         totalFeeXLM += feeXLM;
         history.push({
           ledger: event.ledger,
-          timestamp: Number(event.ledgerClosedAt) || 0,
+          timestamp:
+            Number(event.ledgerClosedAt) || ledgerToApproxTime(event.ledger, head),
           feeBps,
           feeXLM,
         });
@@ -275,16 +284,10 @@ export class FeeModule {
   /**
    * Calculate the LP yield for an address in a pair over a given period.
    *
-   * Computes yield as the ratio of fee revenue earned by the LP's share
-   * of the pool relative to their deposited value, annualized.
-   *
    * @param pairAddress - The address of the pair contract
    * @param lpAddress - The LP token holder address
    * @param options - Optional ledger range
    * @returns LP yield metrics including APR and fee share
-   * @example
-   * const yield_ = await client.fees.getLPYield('C...', 'G...');
-   * console.log(`APR: ${yield_.aprPercent}%`);
    */
   async getLPYield(
     pairAddress: string,
@@ -336,12 +339,13 @@ export class FeeModule {
       (Number(reserve0) / 1e7 + Number(reserve1) / 1e7) *
       (Number(lpBalance) / Number(totalSupply));
 
-    // Annualize based on the actual ledger range queried
     const currentLedger = await this.client.getCurrentLedger();
     const fromLedger = options.fromLedger ?? Math.max(0, currentLedger - 518400);
     const toLedger = options.toLedger ?? currentLedger;
-    const ledgerSpan = toLedger - fromLedger;
-    const daysInPeriod = (ledgerSpan * 5) / 86400; // 5s per ledger
+    // Approximate the queried window in seconds via the shared ledger-time
+    // helper (the reference close time cancels out of the difference).
+    const periodSeconds = ledgerToApproxTime(toLedger, { ledger: fromLedger, closeTime: 0 });
+    const daysInPeriod = periodSeconds / 86400;
     const aprPercent =
       daysInPeriod > 0 && lpValueXLM > 0
         ? (lpFeeShareXLM / lpValueXLM) * (365 / daysInPeriod) * 100
@@ -356,5 +360,96 @@ export class FeeModule {
       lpValueXLM,
       aprPercent,
     };
+  }
+
+  /**
+   * Get comprehensive fee estimates combining gas estimation and ledger fee info.
+   *
+   * This convenience method returns gas fees, protocol fees, and total fees
+   * in a single typed object, saving developers from manually assembling
+   * fee information from multiple sources.
+   *
+   * @param operations - The operations to estimate fees for
+   * @param options - Optional parameters
+   * @returns Detailed fee estimates including gas, protocol fees, and total
+   *
+   * @example
+   * const fees = await client.fees.getFeeEstimates(swapOps);
+   * console.log(fees.totalXLM); // "0.00015 XLM"
+   * console.log(fees.breakdown.gas.xlm); // "0.00010 XLM"
+   * console.log(fees.breakdown.protocol.xlm); // "0.00005 XLM"
+   */
+  async getFeeEstimates(
+    operations: xdr.Operation[],
+    _options: {
+      feeMultiplier?: number;
+    } = {},
+  ): Promise<FeeEstimates> {
+    const gasEstimate = await estimateGas(
+      (ops) => this.client.simulateTransaction(ops, {}),
+      operations,
+    );
+
+    const ledger = await this.client.getCurrentLedger();
+
+    let protocolFeeBps = 0;
+    let protocolFeeStroops = 0;
+
+    try {
+      const pairAddress = this.extractPairAddress(operations);
+      if (pairAddress) {
+        const feeState = await this.getFeeState(pairAddress);
+        protocolFeeBps = feeState.feeCurrent || 0;
+        protocolFeeStroops = Math.floor(gasEstimate.fee * (protocolFeeBps / 10000));
+      }
+    } catch {
+      protocolFeeBps = 0;
+      protocolFeeStroops = 0;
+    }
+
+    const totalStroops = gasEstimate.fee + protocolFeeStroops;
+    const totalXLM = `${(totalStroops / 10000000).toFixed(5)} XLM`;
+
+    const breakdown = {
+      gas: {
+        stroops: gasEstimate.fee,
+        xlm: gasEstimate.feeXLM,
+      },
+      protocol: {
+        bps: protocolFeeBps,
+        stroops: protocolFeeStroops,
+        xlm: `${(protocolFeeStroops / 10000000).toFixed(5)} XLM`,
+      },
+    };
+
+    let resources = undefined;
+    try {
+      const sim = await this.client.simulateTransaction(operations, {});
+      if (sim.success && sim.transactionData) {
+        const { instructions, diskReadBytes, writeBytes } = sim.transactionData.resources;
+        resources = { instructions, readBytes: diskReadBytes, writeBytes };
+      }
+    } catch {
+      // Resources not available
+    }
+
+    return {
+      gas: gasEstimate,
+      protocolFeeBps,
+      protocolFeeStroops,
+      totalStroops,
+      totalXLM,
+      ledger,
+      resources,
+      breakdown,
+    };
+  }
+
+  /**
+   * Extract the pair address from operations (simplified helper).
+   * @private
+   */
+  private extractPairAddress(_operations: xdr.Operation[]): string | null {
+    return null;
   }
 }

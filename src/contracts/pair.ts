@@ -72,6 +72,22 @@ function scValToU64(val: xdr.ScVal | undefined): number {
 }
 
 /**
+ * Convert an XDR bytes value into a lowercase hex string.
+ */
+function scValToBytesHex(val: xdr.ScVal | undefined): string {
+  if (!val) throw new Error("Missing field");
+  if (val.type !== "scvBytes") {
+    throw new Error(`Expected bytes, got ${val.type}`);
+  }
+
+  const raw = typeof (val as any).bytes === "function" ? (val as any).bytes() : (val as any).bytes;
+  const buffer = Buffer.isBuffer(raw)
+    ? raw
+    : Buffer.from(raw ?? []);
+  return buffer.toString("hex");
+}
+
+/**
  * Type-safe client for a CoralSwap Pair contract.
  *
  * Provides read access to reserves, dynamic fee state, flash loan config,
@@ -176,6 +192,47 @@ export class PairClient {
     const result = await this.simulateRead(op);
     if (!result) throw new Error("Failed to read dynamic fee");
     return result.type === "scvU32" ? result.u32 : 30;
+  }
+
+  /**
+   * Read the pair's WASM hash for the deployed implementation.
+   *
+   * @returns The lowercase hex representation of the WASM hash.
+   */
+  async getWasmHash(): Promise<string> {
+    for (const methodName of ["wasm_hash", "get_wasm_hash"]) {
+      try {
+        const op = this.contract.call(methodName);
+        const result = await this.simulateRead(op);
+        if (!result) continue;
+        return scValToBytesHex(result);
+      } catch {
+        // Fall through to the next known naming variant.
+      }
+    }
+    throw new Error("Failed to read pair WASM hash");
+  }
+
+  /**
+   * Read the current fee-state version for this pair.
+   *
+   * @returns The fee-state version integer stored on the pair contract.
+   */
+  async getFeeStateVersion(): Promise<number> {
+    for (const methodName of ["get_fee_state_version", "fee_state_version"]) {
+      try {
+        const op = this.contract.call(methodName);
+        const result = await this.simulateRead(op);
+        if (!result) continue;
+        if (result.type === "scvU32") return result.u32;
+        if (result.type === "scvU64") return Number(result.u64);
+        if (result.type === "scvI32") return Number(result.i32);
+        if (result.type === "scvI64") return Number(result.i64);
+      } catch {
+        // Fall through to the next known naming variant.
+      }
+    }
+    return 0;
   }
 
   /**
