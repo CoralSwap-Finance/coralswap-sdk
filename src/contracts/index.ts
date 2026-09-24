@@ -11,3 +11,9 @@ export {
   calculateRepayment,
   validateFeeFloor,
 } from './flash-receiver';
+export {
+  verifyReserveConservation,
+  PairReserves,
+  ReserveConservationOptions,
+  ReserveConservationResult,
+} from './reserve-conservation';
