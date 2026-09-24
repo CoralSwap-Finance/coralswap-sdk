@@ -1,0 +1,21 @@
+name: Report stub scan
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  report-stubs:
+    name: Report paths contain no stub-shaped literal returns
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Scan report modules
+        run: node scripts/check-report-stubs.mjs

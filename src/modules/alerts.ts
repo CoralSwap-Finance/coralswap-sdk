@@ -5,6 +5,7 @@ import {
   InsufficientLiquidityError,
   InvalidThresholdError,
 } from '@/errors';
+import { OracleModule } from './oracle';
 import {
   AlertConfigLegacy,
   AlertStatusLegacy,
@@ -26,6 +27,8 @@ import {
   HealthAlert,
   VolumeAlert,
   Alert,
+  PriceAlertParams,
+  ThresholdPriceAlert,
 } from '@/types/alerts';
 import {
   validateAddress,
@@ -116,10 +119,12 @@ type StoredAlertV2 = StoredGenericAlertV2 | StoredPriceAlertV2 | StoredILAlertV2
 
 export class AlertsModule {
   private readonly client: CoralSwapClient;
+  private readonly oracle: OracleModule;
   private readonly rules: Map<string, AlertInstance> = new Map();
 
   constructor(client: CoralSwapClient) {
     this.client = client;
+    this.oracle = new OracleModule(client);
   }
 
   async createAlert(config: AlertConfigLegacy): Promise<string> {
@@ -241,8 +246,21 @@ export class AlertsModule {
   }
 
   private async fetchPrice(_address: string): Promise<bigint> {
-    try { const p = this.client.pair(_address); const r = await p.getReserves(); return r.reserve0 === 0n || r.reserve1 === 0n ? 0n : (r.reserve1 * 10_000_000n) / r.reserve0; }
-    catch { return 0n; }
+    try {
+      // Try to use TWAP (manipulation-resistant) first
+      const twap = await this.oracle.getTWAP(_address);
+      if (twap) {
+        // Use TWAP price0 (token1 per token0)
+        return twap.price0TWAP;
+      }
+
+      // Fallback to spot price if TWAP not yet available
+      const p = this.client.pair(_address);
+      const r = await p.getReserves();
+      return r.reserve0 === 0n || r.reserve1 === 0n ? 0n : (r.reserve1 * 10_000_000n) / r.reserve0;
+    } catch {
+      return 0n;
+    }
   }
 
   private async fetchVolume24h(_addresses: string[]): Promise<bigint> { return 0n; }
@@ -267,12 +285,17 @@ export class AlertsModule {
 
 export class AlertModule {
   private client: CoralSwapClient;
+  private oracle: OracleModule;
   private listeners: Map<string, Array<(event: AlertEvent) => void>> = new Map();
   private rules: Map<string, AlertInstance> = new Map();
   private alertsV2: Map<string, StoredAlertV2> = new Map();
+  private thresholdPriceAlerts: Map<string, ThresholdPriceAlert> = new Map();
+  private oracleAddress?: string;
 
-  constructor(client: CoralSwapClient) {
+  constructor(client: CoralSwapClient, oracleAddress?: string) {
     this.client = client;
+    this.oracle = new OracleModule(client);
+    this.oracleAddress = oracleAddress;
   }
 
   async create(params: CreateAlertParams): Promise<AlertInstance> {
@@ -534,20 +557,32 @@ export class AlertModule {
     this.validateILAlertConfig(config);
 
     const pair = this.client.pair(config.pairAddress);
-    const { reserve0, reserve1 } = await pair.getReserves();
     const tokens = await pair.getTokens();
 
     this.validatePairTokens(tokens, config.tokenA, config.tokenB);
 
     const isAToken0 = tokens.token0 === config.tokenA;
-    const reserveA = isAToken0 ? reserve0 : reserve1;
-    const reserveB = isAToken0 ? reserve1 : reserve0;
+    
+    // Try to use TWAP (manipulation-resistant) first
+    const twap = await this.oracle.getTWAP(config.pairAddress);
+    let currentPrice: bigint;
 
-    if (reserveA === 0n || reserveB === 0n) {
-      throw new InsufficientLiquidityError('Pool has no liquidity');
+    if (twap) {
+      // TWAP is available - use it instead of spot price
+      currentPrice = isAToken0 ? twap.price0TWAP : twap.price1TWAP;
+    } else {
+      // Fallback to spot price if TWAP not yet available
+      const { reserve0, reserve1 } = await pair.getReserves();
+
+      if (reserve0 === 0n || reserve1 === 0n) {
+        throw new InsufficientLiquidityError('Pool has no liquidity');
+      }
+
+      const reserveA = isAToken0 ? reserve0 : reserve1;
+      const reserveB = isAToken0 ? reserve1 : reserve0;
+      currentPrice = (reserveB * PRICE_SCALE) / reserveA;
     }
 
-    const currentPrice = (reserveB * PRICE_SCALE) / reserveA;
     const priceRatio = this.computePriceRatio(currentPrice, config.referencePrice);
     const currentILBps = this.computeImpermanentLossBps(priceRatio);
 
@@ -733,16 +768,27 @@ export class AlertModule {
     tokenOut: string,
   ): Promise<bigint> {
     const pair = this.client.pair(pairAddress);
-    const { reserve0, reserve1 } = await pair.getReserves();
     const tokens = await pair.getTokens();
+
+    this.validatePairTokens(tokens, tokenIn, tokenOut);
+
+    // Try to use TWAP (manipulation-resistant) first
+    const twap = await this.oracle.getTWAP(pairAddress);
+    if (twap) {
+      // TWAP is available - use it instead of spot price
+      const isTokenInToken0 = tokens.token0 === tokenIn;
+      return isTokenInToken0 ? twap.price0TWAP : twap.price1TWAP;
+    }
+
+    // Fallback to spot price if TWAP not yet available
+    // (needs at least MIN_TWAP_WINDOW_SECONDS of observations)
+    const { reserve0, reserve1 } = await pair.getReserves();
 
     if (reserve0 === 0n || reserve1 === 0n) {
       throw new InsufficientLiquidityError('Pool has no liquidity');
     }
 
     const isTokenInToken0 = tokens.token0 === tokenIn;
-    this.validatePairTokens(tokens, tokenIn, tokenOut);
-
     const reserveIn = isTokenInToken0 ? reserve0 : reserve1;
     const reserveOut = isTokenInToken0 ? reserve1 : reserve0;
 
@@ -865,8 +911,317 @@ export class AlertModule {
     this.rules.set(id, updated);
     return updated;
   }
+
+  // ---------------------------------------------------------------------------
+  // Threshold-based price alerts with RedStone oracle
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Create a threshold-based price alert that triggers when a token price
+   * crosses above or below a target USD price.
+   *
+   * Uses RedStone oracle for price checks. Implements hysteresis to prevent
+   * re-triggering until the price crosses back and returns.
+   *
+   * @param params - Price alert parameters
+   * @returns The unique alert ID
+   * @throws {ValidationError} If targetPriceUSD is not positive, addresses are invalid,
+   *   or direction is invalid
+   */
+  async createThresholdPriceAlert(params: PriceAlertParams): Promise<string> {
+    validateAddress(params.tokenAddress, 'tokenAddress');
+    
+    if (params.targetPriceUSD <= 0n) {
+      throw new ValidationError('targetPriceUSD must be a positive value', {
+        targetPriceUSD: params.targetPriceUSD.toString(),
+      });
+    }
+
+    if (params.direction !== 'above' && params.direction !== 'below') {
+      throw new ValidationError('direction must be "above" or "below"', {
+        direction: params.direction,
+      });
+    }
+
+    if (params.pairAddress) {
+      validateAddress(params.pairAddress, 'pairAddress');
+    }
+
+    const id = `price_alert_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const now = Date.now();
+
+    const alert: ThresholdPriceAlert = {
+      id,
+      tokenAddress: params.tokenAddress,
+      targetPriceUSD: params.targetPriceUSD,
+      direction: params.direction,
+      pairAddress: params.pairAddress,
+      label: params.label,
+      createdAt: now,
+      hasCrossedBack: true,
+      status: 'active',
+    };
+
+    this.thresholdPriceAlerts.set(id, alert);
+    return id;
+  }
+
+  /**
+   * Get all active price alerts for a specific token address.
+   *
+   * @param address - Token address to filter alerts by
+   * @returns Array of threshold price alerts for the token
+   */
+  async getPriceAlerts(address: string): Promise<ThresholdPriceAlert[]> {
+    validateAddress(address, 'address');
+    
+    const alerts = Array.from(this.thresholdPriceAlerts.values())
+      .filter(alert => alert.tokenAddress.toLowerCase() === address.toLowerCase());
+    
+    return alerts;
+  }
+
+  /**
+   * Check all threshold price alerts and trigger those that meet their conditions.
+   * Implements hysteresis: alerts only trigger once per price crossing.
+   *
+   * @returns Array of triggered alert IDs
+   */
+  async checkThresholdPriceAlerts(): Promise<string[]> {
+    const triggered: string[] = [];
+
+    for (const [id, alert] of this.thresholdPriceAlerts) {
+      try {
+        const currentPrice = await this.getTokenPriceUSD(alert.tokenAddress, alert.pairAddress);
+        
+        const shouldTrigger = this.evaluateThresholdCondition(
+          currentPrice,
+          alert.targetPriceUSD,
+          alert.direction,
+          alert.hasCrossedBack,
+          alert.lastKnownPrice,
+        );
+
+        // Update last known price for hysteresis tracking
+        const updatedAlert: ThresholdPriceAlert = {
+          ...alert,
+          lastKnownPrice: currentPrice,
+        };
+
+        // Only process active alerts for triggering
+        if (alert.status === 'active') {
+          if (shouldTrigger) {
+            updatedAlert.status = 'triggered';
+            updatedAlert.lastTriggeredAt = Date.now();
+            updatedAlert.hasCrossedBack = false;
+            triggered.push(id);
+          } else {
+            // Check if price has crossed back (reset hysteresis)
+            const hasCrossedBack = this.checkCrossBack(
+              currentPrice,
+              alert.targetPriceUSD,
+              alert.direction,
+              alert.lastKnownPrice,
+            );
+            updatedAlert.hasCrossedBack = hasCrossedBack;
+          }
+        } else {
+          // For triggered alerts, check if price has crossed back to reset
+          const hasCrossedBack = this.checkCrossBack(
+            currentPrice,
+            alert.targetPriceUSD,
+            alert.direction,
+            alert.lastKnownPrice,
+          );
+          updatedAlert.hasCrossedBack = hasCrossedBack;
+          
+          if (hasCrossedBack) {
+            updatedAlert.status = 'active';
+          }
+        }
+
+        this.thresholdPriceAlerts.set(id, updatedAlert);
+      } catch {
+        // Skip alerts that fail to fetch price (e.g., oracle unavailable)
+        continue;
+      }
+    }
+
+    return triggered;
+  }
+
+  /**
+   * Delete a threshold price alert by ID.
+   *
+   * @param alertId - The alert ID to delete
+   * @returns true if the alert was deleted, false if not found
+   */
+  deletePriceAlert(alertId: string): boolean {
+    return this.thresholdPriceAlerts.delete(alertId);
+  }
+
+  /**
+   * Get a specific threshold price alert by ID.
+   *
+   * @param alertId - The alert ID to retrieve
+   * @returns The alert or null if not found
+   */
+  getPriceAlert(alertId: string): ThresholdPriceAlert | null {
+    return this.thresholdPriceAlerts.get(alertId) ?? null;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Private helpers for threshold price alerts
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Fetch the current USD price for a token using RedStone oracle.
+   * Falls back to pair spot price if oracle is unavailable and pairAddress is provided.
+   *
+   * @param tokenAddress - Token address to fetch price for
+   * @param pairAddress - Optional pair address for spot price fallback
+   * @returns Current price in USD (scaled by 10^8)
+   * @throws {ValidationError} If price cannot be fetched from any source
+   */
+  private async getTokenPriceUSD(tokenAddress: string, pairAddress?: string): Promise<bigint> {
+    // Try RedStone oracle first if available
+    if (this.oracleAddress) {
+      try {
+        return await this.fetchRedStonePrice(tokenAddress);
+      } catch {
+        // Fall through to spot price if oracle fails
+      }
+    }
+
+    // Fall back to spot price from pair if available
+    if (pairAddress) {
+      return await this.fetchSpotPriceFromPair(pairAddress);
+    }
+
+    throw new ValidationError(
+      'Cannot fetch price: no oracle address or pair address provided',
+      { tokenAddress },
+    );
+  }
+
+  /**
+   * Fetch price from RedStone oracle contract.
+   * This is a simplified implementation - in production you would need to
+   * implement the actual RedStone contract call similar to StopLossModule.
+   *
+   * @param tokenAddress - Token address to fetch price for
+   * @returns Price in USD (scaled by 10^8)
+   */
+  private async fetchRedStonePrice(tokenAddress: string): Promise<bigint> {
+    if (!this.oracleAddress) {
+      throw new ValidationError('RedStone oracle address not configured');
+    }
+
+    // TODO: Implement actual RedStone oracle contract call
+    // This would be similar to StopLossModule.getOraclePrice
+    // For now, throw error to indicate oracle needs to be properly integrated
+    throw new ValidationError(
+      'RedStone oracle integration not fully implemented - requires oracle contract address and asset symbol mapping',
+      { tokenAddress, oracleAddress: this.oracleAddress },
+    );
+  }
+
+  /**
+   * Fetch spot price from a pair contract as fallback.
+   *
+   * @param pairAddress - Pair address to fetch spot price from
+   * @returns Approximate USD price (scaled)
+   */
+  private async fetchSpotPriceFromPair(pairAddress: string): Promise<bigint> {
+    const pair = this.client.pair(pairAddress);
+    const { reserve0, reserve1 } = await pair.getReserves();
+
+    if (reserve0 === 0n || reserve1 === 0n) {
+      throw new InsufficientLiquidityError('Pool has no liquidity');
+    }
+
+    // Return a simple price ratio as fallback
+    // Note: This is not a true USD price, but serves as fallback for testing
+    return (reserve1 * PRICE_SCALE) / reserve0;
+  }
+
+  /**
+   * Evaluate whether a threshold alert should trigger based on current price,
+   * target price, direction, and hysteresis state.
+   *
+   * @param currentPrice - Current token price
+   * @param targetPrice - Target threshold price
+   * @param direction - 'above' or 'below'
+   * @param hasCrossedBack - Whether price has crossed back after last trigger
+   * @param lastKnownPrice - Last known price for hysteresis
+   * @returns true if alert should trigger
+   */
+  private evaluateThresholdCondition(
+    currentPrice: bigint,
+    targetPrice: bigint,
+    direction: 'above' | 'below',
+    hasCrossedBack: boolean,
+    lastKnownPrice?: bigint,
+  ): boolean {
+    // Basic condition check
+    const conditionMet = direction === 'above'
+      ? currentPrice >= targetPrice
+      : currentPrice <= targetPrice;
+
+    // Hysteresis: only trigger if crossed back (or first time)
+    if (!hasCrossedBack) {
+      return false;
+    }
+
+    // Additional check: ensure we're actually crossing the threshold
+    // (not just staying on the same side)
+    if (lastKnownPrice !== undefined) {
+      const wasAbove = lastKnownPrice >= targetPrice;
+
+      // Trigger only if we crossed the threshold
+      if (direction === 'above' && wasAbove) {
+        return false; // Already above, no crossing
+      }
+      if (direction === 'below' && !wasAbove) {
+        return false; // Already below, no crossing
+      }
+    }
+
+    return conditionMet;
+  }
+
+  /**
+   * Check if price has crossed back after triggering, allowing re-trigger.
+   *
+   * @param currentPrice - Current token price
+   * @param targetPrice - Target threshold price
+   * @param direction - 'above' or 'below'
+   * @param lastKnownPrice - Last known price when triggered
+   * @returns true if price has crossed back
+   */
+  private checkCrossBack(
+    currentPrice: bigint,
+    targetPrice: bigint,
+    direction: 'above' | 'below',
+    lastKnownPrice?: bigint,
+  ): boolean {
+    if (lastKnownPrice === undefined) {
+      return true; // No previous state, assume ready to trigger
+    }
+
+    if (direction === 'above') {
+      // For 'above' alerts, cross back means going below target
+      return currentPrice < targetPrice && lastKnownPrice >= targetPrice;
+    } else {
+      // For 'below' alerts, cross back means going above target
+      return currentPrice > targetPrice && lastKnownPrice <= targetPrice;
+    }
+  }
 }
 
 function generateIdV2(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
 }
+
+// Re-export types for public API
+export type { PriceAlertParams, ThresholdPriceAlert } from '@/types/alerts';

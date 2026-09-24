@@ -37,6 +37,45 @@ export class CoralSwapSDKError extends Error {
 }
 
 /**
+ * Defines the recommended retry behavior for an error.
+ */
+export type RetryPolicy = "retry-with-backoff" | "fail-fast" | "none";
+
+/**
+ * Single source of truth for SDK error mapping.
+ * Documents the taxonomy mapping Class -> Code -> RetryPolicy.
+ */
+export const ERROR_TAXONOMY: Array<{ class: string; code: string; retryPolicy: RetryPolicy }> = [
+  { class: "NetworkError", code: "NETWORK_ERROR", retryPolicy: "retry-with-backoff" },
+  { class: "RpcError", code: "RPC_ERROR", retryPolicy: "retry-with-backoff" },
+  { class: "SimulationError", code: "SIMULATION_ERROR", retryPolicy: "fail-fast" },
+  { class: "TransactionError", code: "TRANSACTION_ERROR", retryPolicy: "fail-fast" },
+  { class: "DeadlineError", code: "DEADLINE_EXCEEDED", retryPolicy: "fail-fast" },
+  { class: "SlippageError", code: "SLIPPAGE_EXCEEDED", retryPolicy: "fail-fast" },
+  { class: "InsufficientLiquidityError", code: "INSUFFICIENT_LIQUIDITY", retryPolicy: "fail-fast" },
+  { class: "PairNotFoundError", code: "PAIR_NOT_FOUND", retryPolicy: "fail-fast" },
+  { class: "WebhookDeliveryError", code: "WEBHOOK_DELIVERY_FAILED", retryPolicy: "retry-with-backoff" },
+  { class: "ValidationError", code: "VALIDATION_ERROR", retryPolicy: "fail-fast" },
+  { class: "InvalidThresholdError", code: "VALIDATION_ERROR", retryPolicy: "fail-fast" },
+  { class: "FlashLoanError", code: "FLASH_LOAN_ERROR", retryPolicy: "fail-fast" },
+  { class: "FlashLoanFailedError", code: "FLASH_LOAN_ERROR", retryPolicy: "fail-fast" },
+  { class: "CrossChainError", code: "CROSS_CHAIN_ERROR", retryPolicy: "fail-fast" },
+  { class: "CircuitBreakerError", code: "CIRCUIT_BREAKER", retryPolicy: "fail-fast" },
+  { class: "PriceDeviationError", code: "PRICE_DEVIATION_TOO_HIGH", retryPolicy: "fail-fast" },
+  { class: "StaleOracleError", code: "STALE_ORACLE_PAYLOAD", retryPolicy: "fail-fast" },
+  { class: "SignerError", code: "NO_SIGNER", retryPolicy: "fail-fast" },
+  { class: "OrderNotFoundError", code: "ORDER_NOT_FOUND", retryPolicy: "fail-fast" },
+  { class: "InvalidOperationError", code: "INVALID_OPERATION", retryPolicy: "fail-fast" },
+  { class: "StakingError", code: "STAKING_ERROR", retryPolicy: "fail-fast" },
+  { class: "CooldownError", code: "COOLDOWN_ERROR", retryPolicy: "fail-fast" },
+  { class: "MissingPriceFeedError", code: "MISSING_PRICE_FEED", retryPolicy: "fail-fast" },
+  { class: "WebhookError", code: "WEBHOOK_ERROR", retryPolicy: "fail-fast" },
+  { class: "AddressNotFoundError", code: "ADDRESS_NOT_FOUND", retryPolicy: "fail-fast" },
+  { class: "PortfolioCalculationError", code: "PORTFOLIO_CALCULATION_ERROR", retryPolicy: "fail-fast" },
+  { class: "WebhookDisabledError", code: "WEBHOOK_DISABLED", retryPolicy: "fail-fast" },
+];
+
+/**
  * Network or RPC connection errors.
  */
 export class NetworkError extends CoralSwapSDKError {
@@ -188,6 +227,17 @@ export class InvalidThresholdError extends ValidationError {
   }
 }
 
+/**
+ * Raised when decoding contract storage or XDR for a specific slot fails.
+ * Carries the offending slot identifier in `details.slot` so callers can
+ * distinguish decode failures from empty/missing slots.
+ */
+export class DecodeError extends CoralSwapSDKError {
+  constructor(slot: string | number, message?: string, details?: Record<string, unknown>) {
+    super("DECODE_ERROR", message ?? `Failed to decode slot ${slot}`, { slot, ...details });
+    this.name = "DecodeError";
+  }
+}
 
 /**
  * Flash loan specific errors.
@@ -197,6 +247,13 @@ export class InvalidThresholdError extends ValidationError {
  * manually parsing XDR.
  */
 export class FlashLoanError extends TransactionError {
+  /** The amount that was attempted to be borrowed. */
+  readonly borrowedAmount?: bigint;
+  /** Address of the borrowed token. */
+  readonly token?: string;
+  /** Human-readable reason the flash loan failed. */
+  readonly reason?: string;
+
   constructor(message: string, details?: Record<string, unknown>, txHash?: string) {
     super(message, txHash, details, "FLASH_LOAN_ERROR");
     this.name = "FlashLoanError";
@@ -227,6 +284,16 @@ export class FlashLoanFailedError extends FlashLoanError {
     this.name = "FlashLoanFailedError";
     this.txHash = txHash;
     this.event = event;
+  }
+}
+
+/**
+ * Cross-chain routing or bridge execution errors (Squid Router integration).
+ */
+export class CrossChainError extends TransactionError {
+  constructor(message: string, details?: Record<string, unknown>, txHash?: string) {
+    super(message, txHash, details, "CROSS_CHAIN_ERROR");
+    this.name = "CrossChainError";
   }
 }
 
@@ -470,6 +537,12 @@ function extractPairAddress(err: unknown): string {
  *
  * Contract error codes are returned in the format: Error(Contract, #XXX)
  * where XXX is the error code defined in the contract.
+ *
+ * Code ownership is defined once in `src/errors/parser.ts`
+ * (`CONTRACT_ERROR_RANGES`): Pair owns 100-119, Router owns 200-219 and
+ * Factory owns 300-319. The cases below must stay inside those ranges so a
+ * code resolves to the same contract here and in
+ * {@link ErrorParser.parseContractError}.
  */
 function mapContractError(
   code: number,
@@ -534,31 +607,57 @@ function mapContractError(
         contractErrorCode: code,
       });
 
-    // Router contract errors (300-306)
-    case 300: // Pair not found
-      return new PairNotFoundError("unknown", "unknown");
-    case 301: // Invalid path
+    // Router contract errors (200-207)
+    case 200: // Router already initialized
+      return new InvalidOperationError(message || "Router already initialized", {
+        contractErrorCode: code,
+      });
+    case 201: // Invalid swap path
       return new ValidationError(message || "Invalid swap path", {
         contractErrorCode: code,
       });
-    case 302: // Slippage exceeded
+    case 202: // Insufficient output amount (slippage)
       return new SlippageError(0n, 0n, 0, {
         contractErrorCode: code,
         message,
       });
-    case 303: // Deadline exceeded
+    case 203: // Excessive input amount
+      return new ValidationError(message || "Excessive input amount", {
+        contractErrorCode: code,
+      });
+    case 204: // Expired deadline
       return new DeadlineError(0);
-    case 304: // Insufficient liquidity
+    case 205: // Insufficient liquidity
       return new InsufficientLiquidityError(extractPairAddress(err), {
         contractErrorCode: code,
         message,
       });
-    case 305: // Excessive input amount
-      return new ValidationError(message || "Excessive input amount", {
+    case 206: // Pair not found
+      return new PairNotFoundError("unknown", "unknown");
+    case 207: // Identical tokens
+      return new ValidationError(message || "Identical tokens", {
         contractErrorCode: code,
       });
-    case 306: // Invalid token
-      return new ValidationError(message || "Invalid token", {
+
+    // Factory contract errors (300-304)
+    case 300: // Factory already initialized
+      return new InvalidOperationError(message || "Factory already initialized", {
+        contractErrorCode: code,
+      });
+    case 301: // Unauthorized caller
+      return new ValidationError(message || "Unauthorized caller", {
+        contractErrorCode: code,
+      });
+    case 302: // Pair already exists
+      return new InvalidOperationError(message || "Pair already exists", {
+        contractErrorCode: code,
+      });
+    case 303: // Zero address provided
+      return new ValidationError(message || "Zero address provided", {
+        contractErrorCode: code,
+      });
+    case 304: // Invalid fee configuration
+      return new ValidationError(message || "Invalid fee configuration", {
         contractErrorCode: code,
       });
 
@@ -589,8 +688,47 @@ export function mapError(err: unknown): CoralSwapSDKError {
     if (mappedError) return mappedError;
   }
 
+  // -----------------------------------------------------------------------
+  // Soroban host-level error strings (no numeric contract code)
+  //
+  // The Soroban runtime and RPC return these when the contract itself did
+  // not emit an #[contracterror]. Normalize them early so downstream
+  // consumers get a stable, typed error class instead of UNKNOWN_ERROR.
+  // -----------------------------------------------------------------------
+
+  // Authentication failures — missing/bad signature, wrong source, etc.
+  if (
+    normalizedMessage.includes("auth") ||
+    normalizedMessage.includes("badauth") ||
+    normalizedMessage.includes("bad auth") ||
+    (normalizedMessage.includes("unauthorized") && normalizedMessage.includes("sign"))
+  ) {
+    return new SignerError();
+  }
+
+  // Resource-budget exhaustion (compute, memory, instructions)
+  if (
+    normalizedMessage.includes("budget") ||
+    normalizedMessage.includes("exceededbudget") ||
+    normalizedMessage.includes("resource exhausted") ||
+    normalizedMessage.includes("exceeded resource")
+  ) {
+    return new SimulationError(
+      `Soroban resource budget exceeded: ${message}`,
+      { reason: 'budget_exceeded', sorobanError: message },
+    );
+  }
+
+  // Generic Soroban simulation / execution failures
+  if (
+    normalizedMessage.includes("hosterror") ||
+    /failed/.test(normalizedMessage) && !normalizedMessage.includes("flash loan")
+  ) {
+    return new SimulationError(message);
+  }
+
   // Extract deadline value from message - improved regex
-  const deadlineMatch = message.match(/deadline[:\s]*[a-z]*[:\s]*(\d+)/i);
+  const deadlineMatch = message.match(/deadline[^\d]*(\d+)/i);
   if (message.includes("EXPIRED") || normalizedMessage.includes("deadline")) {
     const deadline = deadlineMatch ? parseInt(deadlineMatch[1], 10) : 0;
     return new DeadlineError(deadline);
@@ -643,6 +781,43 @@ export function mapError(err: unknown): CoralSwapSDKError {
     message.includes("429")
   ) {
     return new RpcError(message);
+  }
+
+  // Soroban auth / signing failures are distinct from generic validation errors.
+  if (
+    normalizedMessage.includes("auth") ||
+    normalizedMessage.includes("authorization") ||
+    normalizedMessage.includes("require_auth") ||
+    normalizedMessage.includes("missing auth") ||
+    normalizedMessage.includes("missing authorization")
+  ) {
+    return new SignerError();
+  }
+
+  // Budget / resource exhaustion during simulation or execution.
+  if (
+    normalizedMessage.includes("out of budget") ||
+    normalizedMessage.includes("budget exceeded") ||
+    normalizedMessage.includes("budget exhausted") ||
+    normalizedMessage.includes("resource limit") ||
+    normalizedMessage.includes("instruction limit") ||
+    normalizedMessage.includes("insufficient budget") ||
+    normalizedMessage.includes("max instructions")
+  ) {
+    return new SimulationError(message, { reason: 'budget_exceeded' });
+  }
+
+  // Sequence mismatch / stale account sequence numbers on submission.
+  if (
+    normalizedMessage.includes("bad seq") ||
+    normalizedMessage.includes("bad_seq") ||
+    normalizedMessage.includes("bad sequence") ||
+    normalizedMessage.includes("sequence number") ||
+    normalizedMessage.includes("sequence is too low") ||
+    message.includes("TX_BAD_SEQ") ||
+    message.includes("BAD_SEQ")
+  ) {
+    return new TransactionError(message);
   }
 
   // Signer errors

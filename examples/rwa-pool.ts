@@ -49,6 +49,7 @@ import {
   getRWAPoolAPY,
   navAdjustedSwapOutput,
   navPremiumRatio,
+  RWAModule,
   RWAPoolConfig,
 } from '../src/rwa';
 
@@ -135,6 +136,7 @@ async function main() {
 
   const liquidityModule = new LiquidityModule(client);
   const swapModule = new SwapModule(client);
+  const rwaModule = new RWAModule(client);
 
   // ══════════════════════════════════════════════════════════════════════════
   // Step 1: Create the USDC / deJTRSY pair with NAV price feed
@@ -158,26 +160,25 @@ async function main() {
   } else {
     console.log('  Creating USDC / deJTRSY pair with RedStone NAV price feed...');
 
-    // buildCreateRWAPair encodes the NAV price feed address as the third
-    // argument to the factory's `create_rwa_pair` entry-point.  The factory
-    // contract stores the feed reference in the pair's storage slot so it can
-    // be queried by governance contracts and off-chain tooling.
-    const createOp = client.factory.buildCreateRWAPair(
-      publicKey,
-      usdcAddress,
-      rwaAddress,
-      navFeedAddress,
-    );
-
-    const createResult = await client.submitTransaction([createOp]);
-
-    if (!createResult.success) {
-      console.error('  ❌ Pair creation failed:', createResult.error?.message);
+    // rwaModule.createRWAPair() builds and submits the factory's
+    // `create_rwa_pair` call. RWA pool interactions move real funds against
+    // NAV-priced positions, so a client-side timeout here must never trigger
+    // a blind resubmission -- that could attempt to register the same pair
+    // twice. On a retryable failure it checks the transaction's real
+    // on-chain status before ever resubmitting.
+    let createResult;
+    try {
+      createResult = await rwaModule.createRWAPair({
+        tokenA: usdcAddress,
+        tokenB: rwaAddress,
+        navPriceFeedAddress: navFeedAddress,
+      });
+    } catch (err) {
+      console.error('  ❌ Pair creation failed:', err instanceof Error ? err.message : err);
       process.exit(1);
     }
 
-    // Re-fetch the pair address now that it has been registered.
-    pairAddress = await client.getPairAddress(usdcAddress, rwaAddress);
+    pairAddress = createResult.pairAddress;
 
     if (!pairAddress) {
       console.error('  ❌ Pair was submitted but address could not be resolved.');
@@ -185,7 +186,7 @@ async function main() {
     }
 
     console.log(`  ✅ Pair created: ${pairAddress}`);
-    console.log(`     Tx: ${createResult.data?.ledger} (ledger)`);
+    console.log(`     Tx: ${createResult.txHash} (ledger ${createResult.ledger})`);
   }
 
   console.log('');
