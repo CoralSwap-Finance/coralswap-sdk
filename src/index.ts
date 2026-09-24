@@ -58,6 +58,12 @@ export {
   decodeFlashLoanData,
   calculateRepayment,
   validateFeeFloor,
+  verifyReserveConservation,
+} from "@/contracts";
+export type {
+  PairReserves,
+  ReserveConservationOptions,
+  ReserveConservationResult,
 } from "@/contracts";
 
 // Feature modules
@@ -69,6 +75,8 @@ export {
   OracleModule,
   PortfolioModule,
   RiskMetricsModule,
+  RiskScoringModule,
+  RiskLabel,
   TokenListModule,
   FactoryModule,
   RouterModule,
@@ -91,6 +99,7 @@ export type { OptimalPath } from "@/modules/router";
 export type { TWAPObservation, TWAPResult, TraderRanking, GetTopTradersOptions } from "@/modules";
 export { MIN_TWAP_WINDOW_SECONDS, MAX_OBSERVATIONS } from "@/modules";
 export type { TreasuryModuleOptions, LeaderboardEntry, LeaderboardOptions } from "@/modules";
+export type { ConcentrationRiskReport, PortfolioRiskReport } from "@/modules/risk-scoring";
 
 // Utilities
 export {
@@ -134,6 +143,10 @@ export {
   validateSlippage,
   validateDistinctTokens,
   isValidPath,
+  getRpcUrlScheme,
+  isSecureRpcUrl,
+  isCleartextRpcAllowed,
+  validateRpcUrls,
   EventParser,
   EVENT_TOPICS,
   decodeEvents,

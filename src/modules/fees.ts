@@ -77,6 +77,7 @@ export class FeeModule {
    * const state = await client.fees.getFeeState('C...');
    */
   async getFeeState(pairAddress: string): Promise<FeeState> {
+    validateAddress(pairAddress, "pairAddress");
     const pair = this.client.pair(pairAddress);
     return pair.getFeeState();
   }
@@ -120,6 +121,7 @@ export class FeeModule {
     pairAddress: string,
     maxAgeSec: number = 3600,
   ): Promise<boolean> {
+    validateAddress(pairAddress, "pairAddress");
     const pair = this.client.pair(pairAddress);
     const feeState = await pair.getFeeState();
     const now = Math.floor(Date.now() / 1000);
