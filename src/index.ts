@@ -124,6 +124,27 @@ export type {
   DecodeEventsOptions,
 } from "./utils";
 
+// Webhooks delivery pipeline
+export {
+  WebhookDeliveryQueue,
+  SystemClock,
+  FakeClock,
+  FetchWebhookTransport,
+} from "@/webhooks";
+export type {
+  WebhookDeliveryQueueOptions,
+  RetryPolicyOptions,
+  Clock,
+  FetchWebhookTransportOptions,
+  WebhookEndpoint,
+  WebhookPayload,
+  WebhookDelivery,
+  WebhookDeliveryOutcome,
+  WebhookTransport,
+  DeliveryStatus,
+  DisableReason,
+} from "@/webhooks";
+
 // Errors
 export {
   CoralSwapSDKError,
