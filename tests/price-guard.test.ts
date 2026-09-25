@@ -1,8 +1,9 @@
 import { SwapModule } from '../src/modules/swap';
-import { PriceDeviationError, StaleOracleError, ValidationError } from '../src/errors';
+import { MissingPriceFeedError, PriceDeviationError, StaleOracleError, ValidationError } from '../src/errors';
 import { TradeType } from '../src/types/common';
 import { RedStonePayload, SwapWithPriceGuardRequest } from '../src/types/swap';
 import { verifyRedStonePayload, estimateUsdValue } from '../src/utils/redstone';
+import { hasValidFixtureSignature, makeSignedRedstonePayload } from './fixtures/redstone-signed-payload';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -13,11 +14,7 @@ function makePayload(
   prices: Record<string, bigint>,
   ageMs = 0,
 ): RedStonePayload {
-  return {
-    data: new Uint8Array(0),
-    timestampMs: Date.now() - ageMs,
-    prices,
-  };
+  return makeSignedRedstonePayload(prices, Date.now() - ageMs);
 }
 
 /** Prices: XLM = $0.10, USDC = $1.00 (× 10^8) */
@@ -42,6 +39,7 @@ describe('verifyRedStonePayload', () => {
     // amountOut = 100 USDC (7 dec) → 1_000_000_000n
     // oracle ratio: XLM/USDC = 0.10/1.00 = 0.1 → 100 USDC per 1000 XLM ✓
     const payload = makePayload(PRICES);
+    expect(hasValidFixtureSignature(payload)).toBe(true);
     expect(() =>
       verifyRedStonePayload(
         payload,
@@ -99,7 +97,7 @@ describe('verifyRedStonePayload', () => {
     ).not.toThrow();
   });
 
-  it('skips verification when a price symbol is missing from payload', () => {
+  it('fails closed when a price symbol is missing from payload', () => {
     const payload = makePayload({ XLM: PRICES.XLM }); // no USDC price
     expect(() =>
       verifyRedStonePayload(
@@ -110,7 +108,29 @@ describe('verifyRedStonePayload', () => {
         1n, // would fail if checked
         DEFAULT_CONFIG,
       ),
-    ).not.toThrow();
+    ).toThrow(MissingPriceFeedError);
+  });
+
+  it.each([
+    ['zero input amount', 0n, 1_000_000_000n],
+    ['zero output amount', 10_000_000_000n, 0n],
+  ])('rejects %s rather than bypassing the guard', (_label, amountIn, amountOut) => {
+    expect(() =>
+      verifyRedStonePayload(makePayload(PRICES), 'XLM', 'USDC', amountIn, amountOut, DEFAULT_CONFIG),
+    ).toThrow(ValidationError);
+  });
+
+  it('rejects zero-valued feed prices', () => {
+    expect(() =>
+      verifyRedStonePayload(
+        makePayload({ XLM: 0n, USDC: PRICES.USDC }),
+        'XLM',
+        'USDC',
+        10_000_000_000n,
+        1_000_000_000n,
+        DEFAULT_CONFIG,
+      ),
+    ).toThrow(MissingPriceFeedError);
   });
 });
 

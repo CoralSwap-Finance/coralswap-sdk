@@ -3,6 +3,7 @@ import { CoralSwapClient } from "../src/client";
 import { NetworkSwitcher } from "../src/contracts/switcher";
 import { Network } from "../src/types/common";
 import { NETWORK_CONFIGS } from "../src/config";
+import { NotConfiguredError } from "../src/errors";
 
 // Mock SorobanRpc.Server
 jest.mock('@stellar/stellar-sdk', () => {
@@ -29,6 +30,12 @@ jest.mock('@stellar/stellar-sdk', () => {
 describe("Network Switching", () => {
   const TEST_SECRET =
     "SB6K2AINTGNYBFX4M7TRPGSKQ5RKNOXXWB7UZUHRYOVTM7REDUGECKZU";
+
+  it("throws a typed error for undeployed mainnet contracts", () => {
+    const client = new CoralSwapClient({ network: Network.MAINNET });
+    expect(() => client.factory).toThrow(NotConfiguredError);
+    expect(() => client.router).toThrow(NotConfiguredError);
+  });
 
   it("CoralSwapClient.setNetwork updates configuration correctly", () => {
     const client = new CoralSwapClient({
