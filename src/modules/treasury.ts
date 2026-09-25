@@ -2,6 +2,8 @@ import { CoralSwapClient } from "@/client";
 import { decodeEventTopic, MIN_START_LEDGER } from "@/utils/event-cursor";
 import { getEventsPage } from "@/helpers/get-events-page";
 import { xdr } from "@stellar/stellar-sdk";
+import { ValidationError } from "@/errors";
+import { EventCursor, decodeEventTopic, MIN_START_LEDGER } from "@/utils/event-cursor";
 import {
   TreasuryBalance,
   TokenBalance,
@@ -142,6 +144,22 @@ export class TreasuryModule {
    * console.log(revenue.trend); // 'rising' | 'falling' | 'stable'
    */
   async getFeeRevenue(period?: RevenuePeriod): Promise<RevenueData> {
+    if (period?.fromLedger !== undefined && period.fromLedger < 0) {
+      throw new ValidationError('period.fromLedger must be non-negative', {
+        fromLedger: period.fromLedger,
+      });
+    }
+    if (period?.toLedger !== undefined && period.toLedger < 0) {
+      throw new ValidationError('period.toLedger must be non-negative', {
+        toLedger: period.toLedger,
+      });
+    }
+    if (period?.fromLedger !== undefined && period?.toLedger !== undefined && period.fromLedger > period.toLedger) {
+      throw new ValidationError('period.fromLedger must not exceed period.toLedger', {
+        fromLedger: period.fromLedger,
+        toLedger: period.toLedger,
+      });
+    }
     // Anchor the window once against the chain head and reuse it for every
     // pool cursor, so all pools scan an identical, valid ledger range.
     const currentLedger = await this.client.getCurrentLedger();

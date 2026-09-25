@@ -502,6 +502,96 @@ describe('MockProvider', () => {
   });
 
   // -------------------------------------------------------------------------
+  // script() / clearScript() — per-method scripted responses
+  // -------------------------------------------------------------------------
+
+  describe('script() / clearScript()', () => {
+    it('resolves a scripted static value on every call', async () => {
+      const response: SorobanRpc.Api.LedgerEntryResult = { entries: [], latestLedger: 42 } as never;
+      mock.script('getContractData', response);
+
+      await expect(mock.getContractData('CCONT', {} as xdr.ScVal)).resolves.toBe(response);
+      // Not a one-shot: the same value resolves again on a second call.
+      await expect(mock.getContractData('CCONT', {} as xdr.ScVal)).resolves.toBe(response);
+    });
+
+    it('invokes a scripted function with the call arguments and returns its result', async () => {
+      const seen: unknown[] = [];
+      mock.script('getContractData', (contract: unknown, key: unknown) => {
+        seen.push([contract, key]);
+        return { entries: [], latestLedger: 7 };
+      });
+
+      const scVal = {} as xdr.ScVal;
+      const result = await mock.getContractData('CCONT', scVal);
+
+      expect(seen).toEqual([['CCONT', scVal]]);
+      expect(result).toEqual({ entries: [], latestLedger: 7 });
+    });
+
+    it('rejects with a scripted Error instance, including a typed subclass', async () => {
+      // Stand-in for the typed failures #662 (NotConfiguredError) and #676
+      // (DecodeError) will introduce -- proves the exact pattern a future
+      // test would use, without depending on either issue having landed.
+      class NotConfiguredError extends Error {
+        constructor(message: string) {
+          super(message);
+          this.name = 'NotConfiguredError';
+        }
+      }
+
+      mock.script('getNetwork', new NotConfiguredError('router not configured'));
+
+      await expect(mock.getNetwork()).rejects.toBeInstanceOf(NotConfiguredError);
+      await expect(mock.getNetwork()).rejects.toThrow('router not configured');
+    });
+
+    it('lets a scripted function throw an error asynchronously', async () => {
+      class DecodeError extends Error {
+        constructor(message: string) {
+          super(message);
+          this.name = 'DecodeError';
+        }
+      }
+
+      mock.script('getContractData', () => {
+        throw new DecodeError('malformed ScVal');
+      });
+
+      await expect(mock.getContractData('CCONT', {} as xdr.ScVal)).rejects.toBeInstanceOf(
+        DecodeError,
+      );
+    });
+
+    it('clearScript() reverts a method to loud-fail', async () => {
+      mock.script('getNetwork', { passphrase: 'Test SDF Network ; September 2015' });
+      await expect(mock.getNetwork()).resolves.toBeDefined();
+
+      mock.clearScript('getNetwork');
+
+      await expect(mock.getNetwork()).rejects.toThrow('MockProvider: getNetwork() is not implemented');
+    });
+
+    it('scripting one method does not affect another unscripted method', async () => {
+      mock.script('getNetwork', { passphrase: 'Test SDF Network ; September 2015' });
+
+      await expect(mock.getNetwork()).resolves.toBeDefined();
+      await expect(mock.getFeeStats()).rejects.toThrow(
+        'MockProvider: getFeeStats() is not implemented',
+      );
+    });
+
+    it('reset() clears scripted responses along with all other staged state', async () => {
+      mock.script('getNetwork', { passphrase: 'Test SDF Network ; September 2015' });
+      await expect(mock.getNetwork()).resolves.toBeDefined();
+
+      mock.reset();
+
+      await expect(mock.getNetwork()).rejects.toThrow('MockProvider: getNetwork() is not implemented');
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // Integration test — MockProvider wired into CoralSwapClient
   // -------------------------------------------------------------------------
 
