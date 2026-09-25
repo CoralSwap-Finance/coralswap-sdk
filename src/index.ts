@@ -124,18 +124,16 @@ export type {
   DecodeEventsOptions,
 } from "./utils";
 
-// Webhooks delivery pipeline
+// Webhooks delivery state machine
 export {
   WebhookDeliveryQueue,
   SystemClock,
   FakeClock,
-  FetchWebhookTransport,
 } from "@/webhooks";
 export type {
   WebhookDeliveryQueueOptions,
   RetryPolicyOptions,
   Clock,
-  FetchWebhookTransportOptions,
   WebhookEndpoint,
   WebhookPayload,
   WebhookDelivery,
