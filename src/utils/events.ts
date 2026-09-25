@@ -185,17 +185,19 @@ export class EventParser {
    * @param events - Diagnostic events from transaction result meta.
    * @param txHash - Transaction hash to attach to parsed events.
    * @param ledger - Ledger sequence number.
+   * @param timestamp - Unix timestamp (seconds since epoch) when the ledger closed.
    * @returns Array of typed CoralSwapEvent (only successfully parsed events).
    */
   parse(
     events: xdr.DiagnosticEvent[],
     txHash = "",
     ledger = 0,
+    timestamp = 0,
   ): CoralSwapEvent[] {
     const parsed: CoralSwapEvent[] = [];
     for (const evt of events) {
       try {
-        const result = this.decodeSingle(evt, txHash, ledger);
+        const result = this.decodeSingle(evt, txHash, ledger, timestamp);
         if (result) parsed.push(result);
       } catch {
         // Skip malformed events in lenient mode
@@ -210,6 +212,7 @@ export class EventParser {
    * @param events - Diagnostic events from transaction result meta.
    * @param txHash - Transaction hash to attach to parsed events.
    * @param ledger - Ledger sequence number.
+   * @param timestamp - Unix timestamp (seconds since epoch) when the ledger closed.
    * @returns Array of typed CoralSwapEvent.
    * @throws {ValidationError} If any recognised event cannot be decoded.
    */
@@ -217,10 +220,11 @@ export class EventParser {
     events: xdr.DiagnosticEvent[],
     txHash = "",
     ledger = 0,
+    timestamp = 0,
   ): CoralSwapEvent[] {
     const parsed: CoralSwapEvent[] = [];
     for (const evt of events) {
-      const result = this.decodeSingle(evt, txHash, ledger);
+      const result = this.decodeSingle(evt, txHash, ledger, timestamp);
       if (result) parsed.push(result);
     }
     return parsed;
@@ -242,7 +246,8 @@ export class EventParser {
     const txHash = tx.hash ?? tx.id ?? '';
 
     const ledger = response.ledger ?? 0;
-    return this.parse(diagnosticEvents, txHash, ledger);
+    const timestamp = response.createdAt ?? 0;
+    return this.parse(diagnosticEvents, txHash, ledger, timestamp);
   }
 
   // -------------------------------------------------------------------------
@@ -257,6 +262,7 @@ export class EventParser {
     evt: xdr.DiagnosticEvent,
     txHash: string,
     ledger: number,
+    timestamp: number,
   ): CoralSwapEvent | null {
     // Only process contract-type events that ran in a successful call
     if (!evt.inSuccessfulContractCall()) return null;
@@ -285,7 +291,7 @@ export class EventParser {
     const base: Omit<ContractEvent, "type"> = {
       contractId,
       ledger,
-      timestamp: ledger,
+      timestamp,
       txHash,
     };
 
@@ -495,11 +501,12 @@ export function decodeEvents(
   const tx = response as TxWithOptionalHash;
   const txHash = tx.hash ?? tx.id ?? "";
   const ledger = response.ledger ?? 0;
+  const timestamp = response.createdAt ?? 0;
 
   if (options.strict) {
-    return parser.parseStrict(diagnosticEvents, txHash, ledger);
+    return parser.parseStrict(diagnosticEvents, txHash, ledger, timestamp);
   }
-  return parser.parse(diagnosticEvents, txHash, ledger);
+  return parser.parse(diagnosticEvents, txHash, ledger, timestamp);
 }
 
 /**
@@ -515,6 +522,7 @@ export function decodeEvents(
  * @param options.strict - If true, throws on malformed event data. Defaults to false.
  * @param txHash - Transaction hash to attach to parsed events.
  * @param ledger - Ledger sequence number.
+ * @param timestamp - Unix timestamp (seconds since epoch) when the ledger closed.
  * @returns Array of typed CoralSwapEvent objects.
  *
  * @example
@@ -531,12 +539,13 @@ export function decodeEventsFromXdr(
   options: DecodeEventsOptions = {},
   txHash = "",
   ledger = 0,
+  timestamp = 0,
 ): CoralSwapEvent[] {
   const contractIds = options.contractId ? [options.contractId] : [];
   const parser = new EventParser(contractIds);
 
   if (options.strict) {
-    return parser.parseStrict(events, txHash, ledger);
+    return parser.parseStrict(events, txHash, ledger, timestamp);
   }
-  return parser.parse(events, txHash, ledger);
+  return parser.parse(events, txHash, ledger, timestamp);
 }
