@@ -90,11 +90,13 @@ The `network` enum selects a built-in **preset** that supplies the RPC URL, Stel
 |--------|-----------|-----------|-------------------|---------|
 | Testnet | `Network.TESTNET` | `Test SDF Network ; September 2015` | ✅ Populated | `soroban-testnet.stellar.org` |
 | Mainnet | `Network.MAINNET` | `Public Global Stellar Network ; September 2015` | ⚠️ Empty (not yet deployed) | `soroban.stellar.org` |
-| Staging | `Network.STAGING` | `Test SDF Network ; September 2015` | ✅ Same as testnet | `soroban-testnet.stellar.org` |
+| Staging | `Network.STAGING` | `Test SDF Future Network ; October 2022` | ⚠️ Empty (not yet deployed) | `rpc-futurenet.stellar.org` |
 
-### ⚠️ Staging ≡ Testnet
+### Staging is isolated from Testnet
 
-`STAGING` and `TESTNET` share the **same passphrase and contract addresses**. Transactions signed for one network are valid on the other. Use `STAGING` only when the backend or infrastructure team explicitly designates it; otherwise prefer `TESTNET` for clarity.
+`STAGING` uses Stellar Futurenet's RPC endpoint and network passphrase, not Testnet's. CoralSwap has no confirmed Staging deployment addresses, so contract operations that require a factory or router fail with `NotConfiguredError` until those addresses are configured. Do not treat Staging as a deployed CoralSwap environment.
+
+Mainnet likewise has no confirmed CoralSwap factory or router deployment. Operations that require either address fail with `NotConfiguredError` instead of attempting a call against an empty address.
 
 ### Passphrase and signer pairing
 

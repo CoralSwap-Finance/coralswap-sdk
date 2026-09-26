@@ -1,6 +1,6 @@
 import { OracleModule, TWAPObservation, MIN_TWAP_WINDOW_SECONDS } from '../src/modules/oracle';
 import { PRECISION } from '../src/config';
-import { InsufficientLiquidityError } from '../src/errors';
+import { InsufficientLiquidityError, ValidationError } from '../src/errors';
 
 function mockClient(pairOverrides: Record<string, (...args: any[]) => any> = {}) {
   return {
@@ -59,6 +59,33 @@ describe('OracleModule', () => {
       expect(() => oracle.computeTWAP(obs, obs)).toThrow(
         'End observation must be after start observation',
       );
+    });
+
+    it('throws a typed validation error for equal timestamps', () => {
+      const observation: TWAPObservation = {
+        price0CumulativeLast: 0n,
+        price1CumulativeLast: 0n,
+        blockTimestampLast: 5000,
+      };
+      expect(() => oracle.computeTWAP(observation, observation)).toThrow(ValidationError);
+    });
+
+    it('returns zero prices when cumulative prices have no increase', () => {
+      const start: TWAPObservation = {
+        price0CumulativeLast: 0n,
+        price1CumulativeLast: 0n,
+        blockTimestampLast: 1000,
+      };
+      const end: TWAPObservation = {
+        price0CumulativeLast: 0n,
+        price1CumulativeLast: 0n,
+        blockTimestampLast: 1000 + MIN_TWAP_WINDOW_SECONDS,
+      };
+      expect(oracle.computeTWAP(start, end)).toEqual({
+        price0TWAP: 0n,
+        price1TWAP: 0n,
+        timeWindow: MIN_TWAP_WINDOW_SECONDS,
+      });
     });
 
     it('throws when end is before start', () => {

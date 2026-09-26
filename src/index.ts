@@ -202,6 +202,7 @@ export {
   CircuitBreakerError,
   SignerError,
   MissingPriceFeedError,
+  NotConfiguredError,
   AddressNotFoundError,
   PortfolioCalculationError,
   WebhookError,
