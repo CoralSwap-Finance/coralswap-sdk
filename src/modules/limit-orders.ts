@@ -35,6 +35,13 @@
  *     └──────────┘
  * ```
  *
+ * ## Slippage policy
+ *
+ * Limit orders use `targetPrice` as an explicit, required execution bound.
+ * They do not accept optional `minAmountOut`/`maxAmountIn` bounds, and there
+ * is no silent `0`/full-slippage default: `placeLimitOrder` rejects a missing
+ * or non-positive `targetPrice` before any transaction is built.
+ *
  * @example
  * // Place a limit order and poll until filled
  * const sdk = new CoralSwapSDK({ ... });
@@ -415,8 +422,9 @@ const IntervalMsSchema = z
 const LimitOrderParamsSchema = z
   .object({
     targetPrice: z
-      .number({ error: 'targetPrice must be positive' })
-      .positive('targetPrice must be positive')
+      .number({ error: 'targetPrice must be a positive number; 0 is not a valid execution bound' })
+      .finite('targetPrice must be a positive number; 0 is not a valid execution bound')
+      .positive('targetPrice must be a positive number; 0 is not a valid execution bound')
       .max(MAX_TARGET_PRICE, 'targetPrice exceeds maximum allowed range (1,000,000)'),
     expiry: z
       .number({ error: 'expiry must be a Unix timestamp in the future' })
