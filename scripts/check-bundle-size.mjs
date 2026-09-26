@@ -18,17 +18,24 @@
  *
  * Budget rationale
  * ----------------
- * Measured baseline: the minified ESM bundle of src/index is ~192 KiB
- * (196,781 bytes). The guarded number is the post-bundle, post-minify byte
- * size with third-party deps externalized, so it reflects only the SDK's own
- * reachable surface. Each genuinely-reintroduced dead module adds roughly
- * 1-3 KiB of minified code.
+ * Measured baseline (2026-09-26, main at 0d73bc2, Node 20, esbuild from the
+ * lockfile): the minified ESM bundle of src/index is 215.1 KiB (220,313
+ * bytes) across 68 modules, all under src/. The guarded number is the
+ * post-bundle, post-minify byte size with third-party deps externalized, so
+ * it reflects only the SDK's own reachable surface. Each genuinely
+ * reintroduced dead module adds roughly 1-3 KiB of minified code.
  *
- * Budget: 200 KiB (204800 bytes) -- ~4% headroom over the measured baseline.
- * Tight enough to trip on dead-exports reintroduction (a couple of removed
- * modules worth of code) while tolerant of normal legitimate growth. Anything
- * larger than 200 KiB is a deliberate, talked-about decision -- bump
- * `BUNDLE_SIZE_BUDGET_BYTES` here and in the docs alongside a justification.
+ * The original 200 KiB cap was set from a ~192 KiB measurement taken while
+ * the check was in review; main had already grown to 213.9 KiB by the time
+ * it merged, so the check failed on every main commit (#810).
+ *
+ * Budget: 225 KiB (230400 bytes) -- ~4.5% headroom over the measured
+ * baseline. Tight enough to trip on dead-exports reintroduction (a couple of
+ * removed modules worth of code) while tolerant of normal legitimate growth.
+ * Anything larger than 225 KiB is a deliberate, talked-about decision -- bump
+ * `BUNDLE_SIZE_BUDGET_BYTES` here and in the README alongside a justification,
+ * and record the measurement commit as above so the next re-baseline can see
+ * what changed. If the public surface is trimmed, lower it again.
  */
 
 import fs from 'node:fs';
@@ -39,7 +46,7 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
 
-const BUNDLE_SIZE_BUDGET_BYTES = 204800; // 200 KiB
+const BUNDLE_SIZE_BUDGET_BYTES = 230400; // 225 KiB
 const ENTRY = path.join(root, 'src', 'index.ts');
 const SKIP_IF_SRC_MISSING = process.env.BUNDLE_SKIP_IF_NOT_BUILT === '1';
 
