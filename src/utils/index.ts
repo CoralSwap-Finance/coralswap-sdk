@@ -127,6 +127,16 @@ export { checkCompatibility } from './migration';
 export type { BreakingChange, CompatibilityReport } from './migration';
 export { suppressDeprecationWarnings, deprecated } from './deprecation-warnings';
 
+export { decodeI128 as decodeI128Strict } from './numeric';
+
+export {
+  TOKEN_DECIMALS,
+  PRICE_SCALE,
+  BPS_DENOMINATOR,
+  CONVERSION_SCALE,
+  SCALE,
+} from './scale-constants';
+
 /**
  * Idempotent-resubmission helpers for state-changing on-chain calls.
  *

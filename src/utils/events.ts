@@ -11,6 +11,7 @@ import {
   FeeUpdateEvent,
 } from "@/types/events";
 import { ValidationError } from "@/errors";
+import { decodeI128 } from "./numeric";
 
 /** Response type that may include hash/id for transaction identifier. */
 type TxWithOptionalHash = rpc.Api.GetSuccessfulTransactionResponse & {
@@ -40,19 +41,6 @@ const KNOWN_TOPICS = new Set<string>(Object.values(EVENT_TOPICS));
 // ScVal decoding helpers (safe-guarded against invalid XDR)
 // ---------------------------------------------------------------------------
 
-/**
- * Decode an ScVal i128 to a bigint.
- * Throws ValidationError on type mismatch rather than fabricating a zero fallback.
- */
-function decodeI128(val: xdr.ScVal): bigint {
-  if (val.type !== "scvI128") {
-    throw new ValidationError(`Expected i128 ScVal, got ${val.type}`);
-  }
-  const i128 = val.i128 as unknown;
-  if (typeof i128 === "bigint") return i128;
-  const parts = i128 as { hi: bigint; lo: bigint };
-  return (parts.hi << 64n) + parts.lo;
-}
 
 /**
  * Decode an ScVal u32 to a number.

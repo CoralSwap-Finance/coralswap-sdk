@@ -163,6 +163,12 @@ export {
   ConnectionPool,
   ledgerToApproxTime,
   LEDGER_CLOSE_INTERVAL_SECONDS,
+  decodeI128Strict,
+  TOKEN_DECIMALS,
+  PRICE_SCALE,
+  BPS_DENOMINATOR,
+  CONVERSION_SCALE,
+  SCALE,
 } from './utils';
 
 export type {
