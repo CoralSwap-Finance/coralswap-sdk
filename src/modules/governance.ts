@@ -350,6 +350,92 @@ export class GovernanceModule {
   }
 
   /**
+   * Cancel an active governance proposal.
+   *
+   * @param proposalId - Unique proposal identifier
+   * @param signer - Wallet signer authorizing the cancellation
+   * @returns Transaction hash of the submitted cancellation
+   * @throws {ValidationError} If proposalId is empty
+   * @throws {TransactionError} If the cancellation fails on-chain
+   */
+  async cancelProposal(
+    proposalId: string,
+    signer: Signer,
+  ): Promise<string> {
+    if (!proposalId || proposalId.trim().length === 0) {
+      throw new ValidationError("proposalId must not be empty", {
+        field: "proposalId",
+        constraint: "non-empty string",
+        operation: "cancelProposal",
+      });
+    }
+
+    const signerPublicKey = await signer.publicKey();
+    const contract = new Contract(this.contractAddress);
+
+    const op = contract.call(
+      "cancel_proposal",
+      nativeToScVal(proposalId, { type: "string" }),
+      new Address(signerPublicKey).toScVal(),
+    );
+
+    const result = await this.client.submitTransaction([op], signerPublicKey);
+
+    if (!result.success) {
+      throw new TransactionError(
+        `cancelProposal failed: ${result.error?.message ?? "Unknown error"}`,
+        result.txHash,
+        { operation: "cancelProposal", proposalId },
+      );
+    }
+
+    return result.txHash!;
+  }
+
+  /**
+   * Execute a passed proposal.
+   *
+   * @param proposalId - Unique proposal identifier
+   * @param signer - Wallet signer authorizing the execution
+   * @returns Transaction hash of the execution
+   * @throws {ValidationError} If proposalId is empty
+   * @throws {TransactionError} If execution fails on-chain
+   */
+  async executeProposal(
+    proposalId: string,
+    signer: Signer,
+  ): Promise<string> {
+    if (!proposalId || proposalId.trim().length === 0) {
+      throw new ValidationError("proposalId must not be empty", {
+        field: "proposalId",
+        constraint: "non-empty string",
+        operation: "executeProposal",
+      });
+    }
+
+    const signerPublicKey = await signer.publicKey();
+    const contract = new Contract(this.contractAddress);
+
+    const op = contract.call(
+      "execute_proposal",
+      nativeToScVal(proposalId, { type: "string" }),
+      new Address(signerPublicKey).toScVal(),
+    );
+
+    const result = await this.client.submitTransaction([op], signerPublicKey);
+
+    if (!result.success) {
+      throw new TransactionError(
+        `executeProposal failed: ${result.error?.message ?? "Unknown error"}`,
+        result.txHash,
+        { operation: "executeProposal", proposalId },
+      );
+    }
+
+    return result.txHash!;
+  }
+
+  /**
    * Delegate voting power to another address.
    *
    * Delegation lets a wallet assign its full voting power to another
@@ -466,7 +552,7 @@ export class GovernanceModule {
    * @returns The full proposal object with vote tallies and metadata
    * @throws {ValidationError} If `proposalId` is empty
    * @throws {InvalidOperationError} If no proposal exists for the given ID
-
+   *
    * @example
    * ```typescript
    * const proposal = await gov.getProposal(proposalId);
@@ -739,6 +825,15 @@ export class GovernanceModule {
   private decodeProposal(val: xdr.ScVal): Proposal {
     const native = scValToNative(val) as Record<string, unknown>;
 
+    let actions: ProposalAction[] = [];
+    if (Array.isArray(native["actions"])) {
+      actions = (native["actions"] as Record<string, unknown>[]).map((a) => ({
+        contractAddress: String(a["contract_address"] ?? a["contractAddress"] ?? ""),
+        functionName: String(a["function_name"] ?? a["functionName"] ?? ""),
+        args: Array.isArray(a["args"]) ? (a["args"] as unknown[]) : [],
+      }));
+    }
+
     return {
       id: String(native["id"] ?? ""),
       title: String(native["title"] ?? ""),
@@ -754,7 +849,7 @@ export class GovernanceModule {
           : undefined,
       proposer: String(native["proposer"] ?? ""),
       createdAt: Number(native["created_at"] ?? 0),
-      actions: [],
+      actions,
     };
   }
 
