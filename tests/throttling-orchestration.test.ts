@@ -9,10 +9,10 @@
  *   1. Sustained rate accuracy — 1 rps, 2 rps, 10 rps
  *   2. Burst replenishment — tokens accrue during cooldown and are spendable afterward
  *   3. open → half-open → closed transitions driven by the rate limiter queue
- *   4. No token gift on destroy when queue is empty
+ *   4. No token gift on destroy (queued waiters are rejected, not resolved)
  */
 
-import { RateLimiter } from '../src/utils/rate-limiter';
+import { RateLimiter, RateLimiterDestroyedError } from '../src/utils/rate-limiter';
 import {
   CircuitBreaker,
   CircuitOpenError,
@@ -460,12 +460,13 @@ describe('Throttling Orchestration — RateLimiter + CircuitBreaker combined', (
       expect(limiter.getRemainingCapacity()).toBe(0);
     });
 
-    it('destroy() resolves pending requests (gift) only when the queue is non-empty', async () => {
+    it('destroy() rejects pending requests (no gift) only when the queue is non-empty', async () => {
       const limiter = new RateLimiter({ maxRequestsPerSecond: 1, maxBurst: 1 });
       limiter.tryAcquire(); // drain
 
       const resolved = jest.fn();
-      limiter.acquire().then(resolved);
+      const rejected = jest.fn();
+      limiter.acquire().then(resolved, rejected);
       await Promise.resolve();
       expect(resolved).not.toHaveBeenCalled();
       expect(limiter.queueLength).toBe(1);
@@ -473,8 +474,11 @@ describe('Throttling Orchestration — RateLimiter + CircuitBreaker combined', (
       limiter.destroy();
       await Promise.resolve();
 
-      // Gift happens because there WAS a pending request.
-      expect(resolved).toHaveBeenCalledTimes(1);
+      // No gift when there WAS a pending request: the waiter is rejected so a
+      // teardown path cannot materialize an unthrottled burst.
+      expect(resolved).not.toHaveBeenCalled();
+      expect(rejected).toHaveBeenCalledTimes(1);
+      expect(rejected.mock.calls[0][0]).toBeInstanceOf(RateLimiterDestroyedError);
     });
 
     it('no spurious timer firings after destroy() on empty queue', async () => {
