@@ -10,6 +10,7 @@
   - `sendWebhook(webhookId, payload, { event })` honours the webhook's event subscription: an event the endpoint did not subscribe to is skipped without an HTTP request (`filtered: true`)
 - `Webhook` and `WebhookUpdate` types for the above
 - CI check requiring a CHANGELOG entry under `[Unreleased]` for PRs that change `src/`
+- Input validation guards on `PortfolioModule` methods: `owner` and every `pairAddresses` entry must be a valid Stellar address (`G…` or `C…`), `fromDate`/`toDate` must be real dates that are not in the future and must satisfy `fromDate < toDate`, and `limit` must be a positive integer no greater than 1000 — every failure throws a typed `ValidationError` whose message includes the invalid value
 - `MonitoringModule.getSystemMetrics(period)`: TVL, swap volume, fee revenue, and unique-user change vs. the previous equal-length window, plus top growing/declining pools. Historical figures are read through the shared `TypedEventCursor` (#478)
 
 ### Changed

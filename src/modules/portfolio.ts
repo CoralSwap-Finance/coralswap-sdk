@@ -9,12 +9,13 @@ import {
 } from "@/types/portfolio";
 import { TreasuryModule, TreasuryModuleOptions } from "@/modules/treasury";
 import { PositionsModule } from "@/modules/positions";
-import { validateAddress } from "@/utils/validation";
+import { validateAddress, validateDateRange, validateLimit } from "@/utils/validation";
 import {
   MissingPriceFeedError,
   AddressNotFoundError,
   PortfolioCalculationError,
   CoralSwapSDKError,
+  ValidationError,
 } from "@/errors";
 
 const STROOP_SCALE = 10_000_000n; // 1e7, matches the SDK's 7-decimal token precision
@@ -168,7 +169,10 @@ export class PortfolioModule extends TreasuryModule {
    *   `totalValueUSD` (over available positions only), and
    *   `unavailablePositions`.
    *
-   * @throws {@link ValidationError} if `owner` is not a valid Stellar address.
+   * @throws {@link ValidationError} if `owner`, any entry of
+   *   `options.pairAddresses`, `options.fromDate` / `options.toDate`, or
+   *   `options.limit` fails validation (the message includes the invalid
+   *   value).
    * @throws {@link AddressNotFoundError} if the address has no on-chain state.
    *
    * @example
@@ -211,7 +215,8 @@ export class PortfolioModule extends TreasuryModule {
    * @param options - Optional pair filter; see {@link GetPortfolioOptions}.
    * @returns {@link Portfolio} with `owner`, `positions`, and `totalValueUSD`.
    *
-   * @throws {@link ValidationError} if `owner` fails address validation.
+   * @throws {@link ValidationError} if `owner` or any option fails validation
+   *   (the message includes the invalid value).
    * @throws {@link AddressNotFoundError} if position fetch returns no state.
    * @throws {@link MissingPriceFeedError} if a token price cannot be derived.
    * @throws {@link PortfolioCalculationError} if valuation arithmetic fails
@@ -230,13 +235,14 @@ export class PortfolioModule extends TreasuryModule {
     owner: string,
     options: GetPortfolioOptions = {},
   ): Promise<Portfolio> {
-    validateAddress(owner, "owner");
+    this.validatePortfolioInputs(owner, options);
 
     let summary;
     try {
       summary = await this.positions.getPositions(owner, {
         pairAddresses: options.pairAddresses,
         includeEmpty: false,
+        ...(options.limit !== undefined ? { limit: options.limit } : {}),
       });
     } catch (err) {
       if (err instanceof CoralSwapSDKError) throw err;
@@ -327,6 +333,46 @@ export class PortfolioModule extends TreasuryModule {
   }
 
   /**
+   * Validate every caller-supplied parameter of the portfolio query methods.
+   *
+   * Runs before any RPC call so malformed input fails fast with a typed
+   * {@link ValidationError} instead of wasting an RPC round-trip:
+   *
+   * - `owner` and each entry of `options.pairAddresses` must be a valid
+   *   Stellar public key (`G…`) or contract ID (`C…`)
+   * - `options.fromDate` / `options.toDate`, when given, must be real dates
+   *   that are not in the future, with `fromDate` strictly earlier than
+   *   `toDate`
+   * - `options.limit`, when given, must be a positive integer no greater
+   *   than 1000
+   *
+   * @param owner - Stellar address of the wallet being queried.
+   * @param options - Query options to validate.
+   * @throws {ValidationError} If any parameter is malformed; the message
+   *   always includes the offending value.
+   */
+  private validatePortfolioInputs(
+    owner: string,
+    options: GetPortfolioOptions = {},
+  ): void {
+    validateAddress(owner, "owner");
+
+    if (options.pairAddresses !== undefined) {
+      if (!Array.isArray(options.pairAddresses)) {
+        throw new ValidationError(
+          `pairAddresses must be an array of Stellar addresses, got ${options.pairAddresses}`,
+        );
+      }
+      options.pairAddresses.forEach((address, index) => {
+        validateAddress(address, `pairAddresses[${index}]`);
+      });
+    }
+
+    validateDateRange(options.fromDate, options.toDate);
+    validateLimit(options.limit);
+  }
+
+  /**
    * Capture the current portfolio state as an immutable entry snapshot.
    *
    * The snapshot records the USD value and token amounts at the moment of
@@ -343,6 +389,9 @@ export class PortfolioModule extends TreasuryModule {
    * @returns A {@link PortfolioEntrySnapshot} stamped with the current Unix
    *   timestamp (seconds).
    *
+   * @throws {@link ValidationError} if `portfolio` is not a resolved
+   *   {@link Portfolio} or its `owner` is not a valid Stellar address.
+   *
    * @example
    * ```ts
    * // Record entry cost basis right after depositing
@@ -356,6 +405,13 @@ export class PortfolioModule extends TreasuryModule {
    * ```
    */
   createSnapshot(portfolio: Portfolio): PortfolioEntrySnapshot {
+    if (!portfolio || typeof portfolio !== "object") {
+      throw new ValidationError(
+        `portfolio must be a resolved Portfolio object, got ${portfolio}`,
+      );
+    }
+    validateAddress(portfolio.owner, "portfolio.owner");
+
     return {
       owner: portfolio.owner,
       totalValueUSD: portfolio.totalValueUSD,
@@ -398,7 +454,9 @@ export class PortfolioModule extends TreasuryModule {
    * @returns {@link PortfolioPnL} with `entryValueUSD`, `currentValueUSD`,
    *   `pnlUSD`, and `pnlPercent`.
    *
-   * @throws {@link ValidationError} if `owner` is not a valid Stellar address.
+   * @throws {@link ValidationError} if `owner` is not a valid Stellar address,
+   *   or if `entry` is not a well-formed snapshot (`entry.owner` must be a
+   *   valid address and `entry.positions` must be an array).
    * @throws {@link MissingPriceFeedError} if a token's current price cannot
    *   be derived from on-chain reserves.
    * @throws {@link PortfolioCalculationError} if valuation fails for any pool
@@ -420,15 +478,24 @@ export class PortfolioModule extends TreasuryModule {
     owner: string,
     entry: PortfolioEntrySnapshot,
   ): Promise<PortfolioPnL> {
-    validateAddress(owner, "owner");
-    if (!entry || typeof entry !== 'object') {
-      throw new PortfolioCalculationError('unknown', 'entry must be a valid PortfolioEntrySnapshot');
+    this.validatePortfolioInputs(owner, {});
+
+    if (!entry || typeof entry !== "object") {
+      throw new ValidationError(
+        `entry must be a PortfolioEntrySnapshot object, got ${entry}`,
+      );
     }
-    if (!entry.positions || !Array.isArray(entry.positions)) {
-      throw new PortfolioCalculationError('unknown', 'entry.positions must be an array');
+    validateAddress(entry.owner, "entry.owner");
+
+    if (!Array.isArray(entry.positions)) {
+      throw new ValidationError(
+        `entry.positions must be an array of positions, got ${entry.positions}`,
+      );
     }
-    if (typeof entry.totalValueUSD !== 'number') {
-      throw new PortfolioCalculationError('unknown', 'entry.totalValueUSD must be a number');
+    if (typeof entry.totalValueUSD !== "number") {
+      throw new ValidationError(
+        `entry.totalValueUSD must be a number, got ${entry.totalValueUSD}`,
+      );
     }
 
     const pairAddresses = entry.positions.map((p) => p.pairAddress);

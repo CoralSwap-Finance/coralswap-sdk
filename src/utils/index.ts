@@ -70,6 +70,9 @@ export {
   validateNonNegativeAmount,
   validateSlippage,
   validateDistinctTokens,
+  validateDateRange,
+  validateLimit,
+  MAX_LIMIT,
   isValidPath,
 } from './validation';
 
