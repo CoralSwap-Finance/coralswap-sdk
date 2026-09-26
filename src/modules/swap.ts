@@ -24,6 +24,8 @@ import { simulateSwapParamsSchema, multiHopSwapRequestSchema, swapHistoryFilterS
 import { verifyRedStonePayload, estimateUsdValue, DEFAULT_PRICE_GUARD_CONFIG } from '../utils/redstone';
 import { getTransactionStatus, shouldRetrySubmission } from '../utils/idempotent-resubmission';
 import { sleep } from '../utils/retry';
+import { getEventsPage } from '@/helpers/get-events-page';
+import { MIN_START_LEDGER, decodeEventTopic } from '@/utils/event-cursor';
 
 /** Default ledger window when no fromLedger/toLedger is specified. */
 const DEFAULT_HISTORY_WINDOW = 1000;
@@ -757,47 +759,44 @@ export class SwapModule {
 
     // Resolve ledger range — default to last DEFAULT_HISTORY_WINDOW ledgers
     const currentLedger = await this.client.getCurrentLedger();
-    const fromLedger = filter.fromLedger ?? Math.max(0, currentLedger - DEFAULT_HISTORY_WINDOW);
-    const toLedger = filter.toLedger ?? currentLedger;
+    const startLedger = filter.fromLedger ?? Math.max(MIN_START_LEDGER, currentLedger - DEFAULT_HISTORY_WINDOW);
+    const endLedger = filter.toLedger ?? currentLedger;
 
-    if (fromLedger > toLedger) {
+    if (startLedger > endLedger) {
       throw new ValidationError(
-        `fromLedger (${fromLedger}) must not be greater than toLedger (${toLedger})`,
-        { fromLedger, toLedger },
+        `startLedger (${startLedger}) must not be greater than endLedger (${endLedger})`,
+        { startLedger, endLedger },
       );
     }
 
-    // Build the getEvents request.
-    // When pairAddress is given we scope the query to that contract, which is
-    // the most efficient path. Without it we query all contracts for "swap" topic.
-    const request: rpc.Server.GetEventsRequest = {
-      startLedger: fromLedger,
-      filters: [
-        {
-          type: "contract",
-          contractIds: filter.pairAddress ? [filter.pairAddress] : [],
-          topics: [[xdr.ScVal.scvSymbol("swap").toXdr("base64")]],
-        },
-      ],
+    // Use the shared getEventsPage helper for pagination and topic encoding
+    const page = await getEventsPage(this.client.server, {
+      contractIds: filter.pairAddress ? [filter.pairAddress] : [],
+      topics: ["swap"],
+      startLedger,
+      endLedger,
       limit: filter.limit ?? 200,
-    };
-
-    const response = await this.client.server.getEvents(request);
-    if (!response || !Array.isArray(response.events)) return [];
+    });
 
     const events: SwapHistoryEvent[] = [];
 
-    for (const ev of response.events) {
-      // Skip events beyond toLedger
-      if (ev.ledger > toLedger) continue;
+    for (const ev of page.events) {
+      // Skip events beyond endLedger (getEventsPage doesn't enforce endLedger client-side)
+      if (ev.ledger > endLedger) continue;
 
-      // Skip non-swap topics
-      const topicName = ev.topic?.[0] ? decodeScValString(ev.topic[0]) : "";
+      // The helper already filtered by topic, but verify for safety
+      const topicName = ev.topics[0] ? decodeEventTopic(ev.topics[0]) : "";
       if (topicName !== "swap") continue;
 
-      if (!ev.value) continue;
+      // Decode the XDR value (ev.value is base64 XDR ScVal)
+      let value: any;
+      try {
+        value = xdr.ScVal.fromXdr(ev.value, 'base64');
+      } catch {
+        continue;
+      }
 
-      const data = decodeMapEvent(ev.value);
+      const data = decodeMapEvent(value);
       if (!data) continue;
 
       const sender = readAddress(data, "sender");
@@ -827,13 +826,13 @@ export class SwapModule {
         : Math.floor(Date.now() / 1000);
 
       events.push({
-        txHash: ev.txHash ?? "",
+        txHash: ev.id,
         amountIn,
         amountOut,
         tokenIn,
         tokenOut,
         sender,
-        pairAddress: ev.contractId?.toString() ?? "",
+        pairAddress: ev.contractId,
         ledger: ev.ledger,
         timestamp,
         feeBps,
@@ -845,9 +844,6 @@ export class SwapModule {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Event Decoding Helpers
-// ---------------------------------------------------------------------------
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function decodeMapEvent(value: any): Map<string, any> | null {
@@ -899,13 +895,4 @@ function readU32(map: Map<string, any>, key: string): number | undefined {
     if (typeof val.u32 === "function") return val.u32();
   } catch { /* skip */ }
   return undefined;
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function decodeScValString(val: any): string {
-  if (!val) return "";
-  if (typeof val === "string") return val;
-  if (typeof val.sym === "function") return val.sym().toString();
-  if (typeof val.str === "function") return val.str().toString();
-  return val.toString();
 }

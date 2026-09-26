@@ -181,6 +181,16 @@ export type {
   TypedEventScanParams,
 } from "./utils";
 
+// Event helpers
+export { getEventsPage, getAllEvents } from "@/helpers/get-events-page";
+export type {
+  EventsPageOptions,
+  EventsPage,
+  RawEvent,
+  PageInfo,
+  LedgerRange,
+} from "@/helpers/get-events-page";
+
 // Schema validation
 export { validateWithSchema, OrderBookAddressSchema, TradeFilterSchema, GetOpenOrdersSchema, GetOrderSummarySchema } from "@/schemas";
 
