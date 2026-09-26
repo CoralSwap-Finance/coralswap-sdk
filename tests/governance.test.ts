@@ -490,4 +490,85 @@ describe('GovernanceModule', () => {
       await expect(governance.undelegate(mockSigner)).rejects.toThrow('No active delegation found');
     });
   });
+
+  // -------------------------------------------------------------------------
+  // Proposal Action Decoding & Lifecycle Matrix
+  // -------------------------------------------------------------------------
+
+  describe('proposal action decoding & lifecycle matrix', () => {
+    it('decodes proposal actions correctly from contract response', async () => {
+      const proposalWithActions = makeProposalNative({
+        id: 'prop-actions-1',
+        actions: [
+          {
+            contract_address: ACTION_CONTRACT,
+            function_name: 'set_fee',
+            args: [30],
+          },
+        ],
+      });
+
+      jest
+        .spyOn(client, 'simulateTransaction')
+        .mockResolvedValue(makeSimResult(proposalWithActions) as never);
+
+      const prop = await governance.getProposal('prop-actions-1');
+
+      expect(prop.actions).toHaveLength(1);
+      expect(prop.actions[0].contractAddress).toBe(ACTION_CONTRACT);
+      expect(prop.actions[0].functionName).toBe('set_fee');
+    });
+
+    describe('cancelProposal()', () => {
+      it('returns tx hash on successful cancellation', async () => {
+        jest.spyOn(client, 'submitTransaction').mockResolvedValue({
+          success: true,
+          txHash: TEST_TX_HASH,
+          data: { txHash: TEST_TX_HASH, ledger: 3000 },
+        });
+
+        const res = await governance.cancelProposal('proposal-1', mockSigner);
+        expect(res).toBe(TEST_TX_HASH);
+      });
+
+      it('throws ValidationError for empty proposalId', async () => {
+        await expect(governance.cancelProposal('', mockSigner)).rejects.toThrow(ValidationError);
+      });
+
+      it('throws TransactionError when cancellation fails', async () => {
+        jest.spyOn(client, 'submitTransaction').mockResolvedValue({
+          success: false,
+          error: { code: 'UNAUTHORIZED', message: 'Not proposal owner' },
+        });
+
+        await expect(governance.cancelProposal('proposal-1', mockSigner)).rejects.toThrow(TransactionError);
+      });
+    });
+
+    describe('executeProposal()', () => {
+      it('returns tx hash on successful execution', async () => {
+        jest.spyOn(client, 'submitTransaction').mockResolvedValue({
+          success: true,
+          txHash: TEST_TX_HASH,
+          data: { txHash: TEST_TX_HASH, ledger: 3001 },
+        });
+
+        const res = await governance.executeProposal('proposal-1', mockSigner);
+        expect(res).toBe(TEST_TX_HASH);
+      });
+
+      it('throws ValidationError for empty proposalId', async () => {
+        await expect(governance.executeProposal('', mockSigner)).rejects.toThrow(ValidationError);
+      });
+
+      it('throws TransactionError when execution fails', async () => {
+        jest.spyOn(client, 'submitTransaction').mockResolvedValue({
+          success: false,
+          error: { code: 'EXECUTION_FAILED', message: 'Action reverted' },
+        });
+
+        await expect(governance.executeProposal('proposal-1', mockSigner)).rejects.toThrow(TransactionError);
+      });
+    });
+  });
 });

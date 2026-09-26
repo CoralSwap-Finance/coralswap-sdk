@@ -716,4 +716,86 @@ describe("StakingModule", () => {
       expect(status.cooldownEnd).toBe(0);
     });
   });
+
+  // -----------------------------------------------------------------------
+  // Staking Matrix (Cooldown Edges, Vote Eligibility, Claim Amounts)
+  // -----------------------------------------------------------------------
+  describe("staking test matrix", () => {
+    describe("cooldown boundary matrix", () => {
+      it("handles cooldown edge = 0 (never staked / zero cooldown)", async () => {
+        const client = createMockClient({ simulationResult: createMockCooldownResult(0) });
+        const module = new StakingModule(client);
+        const status = await module.getCooldownStatus(MOCK_ADDRESS, MOCK_LP_TOKEN);
+        expect(status.isInCooldown).toBe(false);
+        expect(status.cooldownEnd).toBe(0);
+      });
+
+      it("handles cooldown edge = below claim (active cooldown in future)", async () => {
+        const future = Math.floor(Date.now() / 1000) + 1000;
+        const client = createMockClient({ simulationResult: createMockCooldownResult(future) });
+        const module = new StakingModule(client);
+        const status = await module.getCooldownStatus(MOCK_ADDRESS, MOCK_LP_TOKEN);
+        expect(status.isInCooldown).toBe(true);
+        expect(status.cooldownEnd).toBe(future);
+      });
+
+      it("handles cooldown edge = at claim time (cooldown ends right now)", async () => {
+        const nowSec = Math.floor(Date.now() / 1000);
+        const client = createMockClient({ simulationResult: createMockCooldownResult(nowSec) });
+        const module = new StakingModule(client);
+        const status = await module.getCooldownStatus(MOCK_ADDRESS, MOCK_LP_TOKEN);
+        expect(status.isInCooldown).toBe(false);
+        expect(status.cooldownEnd).toBe(nowSec);
+      });
+
+      it("handles cooldown edge = after claim time (cooldown expired in past)", async () => {
+        const past = Math.floor(Date.now() / 1000) - 1000;
+        const client = createMockClient({ simulationResult: createMockCooldownResult(past) });
+        const module = new StakingModule(client);
+        const status = await module.getCooldownStatus(MOCK_ADDRESS, MOCK_LP_TOKEN);
+        expect(status.isInCooldown).toBe(false);
+        expect(status.cooldownEnd).toBe(past);
+      });
+    });
+
+    describe("vote eligibility", () => {
+      it("returns false for non-staker or zero staked amount", async () => {
+        const client = createMockClient({ simulationResult: null });
+        const module = new StakingModule(client);
+        const eligibility = await module.getVoteEligibility(MOCK_ADDRESS, MOCK_LP_TOKEN);
+        expect(eligibility.isEligible).toBe(false);
+      });
+
+      it("returns true for settled stake (> 5 seconds old)", async () => {
+        const pastStakedAt = Math.floor(Date.now() / 1000) - 100;
+        const mockStake = createMockStakeResult(1000n, pastStakedAt, 0);
+        const client = createMockClient({ simulationResult: mockStake });
+        const module = new StakingModule(client);
+        const eligibility = await module.getVoteEligibility(MOCK_ADDRESS, MOCK_LP_TOKEN);
+        expect(eligibility.isEligible).toBe(true);
+        expect(eligibility.stakedAt).toBe(pastStakedAt);
+      });
+    });
+
+    describe("claim amounts matrix", () => {
+      it("claims non-zero pending rewards successfully", async () => {
+        const mockRewards = createMockRewardsResult(2500000000n, 100000000n, 1000);
+        const client = createMockClient({ simulationResult: mockRewards });
+        const module = new StakingModule(client);
+        const signer = createMockSigner();
+
+        const txHash = await module.claimRewards(MOCK_LP_TOKEN, signer);
+        expect(txHash).toBe(MOCK_TX_HASH);
+      });
+
+      it("throws StakingError when pending rewards are zero", async () => {
+        const mockRewards = createMockRewardsResult(0n, 500n, 1000);
+        const client = createMockClient({ simulationResult: mockRewards });
+        const module = new StakingModule(client);
+        const signer = createMockSigner();
+
+        await expect(module.claimRewards(MOCK_LP_TOKEN, signer)).rejects.toThrow(StakingError);
+      });
+    });
+  });
 });

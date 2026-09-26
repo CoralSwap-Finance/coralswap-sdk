@@ -178,8 +178,10 @@ export class EventCursor {
       nextCursor: null,
     };
 
+    let currentCursor: string | undefined = undefined;
+
     while (true) {
-      const request: rpc.Server.GetEventsRequest = {
+      const request: Record<string, unknown> = {
         startLedger,
         filters: [
           {
@@ -189,7 +191,11 @@ export class EventCursor {
           },
         ],
         limit,
-      } as unknown as rpc.Server.GetEventsRequest;
+      };
+
+      if (currentCursor) {
+        request.cursor = currentCursor;
+      }
 
       const res = await this.server.getEvents(request as any);
       const events = Array.isArray(res?.events) ? res.events : [];
@@ -198,11 +204,19 @@ export class EventCursor {
         break;
       }
 
-      allEvents.push(...events as rpc.Api.EventResponse[]);
+      allEvents.push(...(events as rpc.Api.EventResponse[]));
 
       const lastEvent = events[events.length - 1] as any;
-      const lastLedger = lastEvent?.ledger ??
+      const lastLedger =
+        lastEvent?.ledger ??
         (typeof res.latestLedger === 'number' ? res.latestLedger : undefined);
+
+      const resCursor =
+        typeof res?.cursor === "string" && res.cursor.length > 0
+          ? res.cursor
+          : typeof lastEvent?.pagingToken === "string"
+          ? lastEvent.pagingToken
+          : null;
 
       if (lastLedger !== undefined) {
         pageInfo = {
@@ -210,16 +224,21 @@ export class EventCursor {
           endLedger: lastLedger,
           limit,
           hasMore: events.length >= limit,
-          nextCursor: typeof res?.cursor === 'string' && res.cursor.length > 0 ? res.cursor : null,
+          nextCursor: resCursor,
         };
       }
 
       if (lastLedger === undefined) break;
 
-      startLedger = lastLedger + 1;
-      this.cursor = startLedger;
+      if (resCursor) {
+        currentCursor = resCursor;
+        this.cursor = lastLedger;
+      } else {
+        startLedger = lastLedger + 1;
+        this.cursor = startLedger;
+      }
 
-      if (toLedger !== undefined && startLedger > toLedger) break;
+      if (toLedger !== undefined && lastLedger > toLedger) break;
       if (events.length < limit) break;
     }
 

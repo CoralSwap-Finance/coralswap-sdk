@@ -290,7 +290,7 @@ export class TaxReportingModule {
     const purchases: Array<{
       date: string;
       quantity: bigint;
-      costPerUnit: string;
+      costStroops: bigint;
       txHash: string;
     }> = [];
     const disposals: CostBasisDisposal[] = [];
@@ -300,59 +300,57 @@ export class TaxReportingModule {
 
     for (const row of rows) {
       if (row.type === "swap" && row.tokenOut === token) {
-        const amount = BigInt(Math.floor(parseFloat(row.amountOut) * 10_000_000));
-        const costPerUnit = (
-          (BigInt(Math.floor(parseFloat(row.amountIn) * 10_000_000)) +
-            BigInt(Math.floor(parseFloat(row.fee) * 10_000_000))) /
-          amount
-        ).toString();
+        const amount = parseAmountToStroops(row.amountOut);
+        const costStroops = parseAmountToStroops(row.amountIn) + parseAmountToStroops(row.fee);
         purchases.push({
           date: row.date,
           quantity: amount,
-          costPerUnit,
+          costStroops,
           txHash: row.txHash,
         });
         totalQuantity += amount;
-        totalCost +=
-          BigInt(Math.floor(parseFloat(row.amountIn) * 10_000_000)) +
-          BigInt(Math.floor(parseFloat(row.fee) * 10_000_000));
+        totalCost += costStroops;
       } else if (row.type === "swap" && row.tokenIn === token) {
-        const disposalQty = BigInt(
-          Math.floor(parseFloat(row.amountIn) * 10_000_000)
-        );
+        const disposalQty = parseAmountToStroops(row.amountIn);
         const orderedPurchases = method === "FIFO" ? purchases : [...purchases].reverse();
         let remainingDisposal = disposalQty;
         let disposalCostBasis = 0n;
 
         for (let i = 0; i < orderedPurchases.length && remainingDisposal > 0n; i++) {
           const purchase = orderedPurchases[i];
-          const quantity = remainingDisposal > purchase.quantity ? purchase.quantity : remainingDisposal;
-          disposalCostBasis += quantity * BigInt(Math.floor(parseFloat(purchase.costPerUnit)));
-          remainingDisposal -= quantity;
+          if (purchase.quantity <= 0n) continue;
 
-          if (method === "FIFO") {
-            purchases.shift();
-          } else {
-            purchases.pop();
+          const qtyToTake = remainingDisposal > purchase.quantity ? purchase.quantity : remainingDisposal;
+          const lotCostBasis = (qtyToTake * purchase.costStroops) / purchase.quantity;
+
+          disposalCostBasis += lotCostBasis;
+          purchase.costStroops -= lotCostBasis;
+          purchase.quantity -= qtyToTake;
+          remainingDisposal -= qtyToTake;
+
+          if (purchase.quantity === 0n) {
+            if (method === "FIFO") {
+              purchases.shift();
+              i--;
+            } else {
+              purchases.pop();
+              i--;
+            }
           }
         }
 
         const costBasisStr = fromSorobanAmount(disposalCostBasis, TOKEN_DECIMALS);
-        const salePriceStr = fromSorobanAmount(
-          BigInt(Math.floor(parseFloat(row.amountOut) * 10_000_000)),
-          TOKEN_DECIMALS
-        );
-        const gain =
-          BigInt(Math.floor(parseFloat(salePriceStr) * 10_000_000)) -
-          disposalCostBasis;
+        const salePriceStroops = parseAmountToStroops(row.amountOut);
+        const salePriceStr = fromSorobanAmount(salePriceStroops, TOKEN_DECIMALS);
+        const gainStroops = salePriceStroops - disposalCostBasis;
 
         disposals.push({
           date: row.date,
           quantity: fromSorobanAmount(disposalQty, TOKEN_DECIMALS),
           costBasis: costBasisStr,
           salePrice: salePriceStr,
-          gain: gain > 0n ? fromSorobanAmount(gain, TOKEN_DECIMALS) : "0.0000000",
-          loss: gain < 0n ? fromSorobanAmount(-gain, TOKEN_DECIMALS) : "0.0000000",
+          gain: gainStroops > 0n ? fromSorobanAmount(gainStroops, TOKEN_DECIMALS) : "0.0000000",
+          loss: gainStroops < 0n ? fromSorobanAmount(-gainStroops, TOKEN_DECIMALS) : "0.0000000",
           txHash: row.txHash,
         });
 
@@ -400,7 +398,7 @@ export class TaxReportingModule {
     });
 
     const rows = JSON.parse(history) as TaxReportRow[];
-    const holdingPeriods = new Map<string, { date: string; quantity: bigint }[]>();
+    const holdingPeriods = new Map<string, { date: string; quantity: bigint; costBasis: bigint }[]>();
 
     let shortTermGains = 0n;
     let shortTermLosses = 0n;
@@ -412,20 +410,24 @@ export class TaxReportingModule {
         if (!holdingPeriods.has(row.tokenOut)) {
           holdingPeriods.set(row.tokenOut, []);
         }
+        const boughtQty = parseAmountToStroops(row.amountOut);
+        const boughtCost = parseAmountToStroops(row.amountIn) + parseAmountToStroops(row.fee);
         holdingPeriods.get(row.tokenOut)!.push({
           date: row.date,
-          quantity: BigInt(Math.floor(parseFloat(row.amountOut) * 10_000_000)),
+          quantity: boughtQty,
+          costBasis: boughtCost,
         });
 
         if (holdingPeriods.has(row.tokenIn)) {
           const holdings = holdingPeriods.get(row.tokenIn)!;
-          const disposalQty = BigInt(
-            Math.floor(parseFloat(row.amountIn) * 10_000_000)
-          );
+          const disposalQty = parseAmountToStroops(row.amountIn);
+          const saleProceeds = parseAmountToStroops(row.amountOut);
 
           for (let i = 0; i < holdings.length; i++) {
             if (disposalQty <= 0n) break;
             const holding = holdings[i];
+            if (holding.quantity <= 0n) continue;
+
             const qty = disposalQty > holding.quantity ? holding.quantity : disposalQty;
             const holdingDate = new Date(holding.date);
             const disposalDate = new Date(row.date);
@@ -433,9 +435,9 @@ export class TaxReportingModule {
               (disposalDate.getTime() - holdingDate.getTime()) / (1000 * 60 * 60 * 24);
             const isLongTerm = holdDays > 365;
 
-            const costBasis =
-              qty * BigInt(Math.floor(parseFloat(row.amountOut) / parseFloat(row.amountIn) * 10_000_000));
-            const gain = costBasis - costBasis;
+            const costBasisForQty = (qty * holding.costBasis) / holding.quantity;
+            const proceedsForQty = (qty * saleProceeds) / disposalQty;
+            const gain = proceedsForQty - costBasisForQty;
 
             if (isLongTerm) {
               if (gain > 0n) longTermGains += gain;
@@ -445,6 +447,7 @@ export class TaxReportingModule {
               else shortTermLosses += -gain;
             }
 
+            holding.costBasis -= costBasisForQty;
             holding.quantity -= qty;
             if (holding.quantity <= 0n) {
               holdings.splice(i, 1);
@@ -573,6 +576,16 @@ function readU32(map: Map<string, unknown>, key: string): number | undefined {
     if (typeof valObj.u32 === "function") return (valObj.u32 as () => number)();
   } catch { /* skip */ }
   return undefined;
+}
+
+function parseAmountToStroops(amountStr: string, decimals = 7): bigint {
+  if (!amountStr || amountStr === "0" || amountStr === "0.0000000") return 0n;
+  const parts = amountStr.split(".");
+  const whole = BigInt(parts[0] || "0");
+  const fracStr = (parts[1] || "").padEnd(decimals, "0").slice(0, decimals);
+  const frac = BigInt(fracStr);
+  const factor = 10n ** BigInt(decimals);
+  return whole >= 0n ? whole * factor + frac : whole * factor - frac;
 }
 
 function formatDate(date: Date, timezone: string): string {

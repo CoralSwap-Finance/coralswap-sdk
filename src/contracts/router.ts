@@ -9,6 +9,7 @@ import {
 import { withRetry, RetryOptions } from "@/utils/retry";
 import { decodeI128 } from "@/utils/scval";
 import { Logger } from "@/types/common";
+import { deprecated } from "@/utils/deprecation-warnings";
 
 /**
  * Type-safe client for the CoralSwap Router contract.
@@ -39,6 +40,11 @@ export class RouterClient {
     retryOptions: RetryOptions,
     logger?: Logger,
   ) {
+    deprecated(
+      "RouterClient",
+      "Router legacy contract binding is deprecated; use RouterV2Client for upgraded router features.",
+      "2.0.0",
+    );
     this.contract = new Contract(contractAddress);
     this.server = server;
     this.networkPassphrase = networkPassphrase;

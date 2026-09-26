@@ -163,6 +163,8 @@ export {
   ConnectionPool,
   ledgerToApproxTime,
   LEDGER_CLOSE_INTERVAL_SECONDS,
+  suppressDeprecationWarnings,
+  deprecated,
 } from './utils';
 
 export type {
@@ -182,7 +184,7 @@ export type {
 } from "./utils";
 
 // Schema validation
-export { validateWithSchema, OrderBookAddressSchema, TradeFilterSchema, GetOpenOrdersSchema, GetOrderSummarySchema } from "@/schemas";
+export { validateWithSchema, OrderBookAddressSchema, TradeFilterSchema } from "@/schemas";
 
 // Errors
 export {
