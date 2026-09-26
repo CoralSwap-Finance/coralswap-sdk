@@ -169,6 +169,8 @@ export {
   BPS_DENOMINATOR,
   CONVERSION_SCALE,
   SCALE,
+  suppressDeprecationWarnings,
+  deprecated,
 } from './utils';
 
 export type {
@@ -188,7 +190,7 @@ export type {
 } from "./utils";
 
 // Schema validation
-export { validateWithSchema, OrderBookAddressSchema, TradeFilterSchema, GetOpenOrdersSchema, GetOrderSummarySchema } from "@/schemas";
+export { validateWithSchema, OrderBookAddressSchema, TradeFilterSchema } from "@/schemas";
 
 // Errors
 export {
