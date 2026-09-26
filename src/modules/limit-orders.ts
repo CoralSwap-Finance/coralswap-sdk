@@ -92,6 +92,7 @@ import {
 } from '@/utils/idempotent-resubmission';
 import { OrderNotFoundError, InvalidOperationError, ValidationError } from '@/errors';
 import { validateAddress, validatePositiveAmount, validateDistinctTokens } from '@/utils/validation';
+import { decodeI128 } from '@/utils/numeric';
 
 /**
  * Extract a string from an `xdr.ScVal`.
@@ -161,10 +162,11 @@ export function scValToBigInt(val: xdr.ScVal | undefined): bigint {
   if (!val) throw new CoralSwapSDKError("PARSING_ERROR", "Missing field");
   const tag = val.type;
   if (tag === 'scvI128') {
-    const i128 = val.i128 as unknown;
-    if (typeof i128 === 'bigint') return i128;
-    const parts = i128 as { hi: bigint; lo: bigint };
-    return (parts.hi << 64n) + parts.lo;
+    try {
+      return decodeI128(val);
+    } catch (err) {
+      throw new CoralSwapSDKError("PARSING_ERROR", `Invalid i128: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
   if (tag === 'scvU64') return val.u64;
   if (tag === 'scvI64') return val.i64;
