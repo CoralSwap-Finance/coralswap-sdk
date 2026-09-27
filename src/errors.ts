@@ -69,6 +69,7 @@ export const ERROR_TAXONOMY: Array<{ class: string; code: string; retryPolicy: R
   { class: "StakingError", code: "STAKING_ERROR", retryPolicy: "fail-fast" },
   { class: "CooldownError", code: "COOLDOWN_ERROR", retryPolicy: "fail-fast" },
   { class: "MissingPriceFeedError", code: "MISSING_PRICE_FEED", retryPolicy: "fail-fast" },
+  { class: "NotConfiguredError", code: "NOT_CONFIGURED", retryPolicy: "fail-fast" },
   { class: "WebhookError", code: "WEBHOOK_ERROR", retryPolicy: "fail-fast" },
   { class: "AddressNotFoundError", code: "ADDRESS_NOT_FOUND", retryPolicy: "fail-fast" },
   { class: "PortfolioCalculationError", code: "PORTFOLIO_CALCULATION_ERROR", retryPolicy: "fail-fast" },
@@ -418,6 +419,14 @@ export class MissingPriceFeedError extends CoralSwapSDKError {
     this.name = "MissingPriceFeedError";
     this.tokenAddress = tokenAddress;
     this.fallbackUsed = fallbackUsed;
+  }
+}
+
+/** A required network deployment or SDK provider has not been configured. */
+export class NotConfiguredError extends CoralSwapSDKError {
+  constructor(resource: string, details?: Record<string, unknown>) {
+    super("NOT_CONFIGURED", `${resource} is not configured`, { resource, ...details });
+    this.name = "NotConfiguredError";
   }
 }
 

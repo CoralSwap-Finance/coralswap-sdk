@@ -7,7 +7,7 @@ import {
 } from '@stellar/stellar-sdk';
 import { CoralSwapConfig, NetworkConfig, NETWORK_CONFIGS, DEFAULTS } from '@/config';
 import { Network, Result, Logger, Signer, SimulateTransactionOptions, SimulateTransactionResult } from '@/types/common';
-import { SignerError } from '@/errors';
+import { NotConfiguredError, SignerError } from '@/errors';
 import { FactoryClient } from '@/contracts/factory';
 import { PairClient } from '@/contracts/pair';
 import { RouterClient } from '@/contracts/router';
@@ -269,7 +269,7 @@ export class CoralSwapClient {
   get factory(): FactoryClient {
     if (!this._factory) {
       if (!this.networkConfig.factoryAddress) {
-        throw new Error("Factory address not configured for this network");
+        throw new NotConfiguredError("Factory contract", { network: this.network });
       }
       this._factory = new FactoryClient(
           this.networkConfig.factoryAddress,
@@ -288,7 +288,7 @@ export class CoralSwapClient {
   get router(): RouterClient {
     if (!this._router) {
       if (!this.networkConfig.routerAddress) {
-        throw new Error("Router address not configured for this network");
+        throw new NotConfiguredError("Router contract", { network: this.network });
       }
       this._router = new RouterClient(
           this.networkConfig.routerAddress,

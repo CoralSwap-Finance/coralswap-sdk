@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- `NotConfiguredError` (`NOT_CONFIGURED`, fail-fast) for a required network deployment or SDK provider that has not been configured (#638, #642)
 - `decodeI128Strict` (shared i128 ScVal decoder used by events, staking and limit orders), the `SCALE` constants bundle (`TOKEN_DECIMALS`, `PRICE_SCALE`, `BPS_DENOMINATOR`, `CONVERSION_SCALE`), and a `taskTimeoutMs` option on `batchRequest` that rejects tasks exceeding the per-task timeout
 - Webhook endpoint verification for the SDK webhook module:
   - `verifyWebhook(webhookId)` posts a signed challenge payload and records the result — a `2xx` marks the endpoint `verified: true`, a failed handshake (non-`2xx`, network error or timeout) marks it `verified: false`
@@ -15,6 +16,9 @@
 - `MonitoringModule.getSystemMetrics(period)`: TVL, swap volume, fee revenue, and unique-user change vs. the previous equal-length window, plus top growing/declining pools. Historical figures are read through the shared `TypedEventCursor` (#478)
 
 ### Changed
+- `Network.STAGING` now targets Stellar Futurenet (`rpc-futurenet.stellar.org`, futurenet passphrase) with empty factory and router addresses instead of aliasing Testnet; `client.factory` / `client.router` throw `NotConfiguredError` on STAGING and MAINNET until deployment addresses are configured (#638)
+- `getVotingPower` / `getVotingPowerAtLedger` throw `NotConfiguredError` when no voting-power provider is set, instead of returning a silent zero-power account (#642)
+- `verifyRedStonePayload` fails closed: a missing or non-positive feed price throws `MissingPriceFeedError` and non-positive amounts throw `ValidationError`, where the guard used to be skipped (#656)
 - Bundle-size budget re-baselined from 200 KiB to 225 KiB: the original cap was measured before the check merged, and `main` was already 213.9 KiB when it landed, so the CI job failed on every commit. The current public surface measures 215.1 KiB (220,313 bytes) at `0d73bc2`; the cap keeps the intended ~4.5% headroom (#810)
 - Liquidity module validates add/remove-liquidity and add-liquidity-quote inputs with Zod schemas via `validateWithSchema`, replacing the hand-written guards while preserving every existing rule and error message
 

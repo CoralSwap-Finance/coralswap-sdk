@@ -1,4 +1,4 @@
-import { PriceDeviationError, StaleOracleError } from "../errors";
+import { MissingPriceFeedError, PriceDeviationError, StaleOracleError, ValidationError } from "../errors";
 import { PriceGuardConfig, RedStonePayload } from "../types/swap";
 
 /** Default price guard configuration. */
@@ -34,14 +34,21 @@ export function verifyRedStonePayload(
     throw new StaleOracleError(tokenInSymbol, payload.timestampMs, config.maxPayloadAgeMs);
   }
 
-
+  if (amountIn <= 0n || amountOut <= 0n) {
+    throw new ValidationError('Price guard amounts must be positive', {
+      amountIn: amountIn.toString(),
+      amountOut: amountOut.toString(),
+    });
+  }
 
   const priceIn = payload.prices[tokenInSymbol.toUpperCase()];
   const priceOut = payload.prices[tokenOutSymbol.toUpperCase()];
 
   if (priceIn === undefined || priceOut === undefined) {
-    // Cannot verify without both prices — skip guard (conservative: allow)
-    return;
+    throw new MissingPriceFeedError(priceIn === undefined ? tokenInSymbol : tokenOutSymbol);
+  }
+  if (priceIn <= 0n || priceOut <= 0n) {
+    throw new MissingPriceFeedError(priceIn <= 0n ? tokenInSymbol : tokenOutSymbol);
   }
 
   // Oracle price ratio: how many tokenOut units per tokenIn unit
@@ -62,8 +69,6 @@ export function verifyRedStonePayload(
 
   const executionNum = amountOut * priceOut * SCALE;
   const executionDen = amountIn * priceIn;
-
-  if (executionDen === 0n) return; // degenerate — skip
 
   const executionScaled = executionNum / executionDen;
 

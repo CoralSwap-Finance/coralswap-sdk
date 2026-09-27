@@ -1,6 +1,6 @@
 import { OracleModule, TWAPObservation, MIN_TWAP_WINDOW_SECONDS } from '../src/modules/oracle';
 import { PRECISION } from '../src/config';
-import { InsufficientLiquidityError } from '../src/errors';
+import { InsufficientLiquidityError, ValidationError } from '../src/errors';
 
 function mockClient(pairOverrides: Record<string, (...args: any[]) => any> = {}) {
   return {
@@ -59,6 +59,33 @@ describe('OracleModule', () => {
       expect(() => oracle.computeTWAP(obs, obs)).toThrow(
         'End observation must be after start observation',
       );
+    });
+
+    it('throws a typed validation error for equal timestamps', () => {
+      const observation: TWAPObservation = {
+        price0CumulativeLast: 0n,
+        price1CumulativeLast: 0n,
+        blockTimestampLast: 5000,
+      };
+      expect(() => oracle.computeTWAP(observation, observation)).toThrow(ValidationError);
+    });
+
+    it('returns zero prices when cumulative prices have no increase', () => {
+      const start: TWAPObservation = {
+        price0CumulativeLast: 0n,
+        price1CumulativeLast: 0n,
+        blockTimestampLast: 1000,
+      };
+      const end: TWAPObservation = {
+        price0CumulativeLast: 0n,
+        price1CumulativeLast: 0n,
+        blockTimestampLast: 1000 + MIN_TWAP_WINDOW_SECONDS,
+      };
+      expect(oracle.computeTWAP(start, end)).toEqual({
+        price0TWAP: 0n,
+        price1TWAP: 0n,
+        timeWindow: MIN_TWAP_WINDOW_SECONDS,
+      });
     });
 
     it('throws when end is before start', () => {
@@ -407,6 +434,23 @@ describe('OracleModule', () => {
   });
 
   describe('getPriceDeviation', () => {
+    it('throws InsufficientLiquidityError when reserves are zero even with a valid TWAP window', async () => {
+      const pairAddress = 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC';
+      let callCount = 0;
+      const responses = [
+        { price0CumulativeLast: 100000000n, price1CumulativeLast: 200000000n, blockTimestampLast: 1000 },
+        { price0CumulativeLast: 400000000n, price1CumulativeLast: 800000000n, blockTimestampLast: 1000 + MIN_TWAP_WINDOW_SECONDS },
+      ];
+      const client = mockClient({
+        getCumulativePrices: jest.fn().mockImplementation(() => Promise.resolve(responses[Math.min(callCount++, 1)])),
+        getReserves: jest.fn().mockResolvedValue({ reserve0: 0n, reserve1: 10000000000n }),
+      });
+      const oracle = new OracleModule(client);
+      await oracle.observe(pairAddress);
+
+      await expect(oracle.getPriceDeviation(pairAddress)).rejects.toThrow(InsufficientLiquidityError);
+    });
+
     it('returns null when TWAP is not yet available', async () => {
       const pairAddress = 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC';
 
