@@ -16,6 +16,7 @@
 - CI check requiring a CHANGELOG entry under `[Unreleased]` for PRs that change `src/`
 - Input validation guards on `PortfolioModule` methods: `owner` and every `pairAddresses` entry must be a valid Stellar address (`G…` or `C…`), `fromDate`/`toDate` must be real dates that are not in the future and must satisfy `fromDate < toDate`, and `limit` must be a positive integer no greater than 1000 — every failure throws a typed `ValidationError` whose message includes the invalid value
 - `MonitoringModule.getSystemMetrics(period)`: TVL, swap volume, fee revenue, and unique-user change vs. the previous equal-length window, plus top growing/declining pools. Historical figures are read through the shared `TypedEventCursor` (#478)
+- Monitoring aggregation suite driven by fixture reserve (`sync`) and transfer (`swap`) event streams shaped exactly like Soroban RPC output (real XDR `ScVal` topics and values, RPC-style filter semantics). It pins exact TVL, volume, fee and user figures for two diverging streams plus an empty control, so aggregation that stops reading the data — or that keeps a hardcoded constant — fails the test
 
 ### Changed
 - Governance module validates `createProposal` and `castVote` inputs with zod schemas (`CreateProposalInputSchema`, `CastVoteInputSchema`), replacing the hand-written guards while keeping `ValidationError` as the thrown type (#488)
@@ -26,6 +27,7 @@
 - `verifyRedStonePayload` fails closed: a missing or non-positive feed price throws `MissingPriceFeedError` and non-positive amounts throw `ValidationError`, where the guard used to be skipped (#656)
 - Bundle-size budget re-baselined from 200 KiB to 225 KiB: the original cap was measured before the check merged, and `main` was already 213.9 KiB when it landed, so the CI job failed on every commit. The current public surface measures 215.1 KiB (220,313 bytes) at `0d73bc2`; the cap keeps the intended ~4.5% headroom (#810)
 - Liquidity module validates add/remove-liquidity and add-liquidity-quote inputs with Zod schemas via `validateWithSchema`, replacing the hand-written guards while preserving every existing rule and error message
+- Monitoring aggregation derives its figures instead of reporting placeholder zeros: `getPoolHealth()` / `getAllPoolHealth()` and `getProtocolSummary()` read TVL from live reserves (spot-priced through the factory pair map) and 24h volume/fees from the trailing-24h `swap` event stream, and the dashboard's `volume24hUSD` / `fees24hUSD` go through the same derivation. `PoolHealth` documents the derivation, and `getAllPoolHealth()` builds the price map once for all pools
 
 ### Fixed
 - Tax reporting computes cost basis, disposals and gains in stroops with BigInt arithmetic instead of `parseFloat` rounding; partial lot consumption keeps the remaining lot's cost, and holding-period gains use real proceeds and cost instead of a zero placeholder (#659)
@@ -35,6 +37,7 @@
 - `RateLimiter.destroy()` no longer "gifts" tokens to queued callers: destroying the limiter now rejects every queued `acquire()` with the new `RateLimiterDestroyedError` instead of resolving them, so a teardown path can no longer materialize an immediate unthrottled burst (#647). The error message is deliberately non-retryable-sounding so `isRetryable()` fails fast on a dead limiter
 - Added burst/token-accuracy tests for `RateLimiter` refill boundaries: sub-interval credit accrual, floor rounding at the refill boundary, and refill capping at `maxBurst` without distorting the refill clock (#647)
 - Restored source, config, and test files corrupted when #784, #785, #786, #789, #790, and #792 were merged (overwritten code, invalid `package.json` / `package-lock.json`), which left `main` unable to install, compile, or pass CI
+- `SwapModule.getSwapHistory()` decoded event payloads only in the accessor-function shape test doubles use (`value.map()`, `val.sym()`); live Soroban RPC returns parsed `xdr.ScVal`s whose arms are plain properties, so every real event decoded to nothing and the method returned `[]` — silently zeroing monitoring's 24h volume/fee figures and the leaderboard aggregation built on it. Event decoding now accepts both the live `ScVal` shape and the accessor-function shape, so the same fixtures drive either path
 
 ### Removed
 - Unused `GetOpenOrdersSchema` and `GetOrderSummarySchema` exports from the package entry (#664)

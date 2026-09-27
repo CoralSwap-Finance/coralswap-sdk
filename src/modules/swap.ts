@@ -16,7 +16,8 @@ import {
 import { PRECISION, DEFAULTS } from '../config';
 import { PairNotFoundError, ValidationError, InsufficientLiquidityError, TransactionError } from '../errors';
 import { PairClient } from '@/contracts/pair';
-import { rpc, xdr } from '@stellar/stellar-sdk';
+import { Address, rpc, xdr } from '@stellar/stellar-sdk';
+import { decodeI128 } from '@/utils/numeric';
 import { GasEstimate } from '../types/gas';
 import { estimateGas } from '../utils/gas';
 import { resolveTokenIdentifier } from '../utils/addresses';
@@ -849,20 +850,52 @@ export class SwapModule {
 // Event Decoding Helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * Read an `xdr.ScVal` arm value.
+ *
+ * Live RPC hands back parsed `xdr.ScVal`s whose arms are plain properties
+ * (`val.sym`, `val.address`, `val.i128`, …), while fixture responses built by
+ * tests expose the same arms as accessor functions (`val.sym()`). Both shapes
+ * decode identically here, so `getSwapHistory()` behaves the same against real
+ * event streams and against test doubles.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function armValue(val: any, name: string): any {
+  const member = val?.[name];
+  if (typeof member === "function") {
+    try {
+      return member.call(val);
+    } catch {
+      return undefined;
+    }
+  }
+  return member;
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function decodeMapEvent(value: any): Map<string, any> | null {
-  const entries: unknown[] =
-    typeof value?.map === "function" ? value.map() : value?._value;
+  const mapArm = value?.map;
+  const entries: unknown[] = Array.isArray(mapArm)
+    ? mapArm // live RPC: ScVal arm holding ScMapEntry[]
+    : typeof mapArm === "function"
+      ? mapArm.call(value) // fixtures: accessor returning the entries
+      : value?._value;
   if (!Array.isArray(entries)) return null;
 
   const map = new Map<string, unknown>();
   for (const entry of entries as Array<{ key: unknown; val: unknown }>) {
-    const k = entry.key as Record<string, () => { toString(): string }>;
-    let key: string | undefined;
     try {
-      key = k.sym?.().toString() ?? k.str?.().toString();
-    } catch { /* skip */ }
-    if (key) map.set(key, entry.val);
+      const k = entry.key;
+      const sym = armValue(k, "sym");
+      const str = armValue(k, "str");
+      const key =
+        sym !== undefined && sym !== null
+          ? sym.toString()
+          : str !== undefined && str !== null
+            ? str.toString()
+            : undefined;
+      if (key) map.set(key, entry.val);
+    } catch { /* skip malformed entry */ }
   }
   return map as Map<string, unknown>;
 }
@@ -872,7 +905,9 @@ function readAddress(map: Map<string, any>, key: string): string | undefined {
   const val = map.get(key);
   if (!val) return undefined;
   try {
-    if (typeof val.address === "function") return val.address().toString();
+    if (val.type === "scvAddress") return Address.fromScVal(val).toString();
+    const address = armValue(val, "address");
+    if (address !== undefined && address !== null) return address.toString();
     if (typeof val._value?.toString === "function") return val._value.toString();
   } catch { /* skip */ }
   return undefined;
@@ -883,9 +918,14 @@ function readI128(map: Map<string, any>, key: string): bigint | undefined {
   const val = map.get(key);
   if (!val) return undefined;
   try {
-    if (typeof val.i128 === "function") {
-      const parts = val.i128();
-      return (BigInt(parts.hi().toString()) << 64n) + BigInt(parts.lo().toString());
+    if (val.type === "scvI128") return decodeI128(val);
+    const parts = armValue(val, "i128");
+    if (parts) {
+      const hi = armValue(parts, "hi");
+      const lo = armValue(parts, "lo");
+      if (hi !== undefined && lo !== undefined) {
+        return (BigInt(hi.toString()) << 64n) + BigInt(lo.toString());
+      }
     }
   } catch { /* skip */ }
   return undefined;
@@ -896,7 +936,12 @@ function readU32(map: Map<string, any>, key: string): number | undefined {
   const val = map.get(key);
   if (!val) return undefined;
   try {
-    if (typeof val.u32 === "function") return val.u32();
+    const raw = armValue(val, "u32");
+    if (typeof raw === "number") return raw;
+    if (raw !== undefined && raw !== null) {
+      const parsed = Number(raw.toString());
+      if (Number.isFinite(parsed)) return parsed;
+    }
   } catch { /* skip */ }
   return undefined;
 }
@@ -905,7 +950,11 @@ function readU32(map: Map<string, any>, key: string): number | undefined {
 function decodeScValString(val: any): string {
   if (!val) return "";
   if (typeof val === "string") return val;
-  if (typeof val.sym === "function") return val.sym().toString();
-  if (typeof val.str === "function") return val.str().toString();
+  try {
+    const sym = armValue(val, "sym");
+    if (sym !== undefined && sym !== null) return sym.toString();
+    const str = armValue(val, "str");
+    if (str !== undefined && str !== null) return str.toString();
+  } catch { /* fall through */ }
   return val.toString();
 }
