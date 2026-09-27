@@ -69,6 +69,7 @@ export const ERROR_TAXONOMY: Array<{ class: string; code: string; retryPolicy: R
   { class: "StakingError", code: "STAKING_ERROR", retryPolicy: "fail-fast" },
   { class: "CooldownError", code: "COOLDOWN_ERROR", retryPolicy: "fail-fast" },
   { class: "MissingPriceFeedError", code: "MISSING_PRICE_FEED", retryPolicy: "fail-fast" },
+  { class: "DecodeError", code: "DECODE_ERROR", retryPolicy: "fail-fast" },
   { class: "NotConfiguredError", code: "NOT_CONFIGURED", retryPolicy: "fail-fast" },
   { class: "WebhookError", code: "WEBHOOK_ERROR", retryPolicy: "fail-fast" },
   { class: "AddressNotFoundError", code: "ADDRESS_NOT_FOUND", retryPolicy: "fail-fast" },
