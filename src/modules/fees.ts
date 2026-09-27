@@ -5,6 +5,8 @@ import { FeeState } from "@/types/pool";
 import { FeeEstimates } from "@/types/fee-estimates";
 import { estimateGas } from "@/utils/gas";
 import { validateAddress, validatePositiveAmount } from "@/utils/validation";
+import { getEventsPage } from "@/helpers/get-events-page";
+import { MIN_START_LEDGER, decodeEventTopic } from "@/utils/event-cursor";
 import { ledgerToApproxTime, LedgerHead } from "@/utils/ledger";
 
 /**
@@ -190,6 +192,15 @@ export class FeeModule {
     validateAddress(pairAddress, "pairAddress");
 
     const currentLedger = await this.client.getCurrentLedger();
+    const startLedger = options.fromLedger ?? Math.max(MIN_START_LEDGER, currentLedger - 518400);
+    const endLedger = options.toLedger ?? currentLedger;
+
+    // Use the shared getEventsPage helper for pagination and proper topic encoding
+    const page = await getEventsPage(this.client.server, {
+      contractIds: [pairAddress],
+      topics: ["swap"],
+      startLedger,
+      endLedger,
     const fromLedger = options.fromLedger ?? Math.max(0, currentLedger - 518400);
     const toLedger = options.toLedger ?? currentLedger;
     // Reference head for approximating an event's wall-clock time when the RPC
@@ -209,9 +220,7 @@ export class FeeModule {
         },
       ],
       limit: options.limit ?? 200,
-    };
-    const response = await this.client.server.getEvents(request);
-    const rawEvents = response?.events ?? [];
+    });
 
     let totalFeeXLM = 0;
     const history: Array<{
@@ -221,9 +230,16 @@ export class FeeModule {
       feeXLM: number;
     }> = [];
 
-    for (const event of rawEvents) {
-      if (event.ledger > toLedger) continue;
+    for (const event of page.events) {
+      if (event.ledger > endLedger) continue;
+
       try {
+        // Decode the XDR value (event.value is base64 XDR ScVal)
+        let value: any;
+        try {
+          value = xdr.ScVal.fromXdr(event.value, 'base64');
+        } catch {
+          continue;
         const value = event.value as unknown as Record<string, unknown>;
         if (!value) continue;
 
@@ -257,12 +273,22 @@ export class FeeModule {
           }
         }
 
-        if (feeBps === 0) continue;
-        const feeAmount = amountIn * feeBps / 10000;
+        // Parse fee from the swap event value
+        const data = decodeMapEvent(value);
+        if (!data) continue;
+
+        // Extract fee_bps and amount_in from the map
+        const feeBps = readU32(data, "fee_bps");
+        const amountIn = readI128(data, "amount_in");
+
+        if (feeBps === undefined || amountIn === undefined) continue;
+
+        const feeAmount = Number(amountIn) * feeBps / 10000;
         const feeXLM = feeAmount / 1e7;
         totalFeeXLM += feeXLM;
         history.push({
           ledger: event.ledger,
+          timestamp: Math.floor(new Date(event.ledgerClosedAt).getTime() / 1000),
           timestamp:
             Number(event.ledgerClosedAt) || ledgerToApproxTime(event.ledger, head),
           feeBps,
@@ -340,6 +366,10 @@ export class FeeModule {
       (Number(lpBalance) / Number(totalSupply));
 
     const currentLedger = await this.client.getCurrentLedger();
+    const startLedger = options.fromLedger ?? Math.max(MIN_START_LEDGER, currentLedger - 518400);
+    const endLedger = options.toLedger ?? currentLedger;
+    const ledgerSpan = endLedger - startLedger;
+    const daysInPeriod = (ledgerSpan * 5) / 86400; // 5s per ledger
     const fromLedger = options.fromLedger ?? Math.max(0, currentLedger - 518400);
     const toLedger = options.toLedger ?? currentLedger;
     // Approximate the queried window in seconds via the shared ledger-time
@@ -452,4 +482,49 @@ export class FeeModule {
   private extractPairAddress(_operations: xdr.Operation[]): string | null {
     return null;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Event Decoding Helpers
+// ---------------------------------------------------------------------------
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function decodeMapEvent(value: any): Map<string, any> | null {
+  const entries: unknown[] =
+    typeof value?.map === "function" ? value.map() : value?._value;
+  if (!Array.isArray(entries)) return null;
+
+  const map = new Map<string, unknown>();
+  for (const entry of entries as Array<{ key: unknown; val: unknown }>) {
+    const k = entry.key as Record<string, () => { toString(): string }>;
+    let key: string | undefined;
+    try {
+      key = k.sym?.().toString() ?? k.str?.().toString();
+    } catch { /* skip */ }
+    if (key) map.set(key, entry.val);
+  }
+  return map as Map<string, unknown>;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function readI128(map: Map<string, any>, key: string): bigint | undefined {
+  const val = map.get(key);
+  if (!val) return undefined;
+  try {
+    if (typeof val.i128 === "function") {
+      const parts = val.i128();
+      return (BigInt(parts.hi().toString()) << 64n) + BigInt(parts.lo().toString());
+    }
+  } catch { /* skip */ }
+  return undefined;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function readU32(map: Map<string, any>, key: string): number | undefined {
+  const val = map.get(key);
+  if (!val) return undefined;
+  try {
+    if (typeof val.u32 === "function") return val.u32();
+  } catch { /* skip */ }
+  return undefined;
 }

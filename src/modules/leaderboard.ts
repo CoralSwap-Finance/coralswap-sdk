@@ -1,7 +1,9 @@
 import { CoralSwapClient } from "@/client";
 import { validateAddress } from "@/utils/validation";
 import { ValidationError } from "@/errors";
-import { EventCursor, decodeEventTopic, MIN_START_LEDGER } from "@/utils/event-cursor";
+import { decodeEventTopic, MIN_START_LEDGER } from "@/utils/event-cursor";
+import { getEventsPage } from "@/helpers/get-events-page";
+import { xdr } from "@stellar/stellar-sdk";
 import { TreasuryModule, TreasuryModuleOptions } from "./treasury";
 import { SwapModule } from "./swap";
 
@@ -128,17 +130,30 @@ export class LeaderboardModule extends TreasuryModule {
 
     const topic = type === "trader" ? "swap" : "add_liquidity";
 
-    // The shared cursor encodes the topic as a base64 XDR ScVal symbol; a raw
-    // string filter is silently ignored by a real RPC node.
-    const cursor = new EventCursor(this.leaderboardClient.server);
-    const events = await cursor.scan({
-      contractIds: options.pairAddress ? [options.pairAddress] : [],
-      topics: [topic],
-      fromLedger: startLedger,
-      toLedger: endLedger,
-      limit: MAX_LEADERBOARD_EVENTS,
-    });
-    if (events.length === 0) return [];
+    // Use the shared getEventsPage helper for pagination and proper topic encoding
+    let allEvents: typeof page.events[] = [];
+    let cursor: string | undefined = undefined;
+
+    do {
+      const page = await getEventsPage(this.leaderboardClient.server, {
+        contractIds: options.pairAddress ? [options.pairAddress] : [],
+        topics: [topic],
+        startLedger,
+        endLedger,
+        cursor,
+        limit: MAX_LEADERBOARD_EVENTS,
+      });
+
+      allEvents.push(...page.events);
+
+      if (page.pageInfo.hasNextPage && page.pageInfo.endCursor) {
+        cursor = page.pageInfo.endCursor;
+      } else {
+        cursor = undefined;
+      }
+    } while (cursor);
+
+    if (allEvents.length === 0) return [];
 
     const currentMap = new Map<string, bigint>();
     const previousMap = new Map<string, bigint>();
@@ -147,14 +162,21 @@ export class LeaderboardModule extends TreasuryModule {
     const previousStartBound = startLedger;
     const previousEndBound = Math.max(startLedger, currentLedger - ledgersPerDay);
 
-    for (const ev of events) {
-      if (options.pairAddress && ev.contractId?.toString() !== options.pairAddress) continue;
-      // Topics arrive as XDR ScVals — decode before comparing.
-      const topicName = ev.topic?.[0] ? decodeEventTopic(ev.topic[0]) : "";
+    for (const ev of allEvents) {
+      if (options.pairAddress && ev.contractId !== options.pairAddress) continue;
+      // Topics are base64 XDR strings — decode before comparing.
+      const topicName = ev.topics[0] ? decodeEventTopic(ev.topics[0]) : "";
       if (topicName !== topic) continue;
-      if (!ev.value) continue;
 
-      const data = decodeMapEvent(ev.value);
+      // Decode the XDR value
+      let value: any;
+      try {
+        value = xdr.ScVal.fromXdr(ev.value, 'base64');
+      } catch {
+        continue;
+      }
+
+      const data = decodeMapEvent(value);
       if (!data) continue;
 
       const addressKey = type === "trader" ? "sender" : "provider";
@@ -227,7 +249,7 @@ export class LeaderboardModule extends TreasuryModule {
     const periodDays = options.periodDays ?? 30;
     const currentLedger = await this.leaderboardClient.getCurrentLedger();
     const estimatedLedgers = Math.floor((periodDays * 24 * 60 * 60) / 5);
-    const fromLedger = options.fromLedger ?? Math.max(0, currentLedger - estimatedLedgers);
+    const fromLedger = options.fromLedger ?? Math.max(MIN_START_LEDGER, currentLedger - estimatedLedgers);
     const toLedger = options.toLedger ?? currentLedger;
 
     const swapModule = new SwapModule(this.leaderboardClient);
