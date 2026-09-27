@@ -183,8 +183,13 @@ describe('TypedEventCursor', () => {
     expect(server.getEvents).toHaveBeenCalledTimes(2);
     expect(events).toHaveLength(3);
     expect(events.every((e) => e.type === 'swap')).toBe(true);
-    // Second page must start after the last ledger of the first page.
-    expect(server.getEvents.mock.calls[1][0].startLedger).toBe(12);
+    // The first page is a ledger-range request; the second continues from the
+    // last event's paging token and must not carry a ledger range, because
+    // Soroban RPC rejects a request that mixes the two modes.
+    expect(server.getEvents.mock.calls[0][0].startLedger).toBe(1);
+    expect(server.getEvents.mock.calls[0][0].cursor).toBeUndefined();
+    expect(server.getEvents.mock.calls[1][0].cursor).toBe('0001');
+    expect(server.getEvents.mock.calls[1][0].startLedger).toBeUndefined();
   });
 
   it('streams typed events one at a time via the async iterator', async () => {

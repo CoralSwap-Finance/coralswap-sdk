@@ -169,8 +169,6 @@ export {
   BPS_DENOMINATOR,
   CONVERSION_SCALE,
   SCALE,
-  suppressDeprecationWarnings,
-  deprecated,
 } from './utils';
 
 export type {

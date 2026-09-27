@@ -181,8 +181,12 @@ export class EventCursor {
     let currentCursor: string | undefined = undefined;
 
     while (true) {
+      // Soroban RPC rejects a request that carries both a cursor and a ledger
+      // range: the first page is fetched by ledger range, every following
+      // page continues from the cursor of the previous one so that events
+      // beyond the page limit inside a single ledger are never skipped.
       const request: Record<string, unknown> = {
-        startLedger,
+        ...(currentCursor ? {} : { startLedger }),
         filters: [
           {
             type: 'contract',

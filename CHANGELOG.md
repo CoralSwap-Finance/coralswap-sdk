@@ -3,6 +3,8 @@
 ## [Unreleased]
 
 ### Added
+- `GovernanceModule.cancelProposal()` and `executeProposal()`, and `decodeProposal` now returns the proposal's `actions` instead of an empty array (#655)
+- Test matrices for governance (propose, decode actions, cancel, execute) and staking cooldown boundaries (#655), an events-timeline continuity suite over multi-page ledgers (#657), and a tax-reporting regression suite for non-zero gains, BigInt-safe cost basis and exports past 200 events (#659)
 - `NotConfiguredError` (`NOT_CONFIGURED`, fail-fast) for a required network deployment or SDK provider that has not been configured (#638, #642)
 - `decodeI128Strict` (shared i128 ScVal decoder used by events, staking and limit orders), the `SCALE` constants bundle (`TOKEN_DECIMALS`, `PRICE_SCALE`, `BPS_DENOMINATOR`, `CONVERSION_SCALE`), and a `taskTimeoutMs` option on `batchRequest` that rejects tasks exceeding the per-task timeout
 - Webhook endpoint verification for the SDK webhook module:
@@ -16,6 +18,7 @@
 - `MonitoringModule.getSystemMetrics(period)`: TVL, swap volume, fee revenue, and unique-user change vs. the previous equal-length window, plus top growing/declining pools. Historical figures are read through the shared `TypedEventCursor` (#478)
 
 ### Changed
+- `EventCursor` continues a multi-page scan from the previous page's cursor (paging token) instead of `lastLedger + 1`, so events beyond the page limit inside a single ledger are no longer skipped; continuation requests carry the cursor and no ledger range, as Soroban RPC requires (#657)
 - `Network.STAGING` now targets Stellar Futurenet (`rpc-futurenet.stellar.org`, futurenet passphrase) with empty factory and router addresses instead of aliasing Testnet; `client.factory` / `client.router` throw `NotConfiguredError` on STAGING and MAINNET until deployment addresses are configured (#638)
 - `getVotingPower` / `getVotingPowerAtLedger` throw `NotConfiguredError` when no voting-power provider is set, instead of returning a silent zero-power account (#642)
 - `verifyRedStonePayload` fails closed: a missing or non-positive feed price throws `MissingPriceFeedError` and non-positive amounts throw `ValidationError`, where the guard used to be skipped (#656)
@@ -23,12 +26,16 @@
 - Liquidity module validates add/remove-liquidity and add-liquidity-quote inputs with Zod schemas via `validateWithSchema`, replacing the hand-written guards while preserving every existing rule and error message
 
 ### Fixed
+- Tax reporting computes cost basis, disposals and gains in stroops with BigInt arithmetic instead of `parseFloat` rounding; partial lot consumption keeps the remaining lot's cost, and holding-period gains use real proceeds and cost instead of a zero placeholder (#659)
 - `fromSorobanAmount(amount, 0)` returned `"123."` for zero-decimal tokens, which `parseTokenAmount` rejects; it now returns `"123"`. Caught by the new amounts fuzz suite
 - `DecodeError` was exported but missing from `ERROR_TAXONOMY` and the error taxonomy docs; the new conformance suite caught it
 - Threshold price alerts using the pair spot-price fallback now quote the watched token in its paired token at the USD canonical scale (10^8), oriented by which side of the pair the token is on, instead of always returning `reserve1 / reserve0` at 10^18. Direction, boundary and orientation semantics are pinned by a fixture suite (#678)
 - `RateLimiter.destroy()` no longer "gifts" tokens to queued callers: destroying the limiter now rejects every queued `acquire()` with the new `RateLimiterDestroyedError` instead of resolving them, so a teardown path can no longer materialize an immediate unthrottled burst (#647). The error message is deliberately non-retryable-sounding so `isRetryable()` fails fast on a dead limiter
 - Added burst/token-accuracy tests for `RateLimiter` refill boundaries: sub-interval credit accrual, floor rounding at the refill boundary, and refill capping at `maxBurst` without distorting the refill clock (#647)
 - Restored source, config, and test files corrupted when #784, #785, #786, #789, #790, and #792 were merged (overwritten code, invalid `package.json` / `package-lock.json`), which left `main` unable to install, compile, or pass CI
+
+### Removed
+- Unused `GetOpenOrdersSchema` and `GetOrderSummarySchema` exports from the package entry (#664)
 
 ## [1.1.0] - 2026-02-17
 
