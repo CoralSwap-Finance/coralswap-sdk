@@ -1,11 +1,21 @@
-import { rpc, xdr } from "@stellar/stellar-sdk";
+import { xdr, rpc, Contract, TransactionBuilder } from "@stellar/stellar-sdk";
 import { CoralSwapClient } from "@/client";
 import { FeeEstimate } from "@/types/fee";
+import {
+  FeeRevenueByToken,
+  FeeRevenueEvent,
+  PairFeeRevenue,
+  LPYieldResult,
+} from "@/types/fee";
 import { FeeState } from "@/types/pool";
 import { FeeEstimates } from "@/types/fee-estimates";
 import { estimateGas } from "@/utils/gas";
 import { validateAddress, validatePositiveAmount } from "@/utils/validation";
 import { ledgerToApproxTime, LedgerHead } from "@/utils/ledger";
+import { TypedEventCursor, MIN_START_LEDGER, MAX_EVENT_LIMIT } from "@/utils/event-cursor";
+import { SwapEvent } from "@/types/events";
+import { decodeU32 } from "@/utils/scval";
+import { ValidationError } from "@/errors";
 
 /**
  * Fee module -- dynamic fee transparency and estimation.
@@ -16,6 +26,12 @@ import { ledgerToApproxTime, LedgerHead } from "@/utils/ledger";
  */
 export class FeeModule {
   private client: CoralSwapClient;
+
+  /** Default ledger window for revenue scans: 30 days of ledgers at ~5s each. */
+  private static readonly DEFAULT_REVENUE_WINDOW_LEDGERS = 518_400;
+
+  /** Default per-request page size for the paginated event scan. */
+  private static readonly DEFAULT_REVENUE_PAGE_LIMIT = 200;
 
   constructor(client: CoralSwapClient) {
     this.client = client;
@@ -159,12 +175,20 @@ export class FeeModule {
   /**
    * Get historical fee revenue for a pair by querying on-chain swap events.
    *
-   * Reads swap events from the ledger, extracts fee amounts per swap,
-   * and aggregates them into a revenue total with a per-event breakdown.
+   * Reads swap events through the shared {@link TypedEventCursor}, which
+   * paginates past any single-page RPC limit so the full requested ledger
+   * window is covered — not just the first page.
+   *
+   * All fee arithmetic is BigInt-safe: the exact fee for every swap is kept
+   * in stroop-level units (`feeStroops`), so totals remain precise even when
+   * individual swaps exceed `Number.MAX_SAFE_INTEGER`. Amounts are converted
+   * to display units with the **input token's own decimal precision** (the
+   * decimals are read from the token contract), never a hard-coded 10^7 —
+   * tokens with 6, 8, 18 or 0 decimals are all converted correctly.
    *
    * @param pairAddress - The address of the pair contract
-   * @param options - Optional ledger range and result limit
-   * @returns Aggregated fee revenue and swap event breakdown
+   * @param options - Optional ledger range and per-request page limit
+   * @returns Aggregated fee revenue (exact BigInt totals + display values)
    * @example
    * const revenue = await client.fees.getFeeRevenue('C...');
    * console.log(revenue.totalFeeXLM);
@@ -176,106 +200,79 @@ export class FeeModule {
       toLedger?: number;
       limit?: number;
     } = {},
-  ): Promise<{
-    pairAddress: string;
-    totalFeeXLM: number;
-    swapCount: number;
-    history: Array<{
-      ledger: number;
-      timestamp: number;
-      feeBps: number;
-      feeXLM: number;
-    }>;
-  }> {
+  ): Promise<PairFeeRevenue> {
     validateAddress(pairAddress, "pairAddress");
+    this.validateRevenueWindow(options);
 
     const currentLedger = await this.client.getCurrentLedger();
-    const fromLedger = options.fromLedger ?? Math.max(0, currentLedger - 518400);
+    // Clamp to MIN_START_LEDGER (1): ledger 0 does not exist and RPC rejects
+    // startLedger below 1 — relevant on young networks with the 30-day window.
+    const fromLedger = Math.max(
+      MIN_START_LEDGER,
+      options.fromLedger ?? currentLedger - FeeModule.DEFAULT_REVENUE_WINDOW_LEDGERS,
+    );
     const toLedger = options.toLedger ?? currentLedger;
-    // Reference head for approximating an event's wall-clock time when the RPC
-    // response omits `ledgerClosedAt`. The chain head is ~now.
-    const head: LedgerHead = {
-      ledger: currentLedger,
-      closeTime: Math.floor(Date.now() / 1000),
-    };
 
-    const request: rpc.Server.GetEventsRequest = {
-      startLedger: fromLedger,
-      filters: [
-        {
-          type: "contract",
-          contractIds: [pairAddress],
-          topics: [["swap"]],
-        },
-      ],
-      limit: options.limit ?? 200,
-    };
-    const response = await this.client.server.getEvents(request);
-    const rawEvents = response?.events ?? [];
+    const cursor = new TypedEventCursor(this.client.server, pairAddress, ["swap"]);
+    const swapEvents = (await cursor.scan({
+      fromLedger,
+      toLedger,
+      limit: this.revenuePageLimit(options.limit),
+    })) as SwapEvent[];
 
-    let totalFeeXLM = 0;
-    const history: Array<{
-      ledger: number;
-      timestamp: number;
-      feeBps: number;
-      feeXLM: number;
-    }> = [];
+    let totalFeeStroops = 0n;
+    const totalsByToken = new Map<string, bigint>();
+    const history: FeeRevenueEvent[] = [];
 
-    for (const event of rawEvents) {
+    for (const event of swapEvents) {
+      // The final page may run past toLedger; getEvents has no end bound.
       if (event.ledger > toLedger) continue;
-      try {
-        const value = event.value as unknown as Record<string, unknown>;
-        if (!value) continue;
 
-        let feeBps = 0;
-        let amountIn = 0;
-        const map = typeof (value as any)._value !== 'undefined'
-          ? (value as any)._value
-          : value;
+      // feeStroops = amountIn * feeBps / 10000, all BigInt — no precision loss.
+      const feeStroops = (event.amountIn * BigInt(event.feeBps)) / BigInt(10_000);
+      if (feeStroops <= 0n) continue;
 
-        if (Array.isArray(map)) {
-          for (const entry of map) {
-            const key = entry?.key;
-            const val = entry?.val;
-            if (!key || !val) continue;
-            const keyStr = typeof key._value === 'string'
-              ? key._value
-              : key?.sym?.()?.toString?.() ?? key?.str?.()?.toString?.() ?? '';
-            if (keyStr === 'fee_bps') {
-              feeBps = val?.type === 'scvU32' ? val.u32 ?? 0 : 0;
-            }
-            if (keyStr === 'amount_in') {
-              if (val?.type === 'scvI128') {
-                const i128 = val.i128 as unknown;
-                amountIn = typeof i128 === 'bigint'
-                  ? Number(i128)
-                  : Number(((i128 as { hi: bigint; lo: bigint }).hi << 64n) + (i128 as { hi: bigint; lo: bigint }).lo);
-              } else {
-                amountIn = 0;
-              }
-            }
-          }
-        }
+      const decimals = await this.getTokenDecimals(event.tokenIn);
+      const feeDisplay = Number(feeStroops) / Math.pow(10, decimals);
 
-        if (feeBps === 0) continue;
-        const feeAmount = amountIn * feeBps / 10000;
-        const feeXLM = feeAmount / 1e7;
-        totalFeeXLM += feeXLM;
-        history.push({
-          ledger: event.ledger,
-          timestamp:
-            Number(event.ledgerClosedAt) || ledgerToApproxTime(event.ledger, head),
-          feeBps,
-          feeXLM,
-        });
-      } catch {
-        continue;
-      }
+      totalFeeStroops += feeStroops;
+      totalsByToken.set(event.tokenIn, (totalsByToken.get(event.tokenIn) ?? 0n) + feeStroops);
+
+      history.push({
+        ledger: event.ledger,
+        timestamp: event.timestamp || this.ledgerTimestamp(event.ledger, currentLedger),
+        tokenIn: event.tokenIn,
+        decimals,
+        feeBps: event.feeBps,
+        feeStroops,
+        feeXLM: feeDisplay,
+      });
     }
+
+    const totalFeeByToken: FeeRevenueByToken[] = [];
+    for (const [token, feeStroops] of totalsByToken.entries()) {
+      // Memoised — already resolved for every token seen in the loop above.
+      const decimals = await this.getTokenDecimals(token);
+      totalFeeByToken.push({
+        token,
+        decimals,
+        feeStroops,
+        feeDisplay: Number(feeStroops) / Math.pow(10, decimals),
+      });
+    }
+    totalFeeByToken.sort((a, b) =>
+      b.feeStroops === a.feeStroops ? a.token.localeCompare(b.token) : b.feeStroops > a.feeStroops ? 1 : -1,
+    );
+
+    // Display-only total: each event is converted with its own token's
+    // decimals, so the sum matches the per-token breakdown.
+    const totalFeeXLM = totalFeeByToken.reduce((sum, t) => sum + t.feeDisplay, 0);
 
     return {
       pairAddress,
+      totalFeeStroops,
       totalFeeXLM,
+      totalFeeByToken,
       swapCount: history.length,
       history,
     };
@@ -283,6 +280,11 @@ export class FeeModule {
 
   /**
    * Calculate the LP yield for an address in a pair over a given period.
+   *
+   * The LP's share of the pool is computed in BigInt (scaled by 10^12) so
+   * positions with balances above 2^53 are compared exactly; reserve and fee
+   * conversions use each token's own decimal precision instead of a
+   * hard-coded 10^7.
    *
    * @param pairAddress - The address of the pair contract
    * @param lpAddress - The LP token holder address
@@ -296,15 +298,7 @@ export class FeeModule {
       fromLedger?: number;
       toLedger?: number;
     } = {},
-  ): Promise<{
-    pairAddress: string;
-    lpAddress: string;
-    totalFeeRevenueXLM: number;
-    lpSharePercent: number;
-    lpFeeShareXLM: number;
-    lpValueXLM: number;
-    aprPercent: number;
-  }> {
+  ): Promise<LPYieldResult> {
     validateAddress(pairAddress, "pairAddress");
     validateAddress(lpAddress, "lpAddress");
 
@@ -312,11 +306,12 @@ export class FeeModule {
     const lpTokenAddr = await pair.getLPTokenAddress();
     const lpToken = this.client.lpToken(lpTokenAddr);
 
-    const [lpBalance, totalSupply, { reserve0, reserve1 }] =
+    const [lpBalance, totalSupply, { reserve0, reserve1 }, { token0, token1 }] =
       await Promise.all([
         lpToken.balance(lpAddress),
         lpToken.totalSupply(),
         pair.getReserves(),
+        pair.getTokens(),
       ]);
 
     const feeRevenue = await this.getFeeRevenue(pairAddress, options);
@@ -325,6 +320,7 @@ export class FeeModule {
       return {
         pairAddress,
         lpAddress,
+        totalFeeRevenueStroops: feeRevenue.totalFeeStroops,
         totalFeeRevenueXLM: feeRevenue.totalFeeXLM,
         lpSharePercent: 0,
         lpFeeShareXLM: 0,
@@ -333,14 +329,29 @@ export class FeeModule {
       };
     }
 
-    const lpSharePercent = (Number(lpBalance) / Number(totalSupply)) * 100;
-    const lpFeeShareXLM = feeRevenue.totalFeeXLM * (lpSharePercent / 100);
+    // BigInt-safe share: (balance * 10^12) / supply, scaled by 10^12 so the
+    // fractional part of the ratio is kept without floats.
+    const SHARE_SCALE = 10n ** 12n;
+    const shareScaled = (lpBalance * SHARE_SCALE) / totalSupply;
+    const lpSharePercent = Number(shareScaled) / (Number(SHARE_SCALE) / 100);
+
+    // LP's pro-rata share of the window's fee revenue (display units).
+    const lpFeeShareXLM = feeRevenue.totalFeeXLM * (Number(shareScaled) / Number(SHARE_SCALE));
+
+    // Implied position value: pro-rata reserves, each side converted with its
+    // own token's decimals (not a hard-coded 1e7). The ratio reuses the
+    // BigInt-scaled share so huge balances never round through Number().
+    const [decimals0, decimals1] = await Promise.all([
+      this.getTokenDecimals(token0),
+      this.getTokenDecimals(token1),
+    ]);
+    const ratio = Number(shareScaled) / Number(SHARE_SCALE);
     const lpValueXLM =
-      (Number(reserve0) / 1e7 + Number(reserve1) / 1e7) *
-      (Number(lpBalance) / Number(totalSupply));
+      (Number(reserve0) / Math.pow(10, decimals0) +
+        Number(reserve1) / Math.pow(10, decimals1)) * ratio;
 
     const currentLedger = await this.client.getCurrentLedger();
-    const fromLedger = options.fromLedger ?? Math.max(0, currentLedger - 518400);
+    const fromLedger = options.fromLedger ?? Math.max(MIN_START_LEDGER, currentLedger - FeeModule.DEFAULT_REVENUE_WINDOW_LEDGERS);
     const toLedger = options.toLedger ?? currentLedger;
     // Approximate the queried window in seconds via the shared ledger-time
     // helper (the reference close time cancels out of the difference).
@@ -354,6 +365,7 @@ export class FeeModule {
     return {
       pairAddress,
       lpAddress,
+      totalFeeRevenueStroops: feeRevenue.totalFeeStroops,
       totalFeeRevenueXLM: feeRevenue.totalFeeXLM,
       lpSharePercent,
       lpFeeShareXLM,
@@ -443,6 +455,123 @@ export class FeeModule {
       resources,
       breakdown,
     };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Revenue helpers
+  // ---------------------------------------------------------------------------
+
+  /** Memoised per-token decimal precision, read once from the token contract. */
+  private decimalsCache = new Map<string, number>();
+
+  /**
+   * Read a token's decimal precision from its contract (memoised).
+   *
+   * The `decimals()` call is simulated read-only against the well-known
+   * zero-balance account, so no funds or signer are required. On any failure
+   * (unsupported token contract, RPC error) it falls back to 7 — the Stellar
+   * convention — so aggregation never throws on odd tokens.
+   *
+   * @param tokenAddress - The Soroban contract address of the token.
+   * @returns The token's decimal precision (0-18), defaulting to 7.
+   */
+  private async getTokenDecimals(tokenAddress: string): Promise<number> {
+    const cached = this.decimalsCache.get(tokenAddress);
+    if (cached !== undefined) return cached;
+
+    try {
+      const op = new Contract(tokenAddress).call("decimals");
+      const result = await this.simulateTokenRead(op);
+      const decimals = result ? decodeU32(result) : 7;
+      const safe = Number.isInteger(decimals) && decimals >= 0 && decimals <= 18 ? decimals : 7;
+      this.decimalsCache.set(tokenAddress, safe);
+      return safe;
+    } catch {
+      this.decimalsCache.set(tokenAddress, 7);
+      return 7;
+    }
+  }
+
+  /**
+   * Simulate a read-only contract call against a token contract.
+   *
+   * The well-known zero-balance account funds the simulation, so no signer
+   * is needed. No retry/circuit-breaker layer is applied: this read is
+   * best-effort (callers fall back to 7 decimals) and must not poison a
+   * shared breaker state for unrelated calls.
+   */
+  private async simulateTokenRead(op: xdr.Operation): Promise<xdr.ScVal | null> {
+    const server = this.client.server;
+
+    const account = await server.getAccount(
+      "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+    );
+    const tx = new TransactionBuilder(account, {
+      fee: "100",
+      networkPassphrase: this.client.networkConfig.networkPassphrase,
+    })
+      .addOperation(op)
+      .setTimeout(30)
+      .build();
+
+    const sim = await server.simulateTransaction(tx);
+    if (rpc.Api.isSimulationSuccess(sim) && sim.result) {
+      return sim.result.retval;
+    }
+    return null;
+  }
+
+  /** Validate the caller-supplied revenue window (ledger range / page limit). */
+  private validateRevenueWindow(options: { fromLedger?: number; toLedger?: number; limit?: number }): void {
+    if (
+      options.fromLedger !== undefined &&
+      (!Number.isInteger(options.fromLedger) || options.fromLedger < 0)
+    ) {
+      throw new ValidationError(
+        `fromLedger must be a non-negative integer, got ${options.fromLedger}`,
+      );
+    }
+    if (
+      options.toLedger !== undefined &&
+      (!Number.isInteger(options.toLedger) || options.toLedger < 0)
+    ) {
+      throw new ValidationError(
+        `toLedger must be a non-negative integer, got ${options.toLedger}`,
+      );
+    }
+    if (
+      options.fromLedger !== undefined &&
+      options.toLedger !== undefined &&
+      options.fromLedger > options.toLedger
+    ) {
+      throw new ValidationError(
+        `fromLedger (${options.fromLedger}) must not exceed toLedger (${options.toLedger})`,
+      );
+    }
+    if (options.limit !== undefined) {
+      if (!Number.isInteger(options.limit) || options.limit < 1 || options.limit > MAX_EVENT_LIMIT) {
+        throw new ValidationError(
+          `limit must be an integer between 1 and ${MAX_EVENT_LIMIT}, got ${options.limit}`,
+        );
+      }
+    }
+  }
+
+  /** Clamp the page limit to the cursor's supported range. */
+  private revenuePageLimit(limit?: number): number {
+    return limit ?? FeeModule.DEFAULT_REVENUE_PAGE_LIMIT;
+  }
+
+  /**
+   * Approximate the wall-clock timestamp of a ledger from the chain head.
+   * Used when an event response carries no usable `ledgerClosedAt`.
+   */
+  private ledgerTimestamp(ledger: number, currentLedger: number): number {
+    const head: LedgerHead = {
+      ledger: currentLedger,
+      closeTime: Math.floor(Date.now() / 1000),
+    };
+    return ledgerToApproxTime(ledger, head);
   }
 
   /**
