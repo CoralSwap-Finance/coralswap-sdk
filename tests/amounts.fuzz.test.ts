@@ -280,13 +280,21 @@ describe('amounts.ts - Fuzz and Property Tests', () => {
   });
 
   describe('Comprehensive Fuzz: Random Valid Inputs', () => {
+    it('round-trips zero-decimal tokens without a dangling decimal point', () => {
+      expect(fromSorobanAmount(123n, 0)).toBe('123');
+      expect(fromSorobanAmount(-5n, 0)).toBe('-5');
+      expect(parseTokenAmount(fromSorobanAmount(123n, 0), 0)).toBe(123n);
+    });
+
     it('should handle randomized decimal amounts up to 18 decimals', () => {
       const randomTests = 100;
       for (let i = 0; i < randomTests; i++) {
         const decimals = Math.floor(Math.random() * 19); // 0-18
         const wholePart = Math.floor(Math.random() * 1000000);
         const fracPart = Math.floor(Math.random() * (10 ** decimals));
-        const amount = `${wholePart}.${fracPart.toString().padStart(decimals, '0')}`;
+        // A zero-decimal token has no fractional part; "123." is not a valid amount.
+        const amount =
+          decimals === 0 ? `${wholePart}` : `${wholePart}.${fracPart.toString().padStart(decimals, '0')}`;
 
         const parsed = parseTokenAmount(amount, decimals);
         const roundTripped = fromSorobanAmount(parsed, decimals);

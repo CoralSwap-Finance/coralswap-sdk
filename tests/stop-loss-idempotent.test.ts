@@ -97,7 +97,7 @@ describe('Stop-Loss Idempotent Resubmission', () => {
       };
 
       const keys = Array.from({ length: 5 }, () => JSON.stringify(params));
-      expect(new Set(keys)).toHaveLength(1);
+      expect(new Set(keys).size).toBe(1);
     });
   });
 
@@ -134,7 +134,7 @@ describe('Stop-Loss Idempotent Resubmission', () => {
       expect(result2.txHash).toBe(result3.txHash);
 
       // Only one order on network
-      expect(network.getAllSubmitted()).toHaveSize(1);
+      expect(network.getAllSubmitted().size).toBe(1);
     });
 
     it('should handle client timeout then successful resubmission', () => {
@@ -163,7 +163,7 @@ describe('Stop-Loss Idempotent Resubmission', () => {
       const result2 = network.submitOrder('stop-loss-5', 'key-2');
 
       expect(result1.txHash).not.toBe(result2.txHash);
-      expect(network.getAllSubmitted()).toHaveSize(2);
+      expect(network.getAllSubmitted().size).toBe(2);
     });
   });
 
@@ -176,7 +176,7 @@ describe('Stop-Loss Idempotent Resubmission', () => {
       const nonces = Array.from({ length: 5 }, () => getNextNonce());
 
       expect(nonces).toEqual([1, 2, 3, 4, 5]);
-      expect(new Set(nonces)).toHaveSize(5);
+      expect(new Set(nonces).size).toBe(5);
     });
 
     it('should prevent duplicate nonce reuse', () => {
@@ -206,7 +206,7 @@ describe('Stop-Loss Idempotent Resubmission', () => {
 
       expect(nonce1).not.toBe(nonce2);
       expect(nonce2).not.toBe(nonce3);
-      expect(new Set([nonce1, nonce2, nonce3])).toHaveSize(3);
+      expect(new Set([nonce1, nonce2, nonce3]).size).toBe(3);
     });
   });
 
@@ -294,7 +294,7 @@ describe('Stop-Loss Idempotent Resubmission', () => {
       expect(results[2].txHash).toBe(results[0].txHash);
 
       // Only one order created
-      expect(network.getAllSubmitted()).toHaveSize(1);
+      expect(network.getAllSubmitted().size).toBe(1);
     });
 
     it('should prevent double-posting even with immediate retries', () => {
@@ -309,7 +309,7 @@ describe('Stop-Loss Idempotent Resubmission', () => {
       }
 
       // All submissions should yield same txHash
-      expect(allTxHashes).toHaveSize(1);
+      expect(allTxHashes.size).toBe(1);
     });
   });
 
@@ -344,7 +344,7 @@ describe('Stop-Loss Idempotent Resubmission', () => {
       expect(validationResult).toBeInstanceOf(ValidationError);
 
       // Should not have created network entry
-      expect(network.getAllSubmitted()).toHaveSize(0);
+      expect(network.getAllSubmitted().size).toBe(0);
     });
   });
 
