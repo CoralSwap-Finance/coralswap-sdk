@@ -169,6 +169,9 @@ export {
   BPS_DENOMINATOR,
   CONVERSION_SCALE,
   SCALE,
+  DecimalsResolver,
+  DEFAULT_DECIMALS_CACHE_CAPACITY,
+  TTL_DISABLED,
 } from './utils';
 
 export type {
@@ -185,6 +188,7 @@ export type {
   RetryDecision,
   EventCursorOptions,
   TypedEventScanParams,
+  DecimalsResolverOptions,
 } from "./utils";
 
 // Schema validation
