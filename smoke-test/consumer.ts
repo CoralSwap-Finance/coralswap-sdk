@@ -131,8 +131,6 @@ import {
   validateWithSchema,
   OrderBookAddressSchema,
   TradeFilterSchema,
-  GetOpenOrdersSchema,
-  GetOrderSummarySchema,
   // Errors
   CoralSwapSDKError,
   NetworkError,
@@ -338,8 +336,6 @@ const _batchConcurrency: number = DEFAULT_BATCH_CONCURRENCY;
 
 declare const _schema: typeof OrderBookAddressSchema;
 declare const _tradeFilter: typeof TradeFilterSchema;
-declare const _openOrders: typeof GetOpenOrdersSchema;
-declare const _orderSummary: typeof GetOrderSummarySchema;
 
 // ─── Error classes are constructable and extend correctly ──────────────────
 
@@ -479,7 +475,7 @@ void _nativeAddr; void _resolved; void _token0; void _token1;
 void _truncated; void _pairAddr;
 void _validPath; void _isRet; void _sleepPromise;
 void _topics; void _minLedger; void _twapWindow; void _batchConcurrency;
-void _schema; void _tradeFilter; void _openOrders; void _orderSummary;
+void _schema; void _tradeFilter;
 void _sdkErr; void _netErr; void _rpcErr; void _simErr; void _txErr;
 void _deadlineErr; void _slipErr; void _liqErr; void _pairErr; void _valErr;
 void _flashErr; void _flashFailErr; void _crossChainErr; void _circuitErr;

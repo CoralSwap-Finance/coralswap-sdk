@@ -63,16 +63,12 @@ jobs:
           cache: npm
       - run: npm ci --ignore-scripts
       - run: npm test
-          node-version: '20'
-          cache: 'npm'
-      - run: npm ci
-      - run: npm run build
 
   smoke-test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
