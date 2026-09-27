@@ -188,7 +188,7 @@ export type {
 } from "./utils";
 
 // Schema validation
-export { validateWithSchema, OrderBookAddressSchema, TradeFilterSchema, GetOpenOrdersSchema, GetOrderSummarySchema } from "@/schemas";
+export { validateWithSchema, OrderBookAddressSchema, TradeFilterSchema } from "@/schemas";
 
 // Errors
 export {
