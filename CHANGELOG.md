@@ -28,6 +28,8 @@
 - Liquidity module validates add/remove-liquidity and add-liquidity-quote inputs with Zod schemas via `validateWithSchema`, replacing the hand-written guards while preserving every existing rule and error message
 
 ### Fixed
+- `FeeModule.getFeeRevenue()` no longer corrupts revenue figures: fee amounts are computed and accumulated in stroop-level BigInt (no `Number()` precision loss above 2^53), display conversions use each input token's own `decimals()` read from its contract instead of a hard-coded 10^7, and swap events are fetched through the shared `TypedEventCursor` with full cursor pagination so windows with more than 200 events are fully retrievable. Returns exact `totalFeeStroops`/`feeStroops` totals plus a per-token breakdown (`totalFeeByToken`), with input validation for the ledger window and page limit (#632)
+- `FeeModule.getLPYield()` uses the same BigInt-safe share math (no `Number(lpBalance)` precision loss) and converts both reserve sides with their own tokens' decimals instead of a hard-coded 1e7; it also exposes `totalFeeRevenueStroops` (#632)
 - Tax reporting computes cost basis, disposals and gains in stroops with BigInt arithmetic instead of `parseFloat` rounding; partial lot consumption keeps the remaining lot's cost, and holding-period gains use real proceeds and cost instead of a zero placeholder (#659)
 - `fromSorobanAmount(amount, 0)` returned `"123."` for zero-decimal tokens, which `parseTokenAmount` rejects; it now returns `"123"`. Caught by the new amounts fuzz suite
 - `DecodeError` was exported but missing from `ERROR_TAXONOMY` and the error taxonomy docs; the new conformance suite caught it
