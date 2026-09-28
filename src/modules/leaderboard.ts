@@ -2,6 +2,7 @@ import { CoralSwapClient } from "@/client";
 import { validateAddress } from "@/utils/validation";
 import { ValidationError } from "@/errors";
 import { EventCursor, decodeEventTopic, MIN_START_LEDGER } from "@/utils/event-cursor";
+import { getTokenDecimals } from "@/utils/token-decimals";
 import { TreasuryModule, TreasuryModuleOptions } from "./treasury";
 import { SwapModule } from "./swap";
 
@@ -57,21 +58,6 @@ export interface GetTopTradersOptions {
 
 /** Upper bound on events aggregated per leaderboard query. */
 const MAX_LEADERBOARD_EVENTS = 1000;
-
-const decimalsCache = new Map<string, number>();
-
-async function getTokenDecimals(client: CoralSwapClient, address: string): Promise<number> {
-  if (decimalsCache.has(address)) {
-    return decimalsCache.get(address)!;
-  }
-  try {
-    const meta = await client.lpToken(address).metadata();
-    decimalsCache.set(address, meta.decimals);
-    return meta.decimals;
-  } catch {
-    return 7; // standard fallback for Soroban
-  }
-}
 
 /**
  * Leaderboard module — ranks top LPs and traders by yield/volume.

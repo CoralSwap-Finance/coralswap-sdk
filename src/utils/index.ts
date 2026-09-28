@@ -161,3 +161,10 @@ export {
   shouldRetrySubmission,
 } from './idempotent-resubmission';
 export type { TransactionStatus, RetryDecision } from './idempotent-resubmission';
+
+/**
+ * On-chain token decimals (`decimals()` via SEP-41 metadata), cached per
+ * address. Any math that converts stroops into human units must divide by
+ * `10 ** decimals` from here rather than by a hardcoded `1e7`.
+ */
+export { getTokenDecimals, clearTokenDecimalsCache, FALLBACK_TOKEN_DECIMALS } from './token-decimals';
