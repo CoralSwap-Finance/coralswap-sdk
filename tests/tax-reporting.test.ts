@@ -1,3 +1,16 @@
+/**
+ * Tests for TaxReportingModule.exportTradeHistory()
+ *
+ * After the EventCursor migration, tax-reporting.ts no longer hand-rolls
+ * getEvents request building or ScVal decoding. Instead it delegates to
+ * EventCursor, which issues:
+ *
+ *   - One getEvents call for swap events   (topics: [["swap"]])
+ *   - One getEvents call for liquidity events (topics: [["add_liquidity"], ["remove_liquidity"]])
+ *
+ * The mock below inspects the first topic in the first filter to route
+ * the right fixture events to each call.
+ */
 import { CoralSwapClient } from "../src/client";
 import { TaxReportingModule, TaxReportRow } from "../src/modules/tax-reporting";
 import { Network } from "../src/types/common";
@@ -16,7 +29,11 @@ const TOKEN_B = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4";
 const TX_HASH = "abc123txhash";
 
 // ---------------------------------------------------------------------------
-// ScVal-like builder helpers (mirrors swap-history.test.ts)
+// ScVal-like builder helpers
+//
+// These mirror the shape returned by SorobanRpc.Server.getEvents() after the
+// stellar-sdk has decoded the XDR. EventCursor reads these via the same duck-
+// typed accessor pattern that the SDK uses on real responses.
 // ---------------------------------------------------------------------------
 
 const makeAddr = (addr: string) => ({
@@ -26,7 +43,9 @@ const makeAddr = (addr: string) => ({
 const makeI128 = (n: bigint) => ({
   i128: () => ({
     hi: () => ({ toString: () => String(n >> 64n) }),
-    lo: () => ({ toString: () => String(n & 0xffffffffffffffffn) }),
+    // Produce the unsigned representation of the low 64 bits, matching the
+    // SDK's behaviour for all values — including those where bit 63 is set.
+    lo: () => ({ toString: () => String(n & 0xFFFFFFFFFFFFFFFFn) }),
   }),
 });
 
@@ -42,7 +61,9 @@ function makeSwapEvent(opts: {
   feeBps: number;
   txHash?: string;
   ledgerClosedAt?: string;
+  ledger?: number;
 }): Record<string, unknown> {
+  const ledger = opts.ledger ?? 1000;
   return {
     topic: ["swap"],
     value: {
@@ -56,7 +77,9 @@ function makeSwapEvent(opts: {
       ],
     },
     txHash: opts.txHash ?? TX_HASH,
-    ledgerClosedAt: opts.ledgerClosedAt ?? new Date(1_700_000_000_000).toISOString(),
+    ledger,
+    ledgerClosedAt:
+      opts.ledgerClosedAt ?? new Date(1_700_000_000_000).toISOString(),
   };
 }
 
@@ -67,9 +90,12 @@ function makeLiquidityEvent(opts: {
   tokenB: string;
   amountA: bigint;
   amountB: bigint;
+  liquidity?: bigint;
   txHash?: string;
   ledgerClosedAt?: string;
+  ledger?: number;
 }): Record<string, unknown> {
+  const ledger = opts.ledger ?? 1000;
   return {
     topic: [opts.type],
     value: {
@@ -79,10 +105,15 @@ function makeLiquidityEvent(opts: {
         { key: makeSym("token_b"), val: makeAddr(opts.tokenB) },
         { key: makeSym("amount_a"), val: makeI128(opts.amountA) },
         { key: makeSym("amount_b"), val: makeI128(opts.amountB) },
+        ...(opts.liquidity !== undefined
+          ? [{ key: makeSym("liquidity"), val: makeI128(opts.liquidity) }]
+          : []),
       ],
     },
     txHash: opts.txHash ?? TX_HASH,
-    ledgerClosedAt: opts.ledgerClosedAt ?? new Date(1_700_000_000_000).toISOString(),
+    ledger,
+    ledgerClosedAt:
+      opts.ledgerClosedAt ?? new Date(1_700_000_000_000).toISOString(),
   };
 }
 
@@ -92,6 +123,40 @@ function mockEventsResponse(
   return {
     events: events as unknown as SorobanRpc.Api.EventResponse[],
     latestLedger: 5000,
+  };
+}
+
+/**
+ * Route mock events to the correct getEvents call by inspecting the first
+ * topic in the first filter of the request.
+ *
+ * After the EventCursor migration:
+ *   - Swap cursor sends:      filters[0].topics[0] === ["swap"]
+ *   - Liquidity cursor sends: filters[0].topics[0] === ["add_liquidity"]
+ *                             AND filters[1].topics[0] === ["remove_liquidity"]
+ *     (both in the same request)
+ */
+function makeTopicRouter(options: {
+  swapEvents?: Record<string, unknown>[];
+  addEvents?: Record<string, unknown>[];
+  removeEvents?: Record<string, unknown>[];
+}) {
+  return async (req: SorobanRpc.Server.GetEventsRequest): Promise<SorobanRpc.Api.GetEventsResponse> => {
+    const firstTopic =
+      (req.filters?.[0]?.topics?.[0] as string[] | undefined)?.[0] ?? "";
+
+    if (firstTopic === "swap") {
+      return mockEventsResponse(options.swapEvents ?? []);
+    }
+    if (firstTopic === "add_liquidity" || firstTopic === "remove_liquidity") {
+      // The liquidity cursor sends add + remove in the same request.
+      // Return all matching events for both topic types.
+      return mockEventsResponse([
+        ...(options.addEvents ?? []),
+        ...(options.removeEvents ?? []),
+      ]);
+    }
+    return mockEventsResponse([]);
   };
 }
 
@@ -143,10 +208,9 @@ describe("TaxReportingModule.exportTradeHistory()", () => {
       feeBps: 30,
     });
 
-    jest.spyOn(client.server, "getEvents").mockImplementation(async (req) => {
-      const topic = (req.filters?.[0]?.topics?.[0] as string[])?.[0];
-      return mockEventsResponse(topic === "swap" ? [swapEv] : []);
-    });
+    jest
+      .spyOn(client.server, "getEvents")
+      .mockImplementation(makeTopicRouter({ swapEvents: [swapEv] }));
 
     const csv = await tax.exportTradeHistory(USER);
     const rows = csv.split("\n");
@@ -163,10 +227,9 @@ describe("TaxReportingModule.exportTradeHistory()", () => {
       feeBps: 30,
     });
 
-    jest.spyOn(client.server, "getEvents").mockImplementation(async (req) => {
-      const topic = (req.filters?.[0]?.topics?.[0] as string[])?.[0];
-      return mockEventsResponse(topic === "swap" ? [swapEv] : []);
-    });
+    jest
+      .spyOn(client.server, "getEvents")
+      .mockImplementation(makeTopicRouter({ swapEvents: [swapEv] }));
 
     const csv = await tax.exportTradeHistory(USER);
     expect(csv).toContain("1.0000000"); // amountIn
@@ -174,7 +237,7 @@ describe("TaxReportingModule.exportTradeHistory()", () => {
   });
 
   it("includes fee as human-readable amount", async () => {
-    // amountIn = 10_000_000 stroops, feeBps = 30 → fee = 30_000 / 10000 * 10_000_000 = 30000 stroops = 0.0030000
+    // amountIn = 10_000_000 stroops, feeBps = 30 → fee = 30 * 10_000_000 / 10000 = 30000 stroops = 0.0030000
     const swapEv = makeSwapEvent({
       sender: USER,
       tokenIn: TOKEN_A,
@@ -184,13 +247,52 @@ describe("TaxReportingModule.exportTradeHistory()", () => {
       feeBps: 30,
     });
 
-    jest.spyOn(client.server, "getEvents").mockImplementation(async (req) => {
-      const topic = (req.filters?.[0]?.topics?.[0] as string[])?.[0];
-      return mockEventsResponse(topic === "swap" ? [swapEv] : []);
-    });
+    jest
+      .spyOn(client.server, "getEvents")
+      .mockImplementation(makeTopicRouter({ swapEvents: [swapEv] }));
 
     const csv = await tax.exportTradeHistory(USER);
     expect(csv).toContain("0.0030000");
+  });
+
+  // -------------------------------------------------------------------------
+  // i128 correctness — sign-extension bug regression test
+  // -------------------------------------------------------------------------
+
+  it("correctly decodes i128 amounts where the low 64 bits have bit 63 set", async () => {
+    // Construct an amountIn where lo has bit 63 set.
+    // A naïve implementation that doesn't mask lo would sign-extend it, producing
+    // a wildly wrong (negative or huge) bigint.
+    //
+    // Example: 2^63 = 9223372036854775808n
+    // Correct i128: hi=0, lo=9223372036854775808n → value = 9223372036854775808n
+    // Buggy (signed lo): hi=0, lo=-9223372036854775808n → value = -9223372036854775808n
+    const amountIn = 9_223_372_036_854_775_808n; // 2^63, bit 63 of lo is set
+    const amountOut = 9_000_000_000_000_000_000n;
+
+    const swapEv = makeSwapEvent({
+      sender: USER,
+      tokenIn: TOKEN_A,
+      tokenOut: TOKEN_B,
+      amountIn,
+      amountOut,
+      feeBps: 0,
+    });
+
+    jest
+      .spyOn(client.server, "getEvents")
+      .mockImplementation(makeTopicRouter({ swapEvents: [swapEv] }));
+
+    const json = await tax.exportTradeHistory(USER, { format: "json" });
+    const rows = JSON.parse(json) as TaxReportRow[];
+
+    // The human-readable amountIn should be 2^63 / 10^7 = 922337203685.4775808
+    // We just check that it is a positive number and not obviously wrong.
+    expect(rows).toHaveLength(1);
+    const parsedAmountIn = parseFloat(rows[0].amountIn);
+    expect(parsedAmountIn).toBeGreaterThan(0);
+    // The buggy path would produce a negative value or something near -922337203685
+    expect(parsedAmountIn).toBeGreaterThan(900_000_000_000);
   });
 
   // -------------------------------------------------------------------------
@@ -207,10 +309,9 @@ describe("TaxReportingModule.exportTradeHistory()", () => {
       feeBps: 30,
     });
 
-    jest.spyOn(client.server, "getEvents").mockImplementation(async (req) => {
-      const topic = (req.filters?.[0]?.topics?.[0] as string[])?.[0];
-      return mockEventsResponse(topic === "swap" ? [swapEv] : []);
-    });
+    jest
+      .spyOn(client.server, "getEvents")
+      .mockImplementation(makeTopicRouter({ swapEvents: [swapEv] }));
 
     const json = await tax.exportTradeHistory(USER, { format: "json" });
     const parsed = JSON.parse(json) as TaxReportRow[];
@@ -234,11 +335,9 @@ describe("TaxReportingModule.exportTradeHistory()", () => {
       amountB: 100_000_000n,
     });
 
-    jest.spyOn(client.server, "getEvents").mockImplementation(async (req) => {
-      const topic = (req.filters?.[0]?.topics?.[0] as string[])?.[0];
-      if (topic === "add_liquidity") return mockEventsResponse([addEv]);
-      return mockEventsResponse([]);
-    });
+    jest
+      .spyOn(client.server, "getEvents")
+      .mockImplementation(makeTopicRouter({ addEvents: [addEv] }));
 
     const json = await tax.exportTradeHistory(USER, { format: "json" });
     const rows = JSON.parse(json) as TaxReportRow[];
@@ -258,16 +357,44 @@ describe("TaxReportingModule.exportTradeHistory()", () => {
       amountB: 40_000_000n,
     });
 
-    jest.spyOn(client.server, "getEvents").mockImplementation(async (req) => {
-      const topic = (req.filters?.[0]?.topics?.[0] as string[])?.[0];
-      if (topic === "remove_liquidity") return mockEventsResponse([removeEv]);
-      return mockEventsResponse([]);
-    });
+    jest
+      .spyOn(client.server, "getEvents")
+      .mockImplementation(makeTopicRouter({ removeEvents: [removeEv] }));
 
     const json = await tax.exportTradeHistory(USER, { format: "json" });
     const rows = JSON.parse(json) as TaxReportRow[];
     const liq = rows.find((r) => r.type === "remove_liquidity");
     expect(liq).toBeDefined();
+  });
+
+  it("includes both add_liquidity and remove_liquidity in a single call", async () => {
+    const addEv = makeLiquidityEvent({
+      type: "add_liquidity",
+      provider: USER,
+      tokenA: TOKEN_A,
+      tokenB: TOKEN_B,
+      amountA: 50_000_000n,
+      amountB: 100_000_000n,
+      txHash: "addTxHash",
+    });
+    const removeEv = makeLiquidityEvent({
+      type: "remove_liquidity",
+      provider: USER,
+      tokenA: TOKEN_A,
+      tokenB: TOKEN_B,
+      amountA: 20_000_000n,
+      amountB: 40_000_000n,
+      txHash: "removeTxHash",
+    });
+
+    jest
+      .spyOn(client.server, "getEvents")
+      .mockImplementation(makeTopicRouter({ addEvents: [addEv], removeEvents: [removeEv] }));
+
+    const json = await tax.exportTradeHistory(USER, { format: "json" });
+    const rows = JSON.parse(json) as TaxReportRow[];
+    expect(rows.some((r) => r.type === "add_liquidity")).toBe(true);
+    expect(rows.some((r) => r.type === "remove_liquidity")).toBe(true);
   });
 
   // -------------------------------------------------------------------------
@@ -279,21 +406,28 @@ describe("TaxReportingModule.exportTradeHistory()", () => {
     const newDate = new Date("2024-06-01T00:00:00Z").toISOString();
 
     const oldEv = makeSwapEvent({
-      sender: USER, tokenIn: TOKEN_A, tokenOut: TOKEN_B,
-      amountIn: 1_000_000n, amountOut: 900_000n, feeBps: 30,
+      sender: USER,
+      tokenIn: TOKEN_A,
+      tokenOut: TOKEN_B,
+      amountIn: 1_000_000n,
+      amountOut: 900_000n,
+      feeBps: 30,
       ledgerClosedAt: oldDate,
     });
     const newEv = makeSwapEvent({
-      sender: USER, tokenIn: TOKEN_A, tokenOut: TOKEN_B,
-      amountIn: 2_000_000n, amountOut: 1_800_000n, feeBps: 30,
+      sender: USER,
+      tokenIn: TOKEN_A,
+      tokenOut: TOKEN_B,
+      amountIn: 2_000_000n,
+      amountOut: 1_800_000n,
+      feeBps: 30,
       txHash: "newtxhash",
       ledgerClosedAt: newDate,
     });
 
-    jest.spyOn(client.server, "getEvents").mockImplementation(async (req) => {
-      const topic = (req.filters?.[0]?.topics?.[0] as string[])?.[0];
-      return mockEventsResponse(topic === "swap" ? [oldEv, newEv] : []);
-    });
+    jest
+      .spyOn(client.server, "getEvents")
+      .mockImplementation(makeTopicRouter({ swapEvents: [oldEv, newEv] }));
 
     const json = await tax.exportTradeHistory(USER, {
       format: "json",
@@ -309,21 +443,28 @@ describe("TaxReportingModule.exportTradeHistory()", () => {
     const newDate = new Date("2024-06-01T00:00:00Z").toISOString();
 
     const oldEv = makeSwapEvent({
-      sender: USER, tokenIn: TOKEN_A, tokenOut: TOKEN_B,
-      amountIn: 1_000_000n, amountOut: 900_000n, feeBps: 30,
+      sender: USER,
+      tokenIn: TOKEN_A,
+      tokenOut: TOKEN_B,
+      amountIn: 1_000_000n,
+      amountOut: 900_000n,
+      feeBps: 30,
       txHash: "oldtxhash",
       ledgerClosedAt: oldDate,
     });
     const newEv = makeSwapEvent({
-      sender: USER, tokenIn: TOKEN_A, tokenOut: TOKEN_B,
-      amountIn: 2_000_000n, amountOut: 1_800_000n, feeBps: 30,
+      sender: USER,
+      tokenIn: TOKEN_A,
+      tokenOut: TOKEN_B,
+      amountIn: 2_000_000n,
+      amountOut: 1_800_000n,
+      feeBps: 30,
       ledgerClosedAt: newDate,
     });
 
-    jest.spyOn(client.server, "getEvents").mockImplementation(async (req) => {
-      const topic = (req.filters?.[0]?.topics?.[0] as string[])?.[0];
-      return mockEventsResponse(topic === "swap" ? [oldEv, newEv] : []);
-    });
+    jest
+      .spyOn(client.server, "getEvents")
+      .mockImplementation(makeTopicRouter({ swapEvents: [oldEv, newEv] }));
 
     const json = await tax.exportTradeHistory(USER, {
       format: "json",
@@ -349,10 +490,29 @@ describe("TaxReportingModule.exportTradeHistory()", () => {
       feeBps: 30,
     });
 
-    jest.spyOn(client.server, "getEvents").mockImplementation(async (req) => {
-      const topic = (req.filters?.[0]?.topics?.[0] as string[])?.[0];
-      return mockEventsResponse(topic === "swap" ? [otherEv] : []);
+    jest
+      .spyOn(client.server, "getEvents")
+      .mockImplementation(makeTopicRouter({ swapEvents: [otherEv] }));
+
+    const json = await tax.exportTradeHistory(USER, { format: "json" });
+    const rows = JSON.parse(json) as TaxReportRow[];
+    expect(rows).toHaveLength(0);
+  });
+
+  it("excludes liquidity events from other providers", async () => {
+    const OTHER = "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5";
+    const otherEv = makeLiquidityEvent({
+      type: "add_liquidity",
+      provider: OTHER,
+      tokenA: TOKEN_A,
+      tokenB: TOKEN_B,
+      amountA: 50_000_000n,
+      amountB: 100_000_000n,
     });
+
+    jest
+      .spyOn(client.server, "getEvents")
+      .mockImplementation(makeTopicRouter({ addEvents: [otherEv] }));
 
     const json = await tax.exportTradeHistory(USER, { format: "json" });
     const rows = JSON.parse(json) as TaxReportRow[];
@@ -364,17 +524,81 @@ describe("TaxReportingModule.exportTradeHistory()", () => {
   // -------------------------------------------------------------------------
 
   it("returns only header row in CSV when there are no events", async () => {
-    jest.spyOn(client.server, "getEvents").mockResolvedValue(mockEventsResponse([]));
+    jest
+      .spyOn(client.server, "getEvents")
+      .mockResolvedValue(mockEventsResponse([]));
 
     const csv = await tax.exportTradeHistory(USER);
     expect(csv.split("\n")).toHaveLength(1);
   });
 
   it("returns empty JSON array when there are no events", async () => {
-    jest.spyOn(client.server, "getEvents").mockResolvedValue(mockEventsResponse([]));
+    jest
+      .spyOn(client.server, "getEvents")
+      .mockResolvedValue(mockEventsResponse([]));
 
     const json = await tax.exportTradeHistory(USER, { format: "json" });
     expect(JSON.parse(json)).toEqual([]);
+  });
+
+  // -------------------------------------------------------------------------
+  // EventCursor request structure verification
+  // -------------------------------------------------------------------------
+
+  it("passes startLedger to getEvents", async () => {
+    const getEventsSpy = jest
+      .spyOn(client.server, "getEvents")
+      .mockResolvedValue(mockEventsResponse([]));
+
+    await tax.exportTradeHistory(USER);
+
+    // getCurrentLedger returns 5000; DEFAULT_HISTORY_WINDOW = 17280; startLedger = max(0, 5000-17280) = 0
+    expect(getEventsSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ startLedger: 0 }),
+    );
+  });
+
+  it("swap cursor uses topic filter [['swap']]", async () => {
+    const getEventsSpy = jest
+      .spyOn(client.server, "getEvents")
+      .mockResolvedValue(mockEventsResponse([]));
+
+    await tax.exportTradeHistory(USER);
+
+    // At least one call should use "swap" as the first filter topic
+    const swapCall = getEventsSpy.mock.calls.find((args) => {
+      const req = args[0] as SorobanRpc.Server.GetEventsRequest;
+      return (req.filters?.[0]?.topics?.[0] as string[])?.[0] === "swap";
+    });
+    expect(swapCall).toBeDefined();
+  });
+
+  it("liquidity cursor sends add_liquidity and remove_liquidity in the same request", async () => {
+    const getEventsSpy = jest
+      .spyOn(client.server, "getEvents")
+      .mockResolvedValue(mockEventsResponse([]));
+
+    await tax.exportTradeHistory(USER);
+
+    // Find the call with the liquidity topics
+    const liqCall = getEventsSpy.mock.calls.find((args) => {
+      const req = args[0] as SorobanRpc.Server.GetEventsRequest;
+      const topicSet = new Set(
+        (req.filters ?? []).flatMap(
+          (f) => (f.topics?.[0] as string[] | undefined) ?? [],
+        ),
+      );
+      return topicSet.has("add_liquidity") || topicSet.has("remove_liquidity");
+    });
+    expect(liqCall).toBeDefined();
+
+    // Both add_liquidity and remove_liquidity should be in the same request
+    const req = liqCall![0] as SorobanRpc.Server.GetEventsRequest;
+    const allTopics = (req.filters ?? []).flatMap(
+      (f) => (f.topics?.[0] as string[] | undefined) ?? [],
+    );
+    expect(allTopics).toContain("add_liquidity");
+    expect(allTopics).toContain("remove_liquidity");
   });
 
   // -------------------------------------------------------------------------
@@ -385,5 +609,42 @@ describe("TaxReportingModule.exportTradeHistory()", () => {
     await expect(
       tax.exportTradeHistory("NOT_AN_ADDRESS"),
     ).rejects.toThrow();
+  });
+
+  // -------------------------------------------------------------------------
+  // Robustness: malformed events are skipped
+  // -------------------------------------------------------------------------
+
+  it("skips malformed swap events and returns valid ones", async () => {
+    const malformed = {
+      topic: ["swap"],
+      value: null,
+      txHash: "bad",
+      ledger: 1000,
+      ledgerClosedAt: new Date(1_700_000_000_000).toISOString(),
+    };
+
+    const valid = makeSwapEvent({
+      sender: USER,
+      tokenIn: TOKEN_A,
+      tokenOut: TOKEN_B,
+      amountIn: 1_000_000n,
+      amountOut: 900_000n,
+      feeBps: 30,
+      txHash: "goodhash",
+    });
+
+    jest
+      .spyOn(client.server, "getEvents")
+      .mockImplementation(
+        makeTopicRouter({
+          swapEvents: [malformed as unknown as Record<string, unknown>, valid],
+        }),
+      );
+
+    const json = await tax.exportTradeHistory(USER, { format: "json" });
+    const rows = JSON.parse(json) as TaxReportRow[];
+    expect(rows).toHaveLength(1);
+    expect(rows[0].txHash).toBe("goodhash");
   });
 });

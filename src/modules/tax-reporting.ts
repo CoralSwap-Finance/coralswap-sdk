@@ -1,7 +1,8 @@
 import { CoralSwapClient } from "@/client";
 import { fromSorobanAmount } from "@/utils/amounts";
 import { validateAddress } from "@/utils/validation";
-import { SorobanRpc } from "@stellar/stellar-sdk";
+import { EventCursor } from "@/utils/event-cursor";
+import { SwapEvent, LiquidityEvent } from "@/types/events";
 
 /**
  * Options for exporting trade history.
@@ -59,6 +60,10 @@ const DEFAULT_HISTORY_WINDOW = 17280; // ~1 day of ledgers
  * USD values are approximated at 0 when no price feed is available
  * (on-chain USD prices are not natively available on Soroban).
  *
+ * Event fetching is delegated to {@link EventCursor}, which encapsulates all
+ * `getEvents` request building and raw ScVal decoding — including the correct
+ * i128 unsigned-lo-word masking that prevents silent sign-extension bugs.
+ *
  * @example
  * const tax = new TaxReportingModule(client);
  * const csv = await tax.exportTradeHistory('G...', { format: 'csv', fromDate: new Date('2024-01-01') });
@@ -88,15 +93,14 @@ export class TaxReportingModule {
     const currentLedger = await this.client.getCurrentLedger();
     const startLedger = Math.max(0, currentLedger - DEFAULT_HISTORY_WINDOW);
 
-    const [swapEvents, liquidityEvents] = await Promise.all([
-      this.fetchSwapEvents(address, startLedger),
-      this.fetchLiquidityEvents(address, startLedger),
+    const [swapRows, liquidityRows] = await Promise.all([
+      this.fetchSwapRows(address, startLedger),
+      this.fetchLiquidityRows(address, startLedger),
     ]);
 
-    const rows: TaxReportRow[] = [
-      ...swapEvents,
-      ...liquidityEvents,
-    ].sort((a, b) => a.date.localeCompare(b.date));
+    const rows: TaxReportRow[] = [...swapRows, ...liquidityRows].sort((a, b) =>
+      a.date.localeCompare(b.date),
+    );
 
     const filtered = rows.filter((row) => {
       const d = new Date(row.date);
@@ -117,163 +121,93 @@ export class TaxReportingModule {
   }
 
   // ---------------------------------------------------------------------------
-  // Private helpers
+  // Private helpers — event fetching via EventCursor
   // ---------------------------------------------------------------------------
 
-  private async fetchSwapEvents(
+  private async fetchSwapRows(
     address: string,
     startLedger: number,
   ): Promise<TaxReportRow[]> {
-    const response = await this.fetchEvents(startLedger, ["swap"]);
+    const cursor = new EventCursor(this.client.server, {
+      startLedger,
+      topics: [["swap"]],
+    });
+
+    const events = await cursor.fetchAll();
     const rows: TaxReportRow[] = [];
 
-    for (const ev of response) {
-      const data = decodeMapEvent(ev.value);
-      if (!data) continue;
+    for (const ev of events) {
+      if (ev.type !== "swap") continue;
+      const swap = ev as SwapEvent;
 
-      const sender = readAddress(data, "sender");
-      if (sender && sender !== address) continue;
+      // Apply per-address filter
+      if (swap.sender && swap.sender !== address) continue;
 
-      const amountIn = readI128(data, "amount_in") ?? 0n;
-      const amountOut = readI128(data, "amount_out") ?? 0n;
-      const feeBps = readU32(data, "fee_bps") ?? 0;
-      const feeAmount = (amountIn * BigInt(feeBps)) / 10000n;
+      const feeAmount = (swap.amountIn * BigInt(swap.feeBps)) / 10000n;
 
       rows.push({
-        date: new Date(ev.ledgerClosedAt ?? 0).toISOString(),
+        date: ledgerClosedAtToIso(swap.timestamp),
         type: "swap",
-        tokenIn: readAddress(data, "token_in") ?? "",
-        amountIn: fromSorobanAmount(amountIn, TOKEN_DECIMALS),
-        tokenOut: readAddress(data, "token_out") ?? "",
-        amountOut: fromSorobanAmount(amountOut, TOKEN_DECIMALS),
+        tokenIn: swap.tokenIn,
+        amountIn: fromSorobanAmount(swap.amountIn, TOKEN_DECIMALS),
+        tokenOut: swap.tokenOut,
+        amountOut: fromSorobanAmount(swap.amountOut, TOKEN_DECIMALS),
         fee: fromSorobanAmount(feeAmount, TOKEN_DECIMALS),
         usdValue: "0.00",
-        txHash: ev.txHash ?? "",
+        txHash: swap.txHash,
       });
     }
 
     return rows;
   }
 
-  private async fetchLiquidityEvents(
+  private async fetchLiquidityRows(
     address: string,
     startLedger: number,
   ): Promise<TaxReportRow[]> {
-    const [addEvents, removeEvents] = await Promise.all([
-      this.fetchEvents(startLedger, ["add_liquidity"]),
-      this.fetchEvents(startLedger, ["remove_liquidity"]),
-    ]);
+    const cursor = new EventCursor(this.client.server, {
+      startLedger,
+      topics: [["add_liquidity"], ["remove_liquidity"]],
+    });
 
+    const events = await cursor.fetchAll();
     const rows: TaxReportRow[] = [];
 
-    for (const ev of [...addEvents, ...removeEvents]) {
-      const isAdd = (ev.topic?.[0] ?? "") === "add_liquidity";
-      const data = decodeMapEvent(ev.value);
-      if (!data) continue;
+    for (const ev of events) {
+      if (ev.type !== "add_liquidity" && ev.type !== "remove_liquidity")
+        continue;
+      const liq = ev as LiquidityEvent;
 
-      const provider = readAddress(data, "provider");
-      if (provider && provider !== address) continue;
-
-      const amountA = readI128(data, "amount_a") ?? 0n;
-      const amountB = readI128(data, "amount_b") ?? 0n;
-      const tokenA = readAddress(data, "token_a") ?? "";
-      const tokenB = readAddress(data, "token_b") ?? "";
+      // Apply per-address filter
+      if (liq.provider && liq.provider !== address) continue;
 
       rows.push({
-        date: new Date(ev.ledgerClosedAt ?? 0).toISOString(),
-        type: isAdd ? "add_liquidity" : "remove_liquidity",
-        tokenIn: tokenA,
-        amountIn: fromSorobanAmount(amountA, TOKEN_DECIMALS),
-        tokenOut: tokenB,
-        amountOut: fromSorobanAmount(amountB, TOKEN_DECIMALS),
+        date: ledgerClosedAtToIso(liq.timestamp),
+        type: liq.type,
+        tokenIn: liq.tokenA,
+        amountIn: fromSorobanAmount(liq.amountA, TOKEN_DECIMALS),
+        tokenOut: liq.tokenB,
+        amountOut: fromSorobanAmount(liq.amountB, TOKEN_DECIMALS),
         fee: "0.0000000",
         usdValue: "0.00",
-        txHash: ev.txHash ?? "",
+        txHash: liq.txHash,
       });
     }
 
     return rows;
   }
-
-  private async fetchEvents(
-    startLedger: number,
-    topics: string[],
-  ): Promise<RawEvent[]> {
-    const request: SorobanRpc.Server.GetEventsRequest = {
-      startLedger,
-      filters: [{ type: "contract", contractIds: [], topics: [topics] }],
-      limit: 200,
-    };
-
-    const response = await this.client.server.getEvents(request);
-    if (!response || !Array.isArray(response.events)) return [];
-    return response.events as unknown as RawEvent[];
-  }
 }
 
 // ---------------------------------------------------------------------------
-// Internal types & helpers
+// Module-private utilities
 // ---------------------------------------------------------------------------
 
-interface RawEvent {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  value: any;
-  topic?: string[];
-  txHash?: string;
-  ledgerClosedAt?: string | number;
-  ledger?: number;
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function decodeMapEvent(value: any): Map<string, any> | null {
-  const entries: unknown[] =
-    typeof value?.map === "function" ? value.map() : value?._value;
-  if (!Array.isArray(entries)) return null;
-
-  const map = new Map<string, unknown>();
-  for (const entry of entries as Array<{ key: unknown; val: unknown }>) {
-    const k = entry.key as Record<string, () => { toString(): string }>;
-    let key: string | undefined;
-    try {
-      key = k.sym?.().toString() ?? k.str?.().toString();
-    } catch { /* skip */ }
-    if (key) map.set(key, entry.val);
-  }
-  return map as Map<string, unknown>;
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function readAddress(map: Map<string, any>, key: string): string | undefined {
-  const val = map.get(key);
-  if (!val) return undefined;
-  try {
-    if (typeof val.address === "function") return val.address().toString();
-    if (typeof val._value?.toString === "function") return val._value.toString();
-  } catch { /* skip */ }
-  return undefined;
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function readI128(map: Map<string, any>, key: string): bigint | undefined {
-  const val = map.get(key);
-  if (!val) return undefined;
-  try {
-    if (typeof val.i128 === "function") {
-      const parts = val.i128();
-      return (BigInt(parts.hi().toString()) << 64n) + BigInt(parts.lo().toString());
-    }
-  } catch { /* skip */ }
-  return undefined;
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function readU32(map: Map<string, any>, key: string): number | undefined {
-  const val = map.get(key);
-  if (!val) return undefined;
-  try {
-    if (typeof val.u32 === "function") return val.u32();
-  } catch { /* skip */ }
-  return undefined;
+/**
+ * Convert a Unix timestamp (seconds) to an ISO-8601 date string.
+ * The EventCursor stores `timestamp` as seconds since epoch.
+ */
+function ledgerClosedAtToIso(timestampSeconds: number): string {
+  return new Date(timestampSeconds * 1000).toISOString();
 }
 
 function formatDate(date: Date, timezone: string): string {
