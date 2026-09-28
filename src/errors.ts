@@ -423,11 +423,33 @@ export class MissingPriceFeedError extends CoralSwapSDKError {
   }
 }
 
-/** A required network deployment or SDK provider has not been configured. */
+/**
+ * A required network deployment or SDK provider has not been configured.
+ *
+ * When the missing setting has a name (e.g. `factoryAddress`), pass it as
+ * `details.configKey`: it is mirrored on {@link configKey} so callers can
+ * branch on the class *and* on the key instead of matching message text.
+ * An optional `hint` is appended to the message, keeping the failure
+ * actionable — it should say which key, network or env variable to set.
+ */
 export class NotConfiguredError extends CoralSwapSDKError {
-  constructor(resource: string, details?: Record<string, unknown>) {
-    super("NOT_CONFIGURED", `${resource} is not configured`, { resource, ...details });
+  /** Missing configuration key (`details.configKey`), when one is known. */
+  readonly configKey?: string;
+
+  constructor(
+    resource: string,
+    details?: Record<string, unknown>,
+    hint?: string,
+  ) {
+    const configKey =
+      typeof details?.configKey === "string" ? details.configKey : undefined;
+    super(
+      "NOT_CONFIGURED",
+      hint ? `${resource} is not configured — ${hint}` : `${resource} is not configured`,
+      { resource, ...details },
+    );
     this.name = "NotConfiguredError";
+    this.configKey = configKey;
   }
 }
 
