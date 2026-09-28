@@ -372,6 +372,59 @@ describe("LiquidityModule", () => {
         expect(quote.estimatedLPTokens).toBeGreaterThan(0n);
       });
     });
+
+    // -- zod schema validation (issue #491) -------------------------------
+
+    describe("input validation via zod schemas", () => {
+      let module: LiquidityModule;
+
+      beforeEach(() => {
+        module = new LiquidityModule(createMockClient({ pairAddress: null }));
+      });
+
+      it("rejects an invalid tokenA address", async () => {
+        await expect(
+          module.getAddLiquidityQuote("invalid-address", TOKEN_B, 1000n),
+        ).rejects.toThrow("tokenA is not a valid Stellar address: invalid-address");
+      });
+
+      it("rejects an invalid tokenB address", async () => {
+        await expect(
+          module.getAddLiquidityQuote(TOKEN_A, "not-an-address", 1000n),
+        ).rejects.toThrow("tokenB is not a valid Stellar address: not-an-address");
+      });
+
+      it("rejects an empty tokenA address", async () => {
+        await expect(
+          module.getAddLiquidityQuote("", TOKEN_B, 1000n),
+        ).rejects.toThrow("tokenA must not be empty");
+      });
+
+      it("rejects identical tokens", async () => {
+        await expect(
+          module.getAddLiquidityQuote(TOKEN_A, TOKEN_A, 1000n),
+        ).rejects.toThrow("tokenIn and tokenOut must be different addresses");
+      });
+
+      it("rejects a zero amountADesired", async () => {
+        await expect(
+          module.getAddLiquidityQuote(TOKEN_A, TOKEN_B, 0n),
+        ).rejects.toThrow("amountADesired must be greater than 0, got 0");
+      });
+
+      it("rejects a negative amountADesired", async () => {
+        await expect(
+          module.getAddLiquidityQuote(TOKEN_A, TOKEN_B, -1n),
+        ).rejects.toThrow("amountADesired must be greater than 0, got -1");
+      });
+
+      it("accepts the smallest positive amount (boundary)", async () => {
+        const quote = await module.getAddLiquidityQuote(TOKEN_A, TOKEN_B, 1n);
+
+        expect(quote.amountA).toBe(1n);
+        expect(quote.amountB).toBe(1n);
+      });
+    });
   });
 
   // -----------------------------------------------------------------------
@@ -670,6 +723,146 @@ describe("LiquidityModule", () => {
         ValidationError,
       );
     });
+
+    // -- zod schema validation (issue #491) -------------------------------
+
+    describe("input validation via zod schemas", () => {
+      const baseRequest = () => ({
+        tokenA: TOKEN_A,
+        tokenB: TOKEN_B,
+        amountADesired: 1000n,
+        amountBDesired: 2000n,
+        amountAMin: 900n,
+        amountBMin: 1800n,
+        to: TO_ADDRESS,
+      });
+
+      const rejected: Array<[string, Record<string, unknown>, string]> = [
+        [
+          "an invalid tokenA address",
+          { tokenA: "invalid-address" },
+          "tokenA is not a valid Stellar address: invalid-address",
+        ],
+        [
+          "an invalid tokenB address",
+          { tokenB: "not-an-address" },
+          "tokenB is not a valid Stellar address: not-an-address",
+        ],
+        [
+          "an invalid recipient address",
+          { to: "nope" },
+          "to is not a valid Stellar address: nope",
+        ],
+        ["an empty tokenA", { tokenA: "" }, "tokenA must not be empty"],
+        [
+          "a whitespace-only tokenB",
+          { tokenB: "   " },
+          "tokenB must not be empty",
+        ],
+        [
+          "identical tokens",
+          { tokenB: TOKEN_A },
+          "tokenIn and tokenOut must be different addresses",
+        ],
+        [
+          "a zero amountADesired",
+          { amountADesired: 0n },
+          "amountADesired must be greater than 0, got 0",
+        ],
+        [
+          "a negative amountBDesired",
+          { amountBDesired: -1n },
+          "amountBDesired must be greater than 0, got -1",
+        ],
+        [
+          "a negative amountAMin",
+          { amountAMin: -1n },
+          "amountAMin must be non-negative, got -1",
+        ],
+        [
+          "a negative amountBMin",
+          { amountBMin: -1n },
+          "amountBMin must be non-negative, got -1",
+        ],
+        [
+          "amountAMin above amountADesired",
+          { amountAMin: 1001n },
+          "amountAMin must not exceed amountADesired",
+        ],
+        [
+          "amountBMin above amountBDesired",
+          { amountBMin: 2001n },
+          "amountBMin must not exceed amountBDesired",
+        ],
+        [
+          "a non-bigint amountADesired",
+          { amountADesired: 1000 },
+          "amountADesired",
+        ],
+      ];
+
+      it.each(rejected)(
+        "rejects %s",
+        async (_label, patch, message) => {
+          await expect(
+            module.addLiquidity({ ...baseRequest(), ...patch } as any),
+          ).rejects.toThrow(ValidationError);
+          await expect(
+            module.addLiquidity({ ...baseRequest(), ...patch } as any),
+          ).rejects.toThrow(message);
+        },
+      );
+
+      it("rejects an invalid request before building the operation", async () => {
+        await expect(
+          module.addLiquidity({ ...baseRequest(), amountAMin: 5000n } as any),
+        ).rejects.toThrow(ValidationError);
+
+        expect(mockRouter.buildAddLiquidity).not.toHaveBeenCalled();
+      });
+
+      it("accepts minimums equal to the desired amounts (slippage boundary)", async () => {
+        await module.addLiquidity({
+          ...baseRequest(),
+          amountAMin: 1000n,
+          amountBMin: 2000n,
+        });
+
+        expect(mockRouter.buildAddLiquidity).toHaveBeenCalledWith(
+          TO_ADDRESS,
+          TOKEN_A,
+          TOKEN_B,
+          1000n,
+          2000n,
+          1000n,
+          2000n,
+          1234567890,
+        );
+      });
+
+      it("accepts zero minimums and the smallest positive amounts (boundary)", async () => {
+        await module.addLiquidity({
+          tokenA: TOKEN_A,
+          tokenB: TOKEN_B,
+          amountADesired: 1n,
+          amountBDesired: 1n,
+          amountAMin: 0n,
+          amountBMin: 0n,
+          to: TO_ADDRESS,
+        });
+
+        expect(mockRouter.buildAddLiquidity).toHaveBeenCalledWith(
+          TO_ADDRESS,
+          TOKEN_A,
+          TOKEN_B,
+          1n,
+          1n,
+          0n,
+          0n,
+          1234567890,
+        );
+      });
+    });
   });
 
   // -----------------------------------------------------------------------
@@ -851,6 +1044,114 @@ describe("LiquidityModule", () => {
       await expect(module.removeLiquidity(request)).rejects.toThrow(
         ValidationError,
       );
+    });
+
+    // -- zod schema validation (issue #491) -------------------------------
+
+    describe("input validation via zod schemas", () => {
+      const baseRequest = () => ({
+        tokenA: TOKEN_A,
+        tokenB: TOKEN_B,
+        liquidity: 500n,
+        amountAMin: 400n,
+        amountBMin: 800n,
+        to: TO_ADDRESS,
+      });
+
+      const rejected: Array<[string, Record<string, unknown>, string]> = [
+        [
+          "an invalid tokenA address",
+          { tokenA: "invalid-address" },
+          "tokenA is not a valid Stellar address: invalid-address",
+        ],
+        [
+          "an invalid tokenB address",
+          { tokenB: "not-an-address" },
+          "tokenB is not a valid Stellar address: not-an-address",
+        ],
+        [
+          "an invalid recipient address",
+          { to: "nope" },
+          "to is not a valid Stellar address: nope",
+        ],
+        ["an empty tokenA", { tokenA: "" }, "tokenA must not be empty"],
+        [
+          "a whitespace-only tokenB",
+          { tokenB: "   " },
+          "tokenB must not be empty",
+        ],
+        [
+          "identical tokens",
+          { tokenB: TOKEN_A },
+          "tokenIn and tokenOut must be different addresses",
+        ],
+        [
+          "a zero liquidity amount",
+          { liquidity: 0n },
+          "liquidity must be greater than 0, got 0",
+        ],
+        [
+          "a negative liquidity amount",
+          { liquidity: -1n },
+          "liquidity must be greater than 0, got -1",
+        ],
+        [
+          "a negative amountAMin",
+          { amountAMin: -1n },
+          "amountAMin must be non-negative, got -1",
+        ],
+        [
+          "a negative amountBMin",
+          { amountBMin: -1n },
+          "amountBMin must be non-negative, got -1",
+        ],
+        [
+          "a non-bigint liquidity amount",
+          { liquidity: "500" },
+          "liquidity",
+        ],
+      ];
+
+      it.each(rejected)(
+        "rejects %s",
+        async (_label, patch, message) => {
+          await expect(
+            module.removeLiquidity({ ...baseRequest(), ...patch } as any),
+          ).rejects.toThrow(ValidationError);
+          await expect(
+            module.removeLiquidity({ ...baseRequest(), ...patch } as any),
+          ).rejects.toThrow(message);
+        },
+      );
+
+      it("rejects an invalid request before building the operation", async () => {
+        await expect(
+          module.removeLiquidity({ ...baseRequest(), liquidity: 0n } as any),
+        ).rejects.toThrow(ValidationError);
+
+        expect(mockRouter.buildRemoveLiquidity).not.toHaveBeenCalled();
+      });
+
+      it("accepts zero minimums with the smallest positive liquidity (boundary)", async () => {
+        await module.removeLiquidity({
+          tokenA: TOKEN_A,
+          tokenB: TOKEN_B,
+          liquidity: 1n,
+          amountAMin: 0n,
+          amountBMin: 0n,
+          to: TO_ADDRESS,
+        });
+
+        expect(mockRouter.buildRemoveLiquidity).toHaveBeenCalledWith(
+          TO_ADDRESS,
+          TOKEN_A,
+          TOKEN_B,
+          1n,
+          0n,
+          0n,
+          1234567890,
+        );
+      });
     });
   });
 

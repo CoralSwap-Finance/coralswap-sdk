@@ -1,3 +1,5 @@
+import { z } from "zod";
+import { xdr } from "@stellar/stellar-sdk";
 import { CoralSwapClient } from "@/client";
 import {
   AddLiquidityRequest,
@@ -9,13 +11,152 @@ import { LPPosition } from "@/types/pool";
 import { GasEstimate } from "@/types/gas";
 import { PRECISION } from "@/config";
 import { TransactionError, ValidationError } from "@/errors";
-import {
-  validateAddress,
-  validatePositiveAmount,
-  validateNonNegativeAmount,
-  validateDistinctTokens,
-} from "@/utils/validation";
+import { isValidAddress } from "@/utils/addresses";
+import { validateWithSchema } from "@/schemas";
 import { estimateGas } from "@/utils/gas";
+
+// ---------------------------------------------------------------------------
+// Input schemas
+//
+// Declarative equivalents of the hand-written guards that used to live in this
+// module (`validateAddress`, `validatePositiveAmount`,
+// `validateNonNegativeAmount`, `validateDistinctTokens`). Every rule and every
+// error message text is carried over verbatim; the shared
+// {@link validateWithSchema} helper turns schema failures into the SDK's own
+// {@link ValidationError}. See `src/schemas/index.ts` for the convention.
+// ---------------------------------------------------------------------------
+
+/**
+ * A Stellar account (G...) or contract (C...) address.
+ *
+ * Mirrors `validateAddress()`: an empty/whitespace-only value reports
+ * "must not be empty", anything else that is not decodable as an address
+ * reports "is not a valid Stellar address: <value>".
+ */
+function addressSchema(name: string) {
+  return z.string().superRefine((value, ctx) => {
+    if (value.trim().length === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `${name} must not be empty`,
+      });
+      return;
+    }
+
+    if (!isValidAddress(value)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `${name} is not a valid Stellar address: ${value}`,
+      });
+    }
+  });
+}
+
+/**
+ * A strictly positive bigint amount (mirrors `validatePositiveAmount()`).
+ */
+function positiveAmountSchema(name: string) {
+  return z.bigint().superRefine((value, ctx) => {
+    if (value <= 0n) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `${name} must be greater than 0, got ${value}`,
+      });
+    }
+  });
+}
+
+/**
+ * A non-negative bigint amount (mirrors `validateNonNegativeAmount()`).
+ */
+function nonNegativeAmountSchema(name: string) {
+  return z.bigint().superRefine((value, ctx) => {
+    if (value < 0n) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `${name} must be non-negative, got ${value}`,
+      });
+    }
+  });
+}
+
+/**
+ * Cross-field rule mirroring `validateDistinctTokens()`: the two tokens of a
+ * pool must differ.
+ */
+const distinctTokensIssue = (value: { tokenA: string; tokenB: string }) =>
+  value.tokenA === value.tokenB
+    ? {
+        code: z.ZodIssueCode.custom,
+        path: ["tokenB"],
+        message: "tokenIn and tokenOut must be different addresses",
+      }
+    : null;
+
+/** Parameters of `LiquidityModule.getAddLiquidityQuote()`. */
+const AddLiquidityQuoteParamsSchema = z
+  .object({
+    tokenA: addressSchema("tokenA"),
+    tokenB: addressSchema("tokenB"),
+    amountADesired: positiveAmountSchema("amountADesired"),
+  })
+  .superRefine((value, ctx) => {
+    const issue = distinctTokensIssue(value);
+    if (issue) ctx.addIssue(issue);
+  });
+
+/** Parameters of `LiquidityModule.addLiquidity()` / `buildAddLiquidityOperation()`. */
+const AddLiquidityRequestSchema = z
+  .object({
+    tokenA: addressSchema("tokenA"),
+    tokenB: addressSchema("tokenB"),
+    to: addressSchema("to"),
+    amountADesired: positiveAmountSchema("amountADesired"),
+    amountBDesired: positiveAmountSchema("amountBDesired"),
+    amountAMin: nonNegativeAmountSchema("amountAMin"),
+    amountBMin: nonNegativeAmountSchema("amountBMin"),
+    deadline: z.number().optional(),
+  })
+  .superRefine((value, ctx) => {
+    // Slippage protection: the minimum acceptable amount can never exceed the
+    // desired amount, but equality (100% tolerance) is allowed.
+    if (value.amountAMin > value.amountADesired) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["amountAMin"],
+        message: "amountAMin must not exceed amountADesired",
+      });
+    }
+
+    if (value.amountBMin > value.amountBDesired) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["amountBMin"],
+        message: "amountBMin must not exceed amountBDesired",
+      });
+    }
+  })
+  .superRefine((value, ctx) => {
+    const issue = distinctTokensIssue(value);
+    if (issue) ctx.addIssue(issue);
+  });
+
+/** Parameters of `LiquidityModule.removeLiquidity()` / `buildRemoveLiquidityOperation()`. */
+const RemoveLiquidityRequestSchema = z
+  .object({
+    tokenA: addressSchema("tokenA"),
+    tokenB: addressSchema("tokenB"),
+    to: addressSchema("to"),
+    liquidity: positiveAmountSchema("liquidity"),
+    amountAMin: nonNegativeAmountSchema("amountAMin"),
+    amountBMin: nonNegativeAmountSchema("amountBMin"),
+    deadline: z.number().optional(),
+  })
+  .superRefine((value, ctx) => {
+    const issue = distinctTokensIssue(value);
+    if (issue) ctx.addIssue(issue);
+  });
+
 
 /**
  * Liquidity module -- manages LP positions in CoralSwap pools.
@@ -46,10 +187,11 @@ export class LiquidityModule {
     tokenB: string,
     amountADesired: bigint,
   ): Promise<AddLiquidityQuote> {
-    validateAddress(tokenA, "tokenA");
-    validateAddress(tokenB, "tokenB");
-    validateDistinctTokens(tokenA, tokenB);
-    validatePositiveAmount(amountADesired, "amountADesired");
+    validateWithSchema(
+      AddLiquidityQuoteParamsSchema,
+      { tokenA, tokenB, amountADesired },
+      "getAddLiquidityQuote parameters",
+    );
 
     const pairAddress = await this.client.getPairAddress(tokenA, tokenB);
 
@@ -114,42 +256,38 @@ export class LiquidityModule {
    * const result = await client.liquidity.addLiquidity({ tokenA: 'C...', ... });
    * const gas = await client.liquidity.addLiquidity({ tokenA: 'C...', ... }, { estimateOnly: true });
    */
+  buildAddLiquidityOperation(request: AddLiquidityRequest): xdr.Operation {
+    const {
+      to,
+      tokenA,
+      tokenB,
+      amountADesired,
+      amountBDesired,
+      amountAMin,
+      amountBMin,
+      deadline,
+    } = validateWithSchema(
+      AddLiquidityRequestSchema,
+      request,
+      "add liquidity request",
+    );
+
+    return this.client.router.buildAddLiquidity(
+      to,
+      tokenA,
+      tokenB,
+      amountADesired,
+      amountBDesired,
+      amountAMin,
+      amountBMin,
+      deadline ?? this.client.getDeadline(),
+    );
+  }
+
   async addLiquidity(request: AddLiquidityRequest, options: { estimateOnly: true }): Promise<GasEstimate>;
   async addLiquidity(request: AddLiquidityRequest, options?: { estimateOnly?: false }): Promise<LiquidityResult>;
   async addLiquidity(request: AddLiquidityRequest, options?: { estimateOnly?: boolean }): Promise<LiquidityResult | GasEstimate> {
-    validateAddress(request.tokenA, "tokenA");
-    validateAddress(request.tokenB, "tokenB");
-    validateDistinctTokens(request.tokenA, request.tokenB);
-    validateAddress(request.to, "to");
-    validatePositiveAmount(request.amountADesired, "amountADesired");
-    validatePositiveAmount(request.amountBDesired, "amountBDesired");
-    validateNonNegativeAmount(request.amountAMin, "amountAMin");
-    validateNonNegativeAmount(request.amountBMin, "amountBMin");
-    if (request.amountAMin > request.amountADesired) {
-      throw new ValidationError("amountAMin must not exceed amountADesired", {
-        amountAMin: request.amountAMin.toString(),
-        amountADesired: request.amountADesired.toString(),
-      });
-    }
-    if (request.amountBMin > request.amountBDesired) {
-      throw new ValidationError("amountBMin must not exceed amountBDesired", {
-        amountBMin: request.amountBMin.toString(),
-        amountBDesired: request.amountBDesired.toString(),
-      });
-    }
-
-    const deadline = request.deadline ?? this.client.getDeadline();
-
-    const op = this.client.router.buildAddLiquidity(
-      request.to,
-      request.tokenA,
-      request.tokenB,
-      request.amountADesired,
-      request.amountBDesired,
-      request.amountAMin,
-      request.amountBMin,
-      deadline,
-    );
+    const op = this.buildAddLiquidityOperation(request);
 
     if (options?.estimateOnly) {
       return estimateGas((ops) => this.client.simulateTransaction(ops, {}), [op]);
@@ -187,31 +325,39 @@ export class LiquidityModule {
    * const result = await client.liquidity.removeLiquidity({ tokenA: 'C...', ... });
    * const gas = await client.liquidity.removeLiquidity({ tokenA: 'C...', ... }, { estimateOnly: true });
    */
+  buildRemoveLiquidityOperation(request: RemoveLiquidityRequest): xdr.Operation {
+    const {
+      to,
+      tokenA,
+      tokenB,
+      liquidity,
+      amountAMin,
+      amountBMin,
+      deadline,
+    } = validateWithSchema(
+      RemoveLiquidityRequestSchema,
+      request,
+      "remove liquidity request",
+    );
+
+    return this.client.router.buildRemoveLiquidity(
+      to,
+      tokenA,
+      tokenB,
+      liquidity,
+      amountAMin,
+      amountBMin,
+      deadline ?? this.client.getDeadline(),
+    );
+  }
+
   async removeLiquidity(request: RemoveLiquidityRequest, options: { estimateOnly: true }): Promise<GasEstimate>;
   async removeLiquidity(request: RemoveLiquidityRequest, options?: { estimateOnly?: false }): Promise<LiquidityResult>;
   async removeLiquidity(
     request: RemoveLiquidityRequest,
     options?: { estimateOnly?: boolean },
   ): Promise<LiquidityResult | GasEstimate> {
-    validateAddress(request.tokenA, "tokenA");
-    validateAddress(request.tokenB, "tokenB");
-    validateDistinctTokens(request.tokenA, request.tokenB);
-    validateAddress(request.to, "to");
-    validatePositiveAmount(request.liquidity, "liquidity");
-    validateNonNegativeAmount(request.amountAMin, "amountAMin");
-    validateNonNegativeAmount(request.amountBMin, "amountBMin");
-
-    const deadline = request.deadline ?? this.client.getDeadline();
-
-    const op = this.client.router.buildRemoveLiquidity(
-      request.to,
-      request.tokenA,
-      request.tokenB,
-      request.liquidity,
-      request.amountAMin,
-      request.amountBMin,
-      deadline,
-    );
+    const op = this.buildRemoveLiquidityOperation(request);
 
     if (options?.estimateOnly) {
       return estimateGas((ops) => this.client.simulateTransaction(ops, {}), [op]);

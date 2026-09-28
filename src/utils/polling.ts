@@ -1,4 +1,4 @@
-import { SorobanRpc } from '@stellar/stellar-sdk';
+import { rpc } from '@stellar/stellar-sdk';
 import { Result, Logger } from '../types/common';
 
 /**
@@ -25,16 +25,22 @@ export interface PollingOptions {
     backoffFactor?: number;
     /** Maximum delay between polls in milliseconds. Defaults to 10000. */
     maxInterval?: number;
+    /**
+     * Optional signal to cancel polling. Checked before each attempt and
+     * interrupts the delay between attempts early -- it does not abort an
+     * in-flight `getTransaction` RPC call.
+     */
+    signal?: AbortSignal;
 }
 
 /**
  * Robust utility for polling Soroban transaction status with customizable strategies.
  */
 export class TransactionPoller {
-    private server: SorobanRpc.Server;
+    private server: rpc.Server;
     private logger?: Logger;
 
-    constructor(server: SorobanRpc.Server, logger?: Logger) {
+    constructor(server: rpc.Server, logger?: Logger) {
         this.server = server;
         this.logger = logger;
     }
@@ -55,10 +61,15 @@ export class TransactionPoller {
         const maxAttempts = options.maxAttempts ?? 30;
         const backoffFactor = options.backoffFactor ?? 2;
         const maxInterval = options.maxInterval ?? 10000;
+        const signal = options.signal;
 
         let currentInterval = initialInterval;
 
         for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+            if (signal?.aborted) {
+                return this.abortedResult(txHash, attempt);
+            }
+
             this.logger?.debug('TransactionPoller: polling attempt', {
                 txHash,
                 attempt,
@@ -87,6 +98,12 @@ export class TransactionPoller {
                 if (status.status === 'FAILED') {
                     this.logger?.error('TransactionPoller: transaction failed on-chain', {
                         txHash,
+                        ledger: status.ledger,
+                        createdAt: status.createdAt,
+                        applicationOrder: status.applicationOrder,
+                    });
+                    this.logger?.debug('TransactionPoller: full failed status', {
+                        txHash,
                         status,
                     });
                     return {
@@ -94,7 +111,12 @@ export class TransactionPoller {
                         error: {
                             code: 'TX_FAILED',
                             message: 'Transaction failed on-chain',
-                            details: { status },
+                            details: {
+                                txHash,
+                                ledger: status.ledger,
+                                createdAt: status.createdAt,
+                                applicationOrder: status.applicationOrder,
+                            },
                         },
                         txHash,
                     };
@@ -111,7 +133,10 @@ export class TransactionPoller {
             }
 
             if (attempt < maxAttempts) {
-                await new Promise((resolve) => setTimeout(resolve, currentInterval));
+                const aborted = await this.delay(currentInterval, signal);
+                if (aborted) {
+                    return this.abortedResult(txHash, attempt);
+                }
 
                 // Update interval based on strategy
                 if (strategy === PollingStrategy.EXPONENTIAL) {
@@ -131,6 +156,53 @@ export class TransactionPoller {
                 code: 'TX_TIMEOUT',
                 message: `Transaction confirmation timed out after ${maxAttempts} attempts`,
                 details: { txHash, maxAttempts, strategy },
+            },
+            txHash,
+        };
+    }
+
+    /**
+     * Wait `ms` milliseconds, or resolve early (with `true`) if `signal`
+     * fires an `abort` event first. Resolves immediately with `true` if
+     * `signal` is already aborted.
+     * @private
+     */
+    private delay(ms: number, signal?: AbortSignal): Promise<boolean> {
+        return new Promise((resolve) => {
+            if (signal?.aborted) {
+                resolve(true);
+                return;
+            }
+
+            const onAbort = () => {
+                clearTimeout(timer);
+                resolve(true);
+            };
+
+            const timer = setTimeout(() => {
+                signal?.removeEventListener('abort', onAbort);
+                resolve(false);
+            }, ms);
+
+            signal?.addEventListener('abort', onAbort, { once: true });
+        });
+    }
+
+    /**
+     * Build the Result returned when polling is cancelled via `signal`.
+     * @private
+     */
+    private abortedResult(
+        txHash: string,
+        attempt: number,
+    ): Result<{ txHash: string; ledger: number }> {
+        this.logger?.info('TransactionPoller: aborted', { txHash, attempt });
+        return {
+            success: false,
+            error: {
+                code: 'ABORTED',
+                message: 'Transaction polling was aborted',
+                details: { txHash, attempt },
             },
             txHash,
         };

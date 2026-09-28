@@ -1,9 +1,10 @@
-import { SorobanRpc } from '@stellar/stellar-sdk';
+import { rpc as SorobanRpc } from '@stellar/stellar-sdk';
 import {
   exceedsBudget,
   getResourceEstimate,
   getSimulationReturnValue,
   isSimulationSuccess,
+  decodeDiagnosticEvents,
 } from '../src/utils/simulation';
 
 type SimResponse = SorobanRpc.Api.SimulateTransactionResponse;
@@ -78,11 +79,16 @@ describe('Simulation Utilities', () => {
     simulationSuccessSpy.mockReturnValue(true);
 
     const sim = {
-      cost: {
-        cpuInsns: '12345',
-        memBytes: '67890',
+      transactionData: {
+        build: () => ({
+          resources: {
+            instructions: 12345,
+            diskReadBytes: 0,
+            writeBytes: 0,
+          },
+        }),
       },
-    } as SimResponse;
+    } as unknown as SimResponse;
 
     const result = getResourceEstimate(sim);
 
@@ -90,7 +96,7 @@ describe('Simulation Utilities', () => {
       success: true,
       data: {
         cpuInstructions: 12345,
-        memoryBytes: 67890,
+        memoryBytes: 0,
         readBytes: 0,
         writeBytes: 0,
       },
@@ -113,11 +119,16 @@ describe('Simulation Utilities', () => {
     simulationSuccessSpy.mockReturnValue(true);
 
     const sim = {
-      cost: {
-        cpuInsns: '200000000',
-        memBytes: '500',
+      transactionData: {
+        build: () => ({
+          resources: {
+            instructions: 200_000_000,
+            diskReadBytes: 0,
+            writeBytes: 500,
+          },
+        }),
       },
-    } as SimResponse;
+    } as unknown as SimResponse;
 
     const result = exceedsBudget(sim, 100_000_000);
 
@@ -137,5 +148,16 @@ describe('Simulation Utilities', () => {
       data: true,
       error: 'Simulation failed',
     });
+  });
+
+  it('decodes diagnostic events from both raw strings and SDK object values', () => {
+    const eventLike = { toXdr: () => 'AQAAAA==' } as any;
+    const base64Event = 'AQAAAA==' as const;
+
+    const decoded = decodeDiagnosticEvents([base64Event, eventLike]);
+
+    expect(decoded).toHaveLength(2);
+    expect(decoded[0].xdr).toBe(base64Event);
+    expect(decoded[1].decoded).toBe(eventLike);
   });
 });

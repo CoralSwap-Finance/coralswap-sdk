@@ -1,6 +1,7 @@
-import { TokenListModule } from '../src/modules/tokens';
+import { TokenListModule, ApproveOperation } from '../src/modules/tokens';
 import { Network } from '../src/types/common';
 import { ValidationError, NetworkError } from '../src/errors';
+import { xdr } from '@stellar/stellar-sdk';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -288,6 +289,60 @@ describe('TokenListModule', () => {
 
       const list = await mod.fetchAll('https://example.com/tokens.json');
       expect(list.tokens).toHaveLength(3);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // buildApprove()
+  // -------------------------------------------------------------------------
+
+  describe('buildApprove', () => {
+    const TOKEN_ADDR = 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC';
+    const SPENDER_ADDR = 'CBQHNAXSI55GX2GN6D67GK7BHVPSLJUGZQEU7WJ5LKR5PNUCGLIMAO4K';
+
+    it('builds a scoped approve operation with the exact amount', () => {
+      const result = mod.buildApprove(TOKEN_ADDR, SPENDER_ADDR, 1000_000_000n, 123456);
+
+      expect(result).toBeDefined();
+      expect(result.tokenAddress).toBe(TOKEN_ADDR);
+      expect(result.spender).toBe(SPENDER_ADDR);
+      expect(result.amount).toBe(1000_000_000n);
+      expect(result.expirationLedger).toBe(123456);
+      expect(result.op).toBeInstanceOf(xdr.Operation);
+    });
+
+    it('defaults expirationLedger to 0', () => {
+      const result = mod.buildApprove(TOKEN_ADDR, SPENDER_ADDR, 500n);
+      expect(result.expirationLedger).toBe(0);
+    });
+
+    it('accepts zero amount (valid for revoking approval)', () => {
+      const result = mod.buildApprove(TOKEN_ADDR, SPENDER_ADDR, 0n, 100);
+      expect(result.amount).toBe(0n);
+    });
+
+    it('throws ValidationError for invalid token address', () => {
+      expect(() => mod.buildApprove('invalid', SPENDER_ADDR, 100n, 100)).toThrow(ValidationError);
+    });
+
+    it('throws ValidationError for invalid spender address', () => {
+      expect(() => mod.buildApprove(TOKEN_ADDR, 'bad', 100n, 100)).toThrow(ValidationError);
+    });
+
+    it('throws ValidationError for negative amount', () => {
+      expect(() => mod.buildApprove(TOKEN_ADDR, SPENDER_ADDR, -1n, 100)).toThrow(ValidationError);
+    });
+
+    it('throws ValidationError for negative expirationLedger', () => {
+      expect(() => mod.buildApprove(TOKEN_ADDR, SPENDER_ADDR, 100n, -1)).toThrow(ValidationError);
+    });
+
+    it('does NOT default to an unlimited/max value', () => {
+      const result = mod.buildApprove(TOKEN_ADDR, SPENDER_ADDR, 500n, 100);
+      // The amount must be the exact scoped value, not a max uint128 or similar
+      expect(result.amount).toBe(500n);
+      expect(result.amount).not.toBe(2n ** 127n - 1n);
+      expect(result.amount).not.toBe(2n ** 128n - 1n);
     });
   });
 });
