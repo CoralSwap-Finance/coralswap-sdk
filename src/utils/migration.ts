@@ -239,10 +239,17 @@ export async function checkCompatibility(
     };
   }
 
-  // Downgrade — warn but treat as potentially incompatible
+  // Downgrade — warn but treat as potentially incompatible.
+  // Covers major downgrade, minor downgrade, and same-minor patch downgrade
+  // (e.g. 1.2.3 → 1.2.1).  The patch-bump guard above already handled the
+  // forward case, so any remaining same-major/same-minor pair must be a
+  // patch downgrade.
   if (
     target.major < current.major ||
-    (target.major === current.major && target.minor < current.minor)
+    (target.major === current.major && target.minor < current.minor) ||
+    (target.major === current.major &&
+      target.minor === current.minor &&
+      target.patch < current.patch)
   ) {
     return {
       isCompatible: false,
