@@ -17,7 +17,7 @@ const LEDGERS_PER_30_DAYS = 518_400; // 30 days × 86 400 s/day ÷ 5 s/ledger
 const MAX_REVENUE_EVENTS = 10_000;
 
 /**
- * Options for constructing a TreasuryModule.
+ * Options for constructing a TreasuryModule (and its subclass LeaderboardModule).
  */
 export interface TreasuryModuleOptions {
   /**
@@ -26,6 +26,24 @@ export interface TreasuryModuleOptions {
    * Without at least one stable address, all valueUSD fields default to 0.
    */
   stableAddresses?: string[];
+
+  /**
+   * Maximum number of token addresses to keep in the LRU decimals cache
+   * used by {@link LeaderboardModule}.
+   *
+   * Defaults to `512`. Lower values reduce peak memory usage at the cost of
+   * more on-chain metadata fetches on very large scans.
+   */
+  decimalsCacheCapacity?: number;
+
+  /**
+   * Per-entry TTL (milliseconds) for the LRU decimals cache.
+   *
+   * When set, a cached decimal count is considered stale after this duration
+   * and the next call triggers a fresh on-chain fetch.  Defaults to `0`
+   * (TTL disabled — entries live until evicted by LRU capacity pressure).
+   */
+  decimalsCacheTtlMs?: number;
 }
 
 /**

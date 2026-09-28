@@ -137,6 +137,13 @@ export {
   SCALE,
 } from './scale-constants';
 
+export {
+  DecimalsResolver,
+  DEFAULT_DECIMALS_CACHE_CAPACITY,
+  TTL_DISABLED,
+} from './decimals-resolver';
+export type { DecimalsResolverOptions } from './decimals-resolver';
+
 /**
  * Idempotent-resubmission helpers for state-changing on-chain calls.
  *
