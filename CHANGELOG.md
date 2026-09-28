@@ -22,6 +22,7 @@
 - `getLPYield()` reports `decimals` — the per-token precision used to value both pool reserves
 - Shared `getTokenDecimals(client, address)` util (SEP-41 `decimals()` with a per-address cache and a 7-decimal fallback), extracted from the leaderboard module where it was private
 - Acceptance coverage for undeployed-network access: `client.factory` / `client.router` on MAINNET and STAGING pinned for the `NotConfiguredError` class, the `NOT_CONFIGURED` code, `details.configKey`, the network and the actionable message, plus `NotConfiguredError` unit tests for the hint and the `configKey` mirror
+- Zod schemas for position entries (`EnrichedLPPositionSchema`, `PositionMathSchema`, `PositionSummarySchema`, exported from `@/schemas`) with a malformed/valid fixture suite (`tests/positions-schema.test.ts`): missing or empty fields, wrong primitive types, `NaN`/infinite/out-of-range `share`, fractional/negative/out-of-ceiling `feeBps`, non-bigint stroops, and summary-level failures — each pinned to a `ValidationError` naming the offending field
 
 ### Changed
 - Governance module validates `createProposal` and `castVote` inputs with zod schemas (`CreateProposalInputSchema`, `CastVoteInputSchema`), replacing the hand-written guards while keeping `ValidationError` as the thrown type (#488)
@@ -36,6 +37,7 @@
 - Monitoring aggregation derives its figures instead of reporting placeholder zeros: `getPoolHealth()` / `getAllPoolHealth()` and `getProtocolSummary()` read TVL from live reserves (spot-priced through the factory pair map) and 24h volume/fees from the trailing-24h `swap` event stream, and the dashboard's `volume24hUSD` / `fees24hUSD` go through the same derivation. `PoolHealth` documents the derivation, and `getAllPoolHealth()` builds the price map once for all pools
 - `FeeModule.getFeeRevenue()` computes each fee in BigInt stroops (`amountIn * feeBps / 10000`) and divides by the input token's on-chain `decimals()` instead of a hardcoded `1e7`; the swap stream is read through the shared `TypedEventCursor`, which base64-encodes the `swap` topic and follows page cursors, and `limit` now caps the swaps aggregated (default 200) rather than one RPC page — a non-positive `limit` throws a `ValidationError`
 - `getLPYield()` values `reserve0` / `reserve1` with each pool token's own decimals and keeps the fee share derived from the stroop-exact revenue above
+- `PositionsModule.getPosition()` validates its BigInt math operands and the assembled entry before returning, and `getPositions()` validates the final summary, so a malformed chain read fails as a `ValidationError` naming the field instead of a raw `TypeError` (mixing a `number` into `reserve0 * balance`) or a silently wrong-shaped object. A `ValidationError` from one pool is no longer swallowed by `Promise.allSettled`; transient per-pair RPC failures are still skipped
 
 ### Fixed
 - Tax reporting computes cost basis, disposals and gains in stroops with BigInt arithmetic instead of `parseFloat` rounding; partial lot consumption keeps the remaining lot's cost, and holding-period gains use real proceeds and cost instead of a zero placeholder (#659)
