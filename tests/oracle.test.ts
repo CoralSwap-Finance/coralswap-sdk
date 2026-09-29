@@ -633,5 +633,90 @@ describe('OracleModule', () => {
       // Deviation should be significant (around 100% = 10000 bps)
       expect(result!.price0DeviationBps).toBeGreaterThanOrEqual(5000);
     });
+
+    it('reports unavailability instead of zero deviation when the reference TWAP is zero', async () => {
+      const pairAddress = 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC';
+
+      // price0CumulativeLast never advances across the window, so the price0
+      // reference TWAP is 0n. This used to short-circuit to 0 bps, which a
+      // consumer cannot tell apart from the oracle and spot agreeing exactly.
+      const reserve0 = 1000000000n;
+      const reserve1 = 2000000000n;
+
+      let callCount = 0;
+      const responses = [
+        {
+          price0CumulativeLast: 0n,
+          price1CumulativeLast: 0n,
+          blockTimestampLast: 10000,
+        },
+        {
+          // price0 stays flat; price1 advances so the two sides differ
+          price0CumulativeLast: 0n,
+          price1CumulativeLast: ((reserve1 * PRECISION.PRICE_SCALE) / reserve0) * BigInt(MIN_TWAP_WINDOW_SECONDS),
+          blockTimestampLast: 10000 + MIN_TWAP_WINDOW_SECONDS,
+        },
+      ];
+
+      const client = mockClient({
+        getCumulativePrices: jest.fn().mockImplementation(() => {
+          return Promise.resolve(responses[callCount++]);
+        }),
+        getReserves: jest.fn().mockResolvedValue({ reserve0, reserve1 }),
+      });
+
+      const oracle = new OracleModule(client);
+
+      await oracle.observe(pairAddress);
+      const result = await oracle.getPriceDeviation(pairAddress);
+
+      expect(result).not.toBeNull();
+      expect(result!.twapPrice0).toBe(0n);
+      expect(result!.price0DeviationBps).toBeNull();
+      // The other side had a usable reference and must still report a number.
+      expect(typeof result!.price1DeviationBps).toBe('number');
+    });
+
+    it('reports unavailability for both directions when both reference TWAPs are zero', async () => {
+      const pairAddress = 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC';
+
+      const reserve0 = 1000000000n;
+      const reserve1 = 2000000000n;
+
+      let callCount = 0;
+      const responses = [
+        {
+          price0CumulativeLast: 0n,
+          price1CumulativeLast: 0n,
+          blockTimestampLast: 10000,
+        },
+        {
+          // Neither accumulator advances: both reference TWAPs are 0n
+          price0CumulativeLast: 0n,
+          price1CumulativeLast: 0n,
+          blockTimestampLast: 10000 + MIN_TWAP_WINDOW_SECONDS,
+        },
+      ];
+
+      const client = mockClient({
+        getCumulativePrices: jest.fn().mockImplementation(() => {
+          return Promise.resolve(responses[callCount++]);
+        }),
+        getReserves: jest.fn().mockResolvedValue({ reserve0, reserve1 }),
+      });
+
+      const oracle = new OracleModule(client);
+
+      await oracle.observe(pairAddress);
+      const result = await oracle.getPriceDeviation(pairAddress);
+
+      expect(result).not.toBeNull();
+      expect(result!.twapPrice0).toBe(0n);
+      expect(result!.twapPrice1).toBe(0n);
+      expect(result!.price0DeviationBps).toBeNull();
+      expect(result!.price1DeviationBps).toBeNull();
+      // Spot price is still reported, so callers can still see pool state.
+      expect(result!.spotPrice0).toBeGreaterThan(0n);
+    });
   });
 });
