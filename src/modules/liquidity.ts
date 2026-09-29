@@ -16,6 +16,7 @@ import {
   validateDistinctTokens,
 } from "@/utils/validation";
 import { estimateGas } from "@/utils/gas";
+import { submitIdempotent } from "@/utils/submit-idempotent";
 
 /**
  * Liquidity module -- manages LP positions in CoralSwap pools.
@@ -155,7 +156,10 @@ export class LiquidityModule {
       return estimateGas((ops) => this.client.simulateTransaction(ops, {}), [op]);
     }
 
-    const result = await this.client.submitTransaction([op]);
+    const result = await submitIdempotent(
+      () => this.client.submitTransaction([op]),
+      this.client.server.getTransaction.bind(this.client.server),
+    );
 
     if (!result.success) {
       throw new TransactionError(
@@ -217,7 +221,10 @@ export class LiquidityModule {
       return estimateGas((ops) => this.client.simulateTransaction(ops, {}), [op]);
     }
 
-    const result = await this.client.submitTransaction([op]);
+    const result = await submitIdempotent(
+      () => this.client.submitTransaction([op]),
+      this.client.server.getTransaction.bind(this.client.server),
+    );
 
     if (!result.success) {
       throw new TransactionError(

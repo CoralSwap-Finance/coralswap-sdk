@@ -3,6 +3,7 @@ import { CoralSwapClient } from "../src/client";
 import { PairClient } from "../src/contracts/pair";
 import { PRECISION } from "../src/config";
 import { ValidationError, TransactionError } from "../src/errors";
+import { SorobanRpc } from "@stellar/stellar-sdk";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -468,6 +469,9 @@ describe("LiquidityModule", () => {
           data: { ledger: 12345 },
         }),
         getDeadline: jest.fn().mockReturnValue(1234567890),
+        server: {
+          getTransaction: jest.fn(),
+        },
       } as any;
 
       module = new LiquidityModule(mockClient);
@@ -698,6 +702,9 @@ describe("LiquidityModule", () => {
           data: { ledger: 12345 },
         }),
         getDeadline: jest.fn().mockReturnValue(1234567890),
+        server: {
+          getTransaction: jest.fn(),
+        },
       } as any;
 
       module = new LiquidityModule(mockClient);
@@ -993,3 +1000,332 @@ describe("LiquidityModule", () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Idempotent resubmission — addLiquidity() and removeLiquidity()
+// ---------------------------------------------------------------------------
+
+/**
+ * These tests exercise the submitIdempotent integration inside LiquidityModule.
+ *
+ * The scenario under test:
+ *   A transaction is sent to the Soroban RPC but the client-side polling
+ *   loop times out before confirmation arrives. The module must check the
+ *   real ledger status (via server.getTransaction) before deciding whether
+ *   to surface success, failure, or an error that allows a safe retry.
+ *
+ * Three distinct timeout outcomes are covered:
+ *   1. Timed-out but already landed (SUCCESS)  → treat as success, no resubmit.
+ *   2. Timed-out and landed but failed (FAILED) → propagate on-chain failure.
+ *   3. Timed-out and not yet found (NOT_FOUND)  → surface timeout for retry.
+ *
+ * A fourth case verifies that non-timeout failures bypass the idempotency
+ * check entirely and propagate immediately.
+ */
+describe("LiquidityModule — idempotent resubmission", () => {
+  const TOKEN_A = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM";
+  const TOKEN_B = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4";
+  const TO_ADDRESS = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM";
+
+  // Reusable valid request shapes
+  const ADD_REQUEST = {
+    tokenA: TOKEN_A,
+    tokenB: TOKEN_B,
+    amountADesired: 1000n,
+    amountBDesired: 2000n,
+    amountAMin: 900n,
+    amountBMin: 1800n,
+    to: TO_ADDRESS,
+  };
+
+  const REMOVE_REQUEST = {
+    tokenA: TOKEN_A,
+    tokenB: TOKEN_B,
+    liquidity: 500n,
+    amountAMin: 400n,
+    amountBMin: 800n,
+    to: TO_ADDRESS,
+  };
+
+  // -----------------------------------------------------------------------
+  // Helpers
+  // -----------------------------------------------------------------------
+
+  /**
+   * Build a mock client for idempotency tests.
+   *
+   * `submitResult`  — what submitTransaction resolves to.
+   * `txStatusResult` — what server.getTransaction resolves to (the ledger check).
+   */
+  function createIdempotentClient(
+    submitResult: ReturnType<jest.Mock>,
+    txStatusResult?: SorobanRpc.Api.GetTransactionResponse,
+  ): CoralSwapClient {
+    const getTransactionMock = txStatusResult
+      ? jest.fn().mockResolvedValue(txStatusResult)
+      : jest.fn();
+
+    return {
+      router: {
+        buildAddLiquidity: jest.fn().mockReturnValue({}),
+        buildRemoveLiquidity: jest.fn().mockReturnValue({}),
+      },
+      submitTransaction: submitResult,
+      getDeadline: jest.fn().mockReturnValue(1234567890),
+      server: {
+        getTransaction: getTransactionMock,
+      },
+    } as unknown as CoralSwapClient;
+  }
+
+  /** Timeout result with a known txHash — simulates a polled-but-timed-out send. */
+  function timeoutResult(txHash = "landed-tx-hash") {
+    return jest.fn().mockResolvedValue({
+      success: false,
+      txHash,
+      error: {
+        code: "TX_TIMEOUT",
+        message: "Transaction confirmation timed out after 30 attempts",
+      },
+    });
+  }
+
+  /** Soroban RPC SUCCESS response (pre-built to simulate landing). */
+  function rpcSuccess(ledger = 999): SorobanRpc.Api.GetTransactionResponse {
+    return {
+      status: SorobanRpc.Api.GetTransactionStatus.SUCCESS,
+      ledger,
+      latestLedger: ledger,
+      latestLedgerCloseTime: Math.floor(Date.now() / 1000),
+      oldestLedger: 1,
+      oldestLedgerCloseTime: 0,
+      createdAt: Math.floor(Date.now() / 1000),
+      applicationOrder: 1,
+      feeBump: false,
+      envelopeXdr: {} as any,
+      resultXdr: {} as any,
+      resultMetaXdr: {} as any,
+      returnValue: undefined,
+    } as SorobanRpc.Api.GetSuccessfulTransactionResponse;
+  }
+
+  /** Soroban RPC FAILED response. */
+  function rpcFailed(ledger = 999): SorobanRpc.Api.GetTransactionResponse {
+    return {
+      status: SorobanRpc.Api.GetTransactionStatus.FAILED,
+      ledger,
+      latestLedger: ledger,
+      latestLedgerCloseTime: Math.floor(Date.now() / 1000),
+      oldestLedger: 1,
+      oldestLedgerCloseTime: 0,
+      createdAt: Math.floor(Date.now() / 1000),
+      applicationOrder: 1,
+      feeBump: false,
+      envelopeXdr: {} as any,
+      resultXdr: {} as any,
+      resultMetaXdr: {} as any,
+    } as SorobanRpc.Api.GetFailedTransactionResponse;
+  }
+
+  /** Soroban RPC NOT_FOUND response. */
+  function rpcNotFound(): SorobanRpc.Api.GetTransactionResponse {
+    return {
+      status: SorobanRpc.Api.GetTransactionStatus.NOT_FOUND,
+      latestLedger: 1000,
+      latestLedgerCloseTime: Math.floor(Date.now() / 1000),
+      oldestLedger: 1,
+      oldestLedgerCloseTime: 0,
+    } as SorobanRpc.Api.GetMissingTransactionResponse;
+  }
+
+  // -----------------------------------------------------------------------
+  // addLiquidity() — idempotency scenarios
+  // -----------------------------------------------------------------------
+  describe("addLiquidity() — idempotent resubmission", () => {
+    it("returns success when a timed-out tx is found to have landed (SUCCESS)", async () => {
+      const client = createIdempotentClient(timeoutResult(), rpcSuccess(42));
+      const module = new LiquidityModule(client);
+
+      const result = await module.addLiquidity(ADD_REQUEST);
+
+      // Should resolve as success using the tx hash from the timeout result
+      expect(result.txHash).toBe("landed-tx-hash");
+      expect(result.ledger).toBe(42);
+      expect(result.amountA).toBe(ADD_REQUEST.amountADesired);
+      expect(result.amountB).toBe(ADD_REQUEST.amountBDesired);
+    });
+
+    it("does not call submitTransaction a second time when the tx is already landed", async () => {
+      const submitMock = timeoutResult();
+      const client = createIdempotentClient(submitMock, rpcSuccess());
+      const module = new LiquidityModule(client);
+
+      await module.addLiquidity(ADD_REQUEST);
+
+      // submitTransaction must only be called once — no duplicate deposit
+      expect(submitMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("throws TransactionError when a timed-out tx is found to have failed on-chain (FAILED)", async () => {
+      const client = createIdempotentClient(timeoutResult(), rpcFailed());
+      const module = new LiquidityModule(client);
+
+      await expect(module.addLiquidity(ADD_REQUEST)).rejects.toThrow(TransactionError);
+      await expect(module.addLiquidity(ADD_REQUEST)).rejects.toThrow("Add liquidity failed");
+    });
+
+    it("throws TransactionError with original timeout message when tx is NOT_FOUND after timeout", async () => {
+      // The tx timed out and the ledger has no record — safe to retry fresh
+      const client = createIdempotentClient(timeoutResult(), rpcNotFound());
+      const module = new LiquidityModule(client);
+
+      await expect(module.addLiquidity(ADD_REQUEST)).rejects.toThrow(TransactionError);
+      await expect(module.addLiquidity(ADD_REQUEST)).rejects.toThrow("Add liquidity failed");
+    });
+
+    it("throws TransactionError immediately for non-timeout failures (no status check)", async () => {
+      const genuineFailure = jest.fn().mockResolvedValue({
+        success: false,
+        txHash: "fail-hash",
+        error: {
+          code: "INSUFFICIENT_BALANCE",
+          message: "Insufficient balance",
+        },
+      });
+      const getTransactionMock = jest.fn();
+      const client = createIdempotentClient(genuineFailure, undefined);
+      // Inject getTransaction separately to assert it is never called
+      (client.server as any).getTransaction = getTransactionMock;
+
+      await expect(module_from(client).addLiquidity(ADD_REQUEST)).rejects.toThrow(
+        "Add liquidity failed: Insufficient balance",
+      );
+
+      // idempotency check must NOT be triggered for non-timeout errors
+      expect(getTransactionMock).not.toHaveBeenCalled();
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // removeLiquidity() — idempotency scenarios
+  // -----------------------------------------------------------------------
+  describe("removeLiquidity() — idempotent resubmission", () => {
+    it("returns success when a timed-out tx is found to have landed (SUCCESS)", async () => {
+      const client = createIdempotentClient(timeoutResult(), rpcSuccess(77));
+      const module = new LiquidityModule(client);
+
+      const result = await module.removeLiquidity(REMOVE_REQUEST);
+
+      expect(result.txHash).toBe("landed-tx-hash");
+      expect(result.ledger).toBe(77);
+      expect(result.liquidity).toBe(REMOVE_REQUEST.liquidity);
+    });
+
+    it("does not call submitTransaction a second time when the tx is already landed", async () => {
+      const submitMock = timeoutResult();
+      const client = createIdempotentClient(submitMock, rpcSuccess());
+      const module = new LiquidityModule(client);
+
+      await module.removeLiquidity(REMOVE_REQUEST);
+
+      // submitTransaction must only be called once — no duplicate withdrawal
+      expect(submitMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("throws TransactionError when a timed-out tx is found to have failed on-chain (FAILED)", async () => {
+      const client = createIdempotentClient(timeoutResult(), rpcFailed());
+      const module = new LiquidityModule(client);
+
+      await expect(module.removeLiquidity(REMOVE_REQUEST)).rejects.toThrow(TransactionError);
+      await expect(module.removeLiquidity(REMOVE_REQUEST)).rejects.toThrow("Remove liquidity failed");
+    });
+
+    it("throws TransactionError with original timeout message when tx is NOT_FOUND after timeout", async () => {
+      const client = createIdempotentClient(timeoutResult(), rpcNotFound());
+      const module = new LiquidityModule(client);
+
+      await expect(module.removeLiquidity(REMOVE_REQUEST)).rejects.toThrow(TransactionError);
+      await expect(module.removeLiquidity(REMOVE_REQUEST)).rejects.toThrow("Remove liquidity failed");
+    });
+
+    it("throws TransactionError immediately for non-timeout failures (no status check)", async () => {
+      const genuineFailure = jest.fn().mockResolvedValue({
+        success: false,
+        txHash: "fail-hash",
+        error: {
+          code: "INSUFFICIENT_LP_BALANCE",
+          message: "Insufficient LP balance",
+        },
+      });
+      const getTransactionMock = jest.fn();
+      const client = createIdempotentClient(genuineFailure, undefined);
+      (client.server as any).getTransaction = getTransactionMock;
+
+      await expect(module_from(client).removeLiquidity(REMOVE_REQUEST)).rejects.toThrow(
+        "Remove liquidity failed: Insufficient LP balance",
+      );
+
+      expect(getTransactionMock).not.toHaveBeenCalled();
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Edge cases
+  // -----------------------------------------------------------------------
+  describe("edge cases", () => {
+    it("addLiquidity: does not call getTransaction when timeout result has no txHash", async () => {
+      const timeoutNoHash = jest.fn().mockResolvedValue({
+        success: false,
+        error: {
+          code: "TX_TIMEOUT",
+          message: "timed out",
+        },
+        // txHash intentionally absent
+      });
+      const getTransactionMock = jest.fn();
+      const client = createIdempotentClient(timeoutNoHash, undefined);
+      (client.server as any).getTransaction = getTransactionMock;
+
+      await expect(module_from(client).addLiquidity(ADD_REQUEST)).rejects.toThrow(TransactionError);
+      expect(getTransactionMock).not.toHaveBeenCalled();
+    });
+
+    it("removeLiquidity: does not call getTransaction when timeout result has no txHash", async () => {
+      const timeoutNoHash = jest.fn().mockResolvedValue({
+        success: false,
+        error: {
+          code: "TX_TIMEOUT",
+          message: "timed out",
+        },
+      });
+      const getTransactionMock = jest.fn();
+      const client = createIdempotentClient(timeoutNoHash, undefined);
+      (client.server as any).getTransaction = getTransactionMock;
+
+      await expect(module_from(client).removeLiquidity(REMOVE_REQUEST)).rejects.toThrow(TransactionError);
+      expect(getTransactionMock).not.toHaveBeenCalled();
+    });
+
+    it("addLiquidity: propagates timeout as TransactionError when getTransaction call fails", async () => {
+      // Simulates an RPC outage during the idempotency check
+      const client = {
+        router: {
+          buildAddLiquidity: jest.fn().mockReturnValue({}),
+        },
+        submitTransaction: timeoutResult("rpc-down-hash"),
+        getDeadline: jest.fn().mockReturnValue(1234567890),
+        server: {
+          getTransaction: jest.fn().mockRejectedValue(new Error("RPC unreachable")),
+        },
+      } as unknown as CoralSwapClient;
+
+      // Falls back to the original timeout result, which surfaces as an error
+      await expect(module_from(client).addLiquidity(ADD_REQUEST)).rejects.toThrow(TransactionError);
+    });
+  });
+});
+
+// Small factory used inside idempotency tests to avoid forward-reference issues.
+function module_from(client: CoralSwapClient): LiquidityModule {
+  return new LiquidityModule(client);
+}

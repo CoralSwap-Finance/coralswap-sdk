@@ -198,6 +198,27 @@ export class MockProvider {
   }
 
   /**
+   * Directly stage a transaction result without going through the send queue.
+   *
+   * Use this in tests that need to simulate a transaction that already landed
+   * on-chain *before* `sendTransaction()` is called — for example, to test
+   * idempotent resubmission where a timeout fires but the tx already succeeded.
+   *
+   * Unlike `queueTransaction()`, this method writes directly into `_txResults`
+   * so `getTransaction()` can retrieve the result immediately, without the
+   * result being consumed by `sendTransaction()`.
+   *
+   * @param tx - The transaction descriptor to stage as already resolved.
+   *
+   * @example
+   * // Pre-land a transaction so getTransaction() returns SUCCESS:
+   * mock.setTransactionStatus({ hash: 'abc123', status: 'SUCCESS', ledger: 500 });
+   */
+  setTransactionStatus(tx: QueuedTransaction): void {
+    this._txResults.set(tx.hash, tx);
+  }
+
+  /**
    * Reset all staged state.
    *
    * Call this in afterEach() / beforeEach() to guarantee test isolation.
