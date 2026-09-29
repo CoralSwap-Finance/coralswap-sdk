@@ -1,4 +1,4 @@
-import { SorobanRpc } from '@stellar/stellar-sdk';
+import { rpc } from "@stellar/stellar-sdk";
 import { Result } from '@/types/common';
 
 /** A function that submits a transaction and returns the SDK Result. */
@@ -7,12 +7,12 @@ export type SubmitFn = () => Promise<Result<{ txHash: string; ledger: number }>>
 /**
  * A function that queries the RPC for a transaction's current status.
  *
- * Matches the signature of `SorobanRpc.Server.getTransaction` so the
+ * Matches the signature of `rpc.Server.getTransaction` so the
  * real server and any mock can be passed directly.
  */
 export type GetTransactionFn = (
   hash: string,
-) => Promise<SorobanRpc.Api.GetTransactionResponse>;
+) => Promise<rpc.Api.GetTransactionResponse>;
 
 /**
  * Submit a transaction idempotently.
@@ -76,7 +76,7 @@ export async function submitIdempotent(
 
   // The transaction was at least sent (we have a hash), but polling timed out.
   // Check the real ledger status before deciding whether to surface an error.
-  let status: SorobanRpc.Api.GetTransactionResponse;
+  let status: rpc.Api.GetTransactionResponse;
   try {
     status = await getTransaction(result.txHash);
   } catch {
@@ -84,9 +84,9 @@ export async function submitIdempotent(
     return result;
   }
 
-  if (status.status === SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
+  if (status.status === rpc.Api.GetTransactionStatus.SUCCESS) {
     // The transaction landed while we were waiting; treat it as a success.
-    const successStatus = status as SorobanRpc.Api.GetSuccessfulTransactionResponse;
+    const successStatus = status as rpc.Api.GetSuccessfulTransactionResponse;
     return {
       success: true,
       data: {
@@ -97,7 +97,7 @@ export async function submitIdempotent(
     };
   }
 
-  if (status.status === SorobanRpc.Api.GetTransactionStatus.FAILED) {
+  if (status.status === rpc.Api.GetTransactionStatus.FAILED) {
     // The transaction landed but was rejected by the contract.
     return {
       success: false,

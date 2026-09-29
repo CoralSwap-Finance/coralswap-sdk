@@ -3,7 +3,7 @@ import { CoralSwapClient } from "../src/client";
 import { PairClient } from "../src/contracts/pair";
 import { PRECISION } from "../src/config";
 import { ValidationError, TransactionError } from "../src/errors";
-import { SorobanRpc } from "@stellar/stellar-sdk";
+import { rpc } from "@stellar/stellar-sdk";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1360,7 +1360,7 @@ describe("LiquidityModule — idempotent resubmission", () => {
    */
   function createIdempotentClient(
     submitResult: ReturnType<jest.Mock>,
-    txStatusResult?: SorobanRpc.Api.GetTransactionResponse,
+    txStatusResult?: rpc.Api.GetTransactionResponse,
   ): CoralSwapClient {
     const getTransactionMock = txStatusResult
       ? jest.fn().mockResolvedValue(txStatusResult)
@@ -1392,9 +1392,9 @@ describe("LiquidityModule — idempotent resubmission", () => {
   }
 
   /** Soroban RPC SUCCESS response (pre-built to simulate landing). */
-  function rpcSuccess(ledger = 999): SorobanRpc.Api.GetTransactionResponse {
+  function rpcSuccess(ledger = 999): rpc.Api.GetTransactionResponse {
     return {
-      status: SorobanRpc.Api.GetTransactionStatus.SUCCESS,
+      status: rpc.Api.GetTransactionStatus.SUCCESS,
       ledger,
       latestLedger: ledger,
       latestLedgerCloseTime: Math.floor(Date.now() / 1000),
@@ -1407,13 +1407,13 @@ describe("LiquidityModule — idempotent resubmission", () => {
       resultXdr: {} as any,
       resultMetaXdr: {} as any,
       returnValue: undefined,
-    } as SorobanRpc.Api.GetSuccessfulTransactionResponse;
+    } as rpc.Api.GetSuccessfulTransactionResponse;
   }
 
   /** Soroban RPC FAILED response. */
-  function rpcFailed(ledger = 999): SorobanRpc.Api.GetTransactionResponse {
+  function rpcFailed(ledger = 999): rpc.Api.GetTransactionResponse {
     return {
-      status: SorobanRpc.Api.GetTransactionStatus.FAILED,
+      status: rpc.Api.GetTransactionStatus.FAILED,
       ledger,
       latestLedger: ledger,
       latestLedgerCloseTime: Math.floor(Date.now() / 1000),
@@ -1425,18 +1425,18 @@ describe("LiquidityModule — idempotent resubmission", () => {
       envelopeXdr: {} as any,
       resultXdr: {} as any,
       resultMetaXdr: {} as any,
-    } as SorobanRpc.Api.GetFailedTransactionResponse;
+    } as rpc.Api.GetFailedTransactionResponse;
   }
 
   /** Soroban RPC NOT_FOUND response. */
-  function rpcNotFound(): SorobanRpc.Api.GetTransactionResponse {
+  function rpcNotFound(): rpc.Api.GetTransactionResponse {
     return {
-      status: SorobanRpc.Api.GetTransactionStatus.NOT_FOUND,
+      status: rpc.Api.GetTransactionStatus.NOT_FOUND,
       latestLedger: 1000,
       latestLedgerCloseTime: Math.floor(Date.now() / 1000),
       oldestLedger: 1,
       oldestLedgerCloseTime: 0,
-    } as SorobanRpc.Api.GetMissingTransactionResponse;
+    } as rpc.Api.GetMissingTransactionResponse;
   }
 
   // -----------------------------------------------------------------------
