@@ -1,6 +1,12 @@
-import { xdr } from "@stellar/stellar-sdk";
+import { xdr, rpc, Contract, TransactionBuilder } from "@stellar/stellar-sdk";
 import { CoralSwapClient } from "@/client";
-import { FeeEstimate, FeeRevenue, FeeRevenueEntry, FeeRevenueTokenTotal } from "@/types/fee";
+import { FeeEstimate FeeRevenue, FeeRevenueEntry, FeeRevenueTokenTotal } from "@/types/fee";
+import {
+  FeeRevenueByToken,
+  FeeRevenueEvent,
+  PairFeeRevenue,
+  LPYieldResult,
+} from "@/types/fee";
 import { FeeState } from "@/types/pool";
 import { FeeEstimates } from "@/types/fee-estimates";
 import { SwapEvent } from "@/types/events";
@@ -8,6 +14,8 @@ import { estimateGas } from "@/utils/gas";
 import { validateAddress, validatePositiveAmount } from "@/utils/validation";
 import { ledgerToApproxTime, LedgerHead } from "@/utils/ledger";
 import { TypedEventCursor } from "@/utils/event-cursor";
+import { SwapEvent } from "@/types/events";
+import { decodeU32 } from "@/utils/scval";
 import { fromSorobanAmount } from "@/utils/amounts";
 import { getTokenDecimals, FALLBACK_TOKEN_DECIMALS } from "@/utils/token-decimals";
 import { ValidationError } from "@/errors";
@@ -32,6 +40,12 @@ const DEFAULT_REVENUE_WINDOW_LEDGERS = 518_400;
  */
 export class FeeModule {
   private client: CoralSwapClient;
+
+  /** Default ledger window for revenue scans: 30 days of ledgers at ~5s each. */
+  private static readonly DEFAULT_REVENUE_WINDOW_LEDGERS = 518_400;
+
+  /** Default per-request page size for the paginated event scan. */
+  private static readonly DEFAULT_REVENUE_PAGE_LIMIT = 200;
 
   constructor(client: CoralSwapClient) {
     this.client = client;
@@ -175,18 +189,20 @@ export class FeeModule {
   /**
    * Get historical fee revenue for a pair by querying on-chain swap events.
    *
-   * Reads the pair's `swap` events across a ledger window (paginating past the
-   * first RPC page), computes each fee in BigInt stroops
-   * (`amountIn * feeBps / 10000`), and divides by the *input token's* decimals
-   * read from its on-chain metadata — never a hardcoded 7-decimal assumption.
+   * Reads swap events through the shared {@link TypedEventCursor}, which
+   * paginates past any single-page RPC limit so the full requested ledger
+   * window is covered — not just the first page.
+   *
+   * All fee arithmetic is BigInt-safe: the exact fee for every swap is kept
+   * in stroop-level units (`feeStroops`), so totals remain precise even when
+   * individual swaps exceed `Number.MAX_SAFE_INTEGER`. Amounts are converted
+   * to display units with the **input token's own decimal precision** (the
+   * decimals are read from the token contract), never a hard-coded 10^7 —
+   * tokens with 6, 8, 18 or 0 decimals are all converted correctly.
    *
    * @param pairAddress - The address of the pair contract
-   * @param options - Optional ledger range and total event cap
-   * @param options.limit - Max swaps to aggregate (default 200). Fetching is
-   *   paginated, so a window with more swaps than one RPC page is fully counted
-   *   up to this cap.
-   * @returns Aggregated fee revenue with stroop-exact per-token totals and a
-   *   per-swap breakdown
+   * @param options - Optional ledger range and per-request page limit
+   * @returns Aggregated fee revenue (exact BigInt totals + display values)
    * @example
    * const revenue = await client.fees.getFeeRevenue('C...');
    * console.log(revenue.byToken[0].totalFeeFormatted, revenue.totalFeeXLM);
@@ -200,6 +216,7 @@ export class FeeModule {
     } = {},
   ): Promise<FeeRevenue> {
     validateAddress(pairAddress, "pairAddress");
+    this.validateRevenueWindow(options);
 
     const limit = options.limit ?? DEFAULT_REVENUE_EVENT_LIMIT;
     if (!Number.isInteger(limit) || limit < 1) {
@@ -295,8 +312,30 @@ export class FeeModule {
       );
     }
 
+    const totalFeeByToken: FeeRevenueByToken[] = [];
+    for (const [token, feeStroops] of totalsByToken.entries()) {
+      // Memoised — already resolved for every token seen in the loop above.
+      const decimals = await this.getTokenDecimals(token);
+      totalFeeByToken.push({
+        token,
+        decimals,
+        feeStroops,
+        feeDisplay: Number(feeStroops) / Math.pow(10, decimals),
+      });
+    }
+    totalFeeByToken.sort((a, b) =>
+      b.feeStroops === a.feeStroops ? a.token.localeCompare(b.token) : b.feeStroops > a.feeStroops ? 1 : -1,
+    );
+
+    // Display-only total: each event is converted with its own token's
+    // decimals, so the sum matches the per-token breakdown.
+    const totalFeeXLM = totalFeeByToken.reduce((sum, t) => sum + t.feeDisplay, 0);
+
     return {
       pairAddress,
+      totalFeeStroops,
+      totalFeeXLM,
+      totalFeeByToken,
       swapCount: history.length,
       totalFeeAmount,
       totalFeeXLM,
@@ -312,6 +351,10 @@ export class FeeModule {
    * its own token's on-chain decimals and the fee share comes from the
    * stroop-exact aggregation in {@link getFeeRevenue}, so a 6- or 12-decimal
    * pool prices correctly instead of assuming XLM's 7.
+   * The LP's share of the pool is computed in BigInt (scaled by 10^12) so
+   * positions with balances above 2^53 are compared exactly; reserve and fee
+   * conversions use each token's own decimal precision instead of a
+   * hard-coded 10^7.
    *
    * @param pairAddress - The address of the pair contract
    * @param lpAddress - The LP token holder address
@@ -336,6 +379,7 @@ export class FeeModule {
     /** Decimals read from each pool token's on-chain metadata; `lpValueXLM` is computed from these, not from a hardcoded 7-decimal assumption */
     decimals: { token0: number; token1: number };
   }> {
+  ): Promise<LPYieldResult> {
     validateAddress(pairAddress, "pairAddress");
     validateAddress(lpAddress, "lpAddress");
 
@@ -362,6 +406,7 @@ export class FeeModule {
       return {
         pairAddress,
         lpAddress,
+        totalFeeRevenueStroops: feeRevenue.totalFeeStroops,
         totalFeeRevenueXLM: feeRevenue.totalFeeXLM,
         lpSharePercent: 0,
         lpFeeShareXLM: 0,
@@ -395,6 +440,7 @@ export class FeeModule {
     return {
       pairAddress,
       lpAddress,
+      totalFeeRevenueStroops: feeRevenue.totalFeeStroops,
       totalFeeRevenueXLM: feeRevenue.totalFeeXLM,
       lpSharePercent,
       lpFeeShareXLM,
@@ -485,6 +531,123 @@ export class FeeModule {
       resources,
       breakdown,
     };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Revenue helpers
+  // ---------------------------------------------------------------------------
+
+  /** Memoised per-token decimal precision, read once from the token contract. */
+  private decimalsCache = new Map<string, number>();
+
+  /**
+   * Read a token's decimal precision from its contract (memoised).
+   *
+   * The `decimals()` call is simulated read-only against the well-known
+   * zero-balance account, so no funds or signer are required. On any failure
+   * (unsupported token contract, RPC error) it falls back to 7 — the Stellar
+   * convention — so aggregation never throws on odd tokens.
+   *
+   * @param tokenAddress - The Soroban contract address of the token.
+   * @returns The token's decimal precision (0-18), defaulting to 7.
+   */
+  private async getTokenDecimals(tokenAddress: string): Promise<number> {
+    const cached = this.decimalsCache.get(tokenAddress);
+    if (cached !== undefined) return cached;
+
+    try {
+      const op = new Contract(tokenAddress).call("decimals");
+      const result = await this.simulateTokenRead(op);
+      const decimals = result ? decodeU32(result) : 7;
+      const safe = Number.isInteger(decimals) && decimals >= 0 && decimals <= 18 ? decimals : 7;
+      this.decimalsCache.set(tokenAddress, safe);
+      return safe;
+    } catch {
+      this.decimalsCache.set(tokenAddress, 7);
+      return 7;
+    }
+  }
+
+  /**
+   * Simulate a read-only contract call against a token contract.
+   *
+   * The well-known zero-balance account funds the simulation, so no signer
+   * is needed. No retry/circuit-breaker layer is applied: this read is
+   * best-effort (callers fall back to 7 decimals) and must not poison a
+   * shared breaker state for unrelated calls.
+   */
+  private async simulateTokenRead(op: xdr.Operation): Promise<xdr.ScVal | null> {
+    const server = this.client.server;
+
+    const account = await server.getAccount(
+      "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+    );
+    const tx = new TransactionBuilder(account, {
+      fee: "100",
+      networkPassphrase: this.client.networkConfig.networkPassphrase,
+    })
+      .addOperation(op)
+      .setTimeout(30)
+      .build();
+
+    const sim = await server.simulateTransaction(tx);
+    if (rpc.Api.isSimulationSuccess(sim) && sim.result) {
+      return sim.result.retval;
+    }
+    return null;
+  }
+
+  /** Validate the caller-supplied revenue window (ledger range / page limit). */
+  private validateRevenueWindow(options: { fromLedger?: number; toLedger?: number; limit?: number }): void {
+    if (
+      options.fromLedger !== undefined &&
+      (!Number.isInteger(options.fromLedger) || options.fromLedger < 0)
+    ) {
+      throw new ValidationError(
+        `fromLedger must be a non-negative integer, got ${options.fromLedger}`,
+      );
+    }
+    if (
+      options.toLedger !== undefined &&
+      (!Number.isInteger(options.toLedger) || options.toLedger < 0)
+    ) {
+      throw new ValidationError(
+        `toLedger must be a non-negative integer, got ${options.toLedger}`,
+      );
+    }
+    if (
+      options.fromLedger !== undefined &&
+      options.toLedger !== undefined &&
+      options.fromLedger > options.toLedger
+    ) {
+      throw new ValidationError(
+        `fromLedger (${options.fromLedger}) must not exceed toLedger (${options.toLedger})`,
+      );
+    }
+    if (options.limit !== undefined) {
+      if (!Number.isInteger(options.limit) || options.limit < 1 || options.limit > MAX_EVENT_LIMIT) {
+        throw new ValidationError(
+          `limit must be an integer between 1 and ${MAX_EVENT_LIMIT}, got ${options.limit}`,
+        );
+      }
+    }
+  }
+
+  /** Clamp the page limit to the cursor's supported range. */
+  private revenuePageLimit(limit?: number): number {
+    return limit ?? FeeModule.DEFAULT_REVENUE_PAGE_LIMIT;
+  }
+
+  /**
+   * Approximate the wall-clock timestamp of a ledger from the chain head.
+   * Used when an event response carries no usable `ledgerClosedAt`.
+   */
+  private ledgerTimestamp(ledger: number, currentLedger: number): number {
+    const head: LedgerHead = {
+      ledger: currentLedger,
+      closeTime: Math.floor(Date.now() / 1000),
+    };
+    return ledgerToApproxTime(ledger, head);
   }
 
   /**

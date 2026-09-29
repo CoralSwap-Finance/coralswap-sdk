@@ -3,6 +3,7 @@ import { validateAddress } from "@/utils/validation";
 import { ValidationError } from "@/errors";
 import { EventCursor, decodeEventTopic, MIN_START_LEDGER } from "@/utils/event-cursor";
 import { getTokenDecimals } from "@/utils/token-decimals";
+import { DecimalsResolver } from "@/utils/decimals-resolver";
 import { TreasuryModule, TreasuryModuleOptions } from "./treasury";
 import { SwapModule } from "./swap";
 
@@ -60,16 +61,31 @@ export interface GetTopTradersOptions {
 const MAX_LEADERBOARD_EVENTS = 1000;
 
 /**
+ * Default capacity for the per-instance LRU decimals cache.
+ *
+ * 512 entries covers any realistic multi-pair scan without unbounded growth.
+ * This can be overridden via {@link TreasuryModuleOptions.decimalsCacheCapacity}
+ * and {@link TreasuryModuleOptions.decimalsCacheTtlMs}.
+ */
+const DEFAULT_DECIMALS_CACHE_CAPACITY = 512;
+
+/**
  * Leaderboard module — ranks top LPs and traders by yield/volume.
  */
 export class LeaderboardModule extends TreasuryModule {
   private readonly leaderboardClient: CoralSwapClient;
   private readonly leaderboardStableSet: Set<string>;
+  /** LRU-bounded cache for token decimal counts. */
+  private readonly decimalsResolver: DecimalsResolver;
 
   constructor(client: CoralSwapClient, options: TreasuryModuleOptions = {}) {
     super(client, options);
     this.leaderboardClient = client;
     this.leaderboardStableSet = new Set(options.stableAddresses ?? []);
+    this.decimalsResolver = new DecimalsResolver({
+      capacity: options.decimalsCacheCapacity ?? DEFAULT_DECIMALS_CACHE_CAPACITY,
+      ttlMs: options.decimalsCacheTtlMs ?? 0,
+    });
   }
 
   /**
@@ -239,7 +255,7 @@ export class LeaderboardModule extends TreasuryModule {
     const decimalsMap = new Map<string, number>();
     await Promise.all(
       Array.from(uniqueTokens).map(async (token) => {
-        const dec = await getTokenDecimals(this.leaderboardClient, token);
+        const dec = await this.decimalsResolver.resolve(this.leaderboardClient, token);
         decimalsMap.set(token, dec);
       })
     );
