@@ -63,6 +63,55 @@ export interface EventCursorOptions {
 }
 
 /**
+ * Paging metadata attached to every {@link EventCursor} and
+ * {@link TypedEventCursor} scan result.
+ *
+ * Consumers can use `hasMore` / `nextCursor` to drive further pages
+ * without pre-querying total counts.
+ */
+export interface PageInfo {
+  /** Ledger the scan started from. */
+  startLedger?: number;
+  /** Ledger sequence of the last event returned (or the scan end). */
+  endLedger?: number;
+  /** Per-request page limit that was used. */
+  limit?: number;
+  /**
+   * `true` when the response page was full — further pages likely exist.
+   * Equivalent to `hasNextPage` on the result object.
+   */
+  hasMore?: boolean;
+  /**
+   * Opaque RPC cursor string to resume from on the next request.
+   * `null` when the result set is exhausted.
+   */
+  nextCursor?: string | null;
+}
+
+/**
+ * An array of `T` augmented with cursor-paging metadata so callers can
+ * drive subsequent pages without hand-rolling their own caps.
+ *
+ * @example
+ * ```ts
+ * const result = await cursor.scan({ limit: 200 });
+ * processEvents(result);           // still a plain array
+ * if (result.hasNextPage) {
+ *   const next = await cursor.scan({ limit: 200 }); // cursor already advanced
+ * }
+ * ```
+ */
+export type ScanResult<T> = T[] & {
+  /** Full paging metadata for the completed scan. */
+  pageInfo: PageInfo;
+  /**
+   * `true` when the last page hit the limit and further pages may exist.
+   * Shorthand for `pageInfo.hasMore`.
+   */
+  hasNextPage: boolean;
+};
+
+/**
  * EventCursor — shared utility to scan Soroban `getEvents` safely and
  * consistently across modules.
  *
@@ -331,8 +380,12 @@ export class TypedEventCursor {
    * Applies the cursor's fixed contract/topic filters, advances the shared
    * pagination cursor, and decodes each raw response into a typed event
    * (undecodable / unrecognised entries are dropped).
+   *
+   * The returned value is a plain array extended with `.pageInfo` and
+   * `.hasNextPage` so callers can drive subsequent pages without
+   * pre-querying total counts or hand-rolling their own caps.
    */
-  async scan(params: TypedEventScanParams = {}): Promise<CoralSwapEvent[]> {
+  async scan(params: TypedEventScanParams = {}): Promise<ScanResult<CoralSwapEvent>> {
     const raw = await this.cursor.scan({
       contractIds: this.contractId ? [this.contractId] : [],
       topics: this.topicFilters,
@@ -340,7 +393,13 @@ export class TypedEventCursor {
       toLedger: params.toLedger,
       limit: params.limit,
     });
-    return this.decode(raw);
+    const decoded = this.decode(raw);
+    const pageInfo: PageInfo = raw.pageInfo ?? {};
+    const result = Object.assign(decoded, {
+      pageInfo,
+      hasNextPage: pageInfo.hasMore ?? false,
+    }) as ScanResult<CoralSwapEvent>;
+    return result;
   }
 
   /**
