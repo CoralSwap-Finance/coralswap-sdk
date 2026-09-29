@@ -279,8 +279,6 @@ export class FlashLoanModule {
       const txResult = await this.client.server.getTransaction(txHash);
       if (txResult.status === "SUCCESS") {
         const rawEvents = this.getRawEvents(txResult);
-        const hasRawEvents =
-          rawEvents.length > 0 || this.hasEventsAccessor(txResult);
 
         // A FlashLoanFailed event means the callback reverted; surface it as an error.
         const failedEvent = this.decodeFailedEvent(rawEvents);
@@ -468,16 +466,6 @@ export class FlashLoanModule {
     }
   }
 
-  private hasEventsAccessor(txResult: any): boolean {
-    try {
-      return (
-        Array.isArray(txResult?.resultMetaXdr?.v3?.sorobanMeta?.events) &&
-        txResult.resultMetaXdr.v3.sorobanMeta.events.length > 0
-      );
-    } catch {
-      return false;
-    }
-  }
 
   private decodeExecutedEvent(
     events: xdr.ContractEvent[],
