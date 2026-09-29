@@ -227,6 +227,98 @@ describe('TypedEventCursor', () => {
 
     expect(await cursor.scan()).toHaveLength(0);
   });
+
+  // ---------------------------------------------------------------------------
+  // pageInfo / hasNextPage — Issue #668
+  // ---------------------------------------------------------------------------
+  describe('pageInfo and hasNextPage (issue #668)', () => {
+    it('exposes pageInfo on the scan result', async () => {
+      const server = makeServer([
+        { events: [makeEventResponse('swap', SWAP_DATA)], latestLedger: 2000 },
+      ]);
+      const cursor = new TypedEventCursor(server as any, CONTRACT_ADDR, ['swap']);
+
+      const result = await cursor.scan();
+
+      expect(result).toHaveProperty('pageInfo');
+      expect(typeof result.pageInfo).toBe('object');
+    });
+
+    it('hasNextPage is false when the page is shorter than the limit', async () => {
+      // 1 event returned, limit default >> 1 → not a full page → hasNextPage false
+      const server = makeServer([
+        { events: [makeEventResponse('swap', SWAP_DATA)], latestLedger: 2000 },
+      ]);
+      const cursor = new TypedEventCursor(server as any, CONTRACT_ADDR, ['swap']);
+
+      const result = await cursor.scan();
+
+      expect(result.hasNextPage).toBe(false);
+    });
+
+    it('hasNextPage is true when the response was a full page', async () => {
+      // 2 events returned with limit=2 → full page → hasNextPage true
+      const server = makeServer([
+        {
+          events: [
+            makeEventResponse('swap', SWAP_DATA, { ledger: 10 }),
+            makeEventResponse('swap', SWAP_DATA, { ledger: 11 }),
+          ],
+          latestLedger: 20,
+        },
+        // Second fetch returns empty so pagination stops
+        { events: [], latestLedger: 20 },
+      ]);
+      const cursor = new TypedEventCursor(server as any, CONTRACT_ADDR, ['swap']);
+
+      const result = await cursor.scan({ fromLedger: 1, limit: 2 });
+
+      // limit=2, page was full → hasMore / hasNextPage should be true
+      expect(result.hasNextPage).toBe(true);
+      expect(result.pageInfo.hasMore).toBe(true);
+    });
+
+    it('pageInfo carries startLedger, endLedger, limit, and nextCursor', async () => {
+      const server = makeServer([
+        {
+          events: [makeEventResponse('swap', SWAP_DATA, { ledger: 42 })],
+          latestLedger: 100,
+        },
+      ]);
+      const cursor = new TypedEventCursor(server as any, CONTRACT_ADDR, ['swap']);
+
+      const result = await cursor.scan({ fromLedger: 10, limit: 50 });
+
+      expect(result.pageInfo.startLedger).toBe(10);
+      expect(result.pageInfo.limit).toBe(50);
+      // nextCursor comes from pagingToken of the last event
+      expect('nextCursor' in result.pageInfo).toBe(true);
+    });
+
+    it('result is still iterable as a plain array (backward compat)', async () => {
+      const server = makeServer([
+        {
+          events: [
+            makeEventResponse('swap', SWAP_DATA),
+            makeEventResponse('sync', SYNC_DATA),
+          ],
+          latestLedger: 2000,
+        },
+      ]);
+      const cursor = new TypedEventCursor(server as any, CONTRACT_ADDR);
+
+      const result = await cursor.scan();
+
+      // Spread, forEach, length — all must work as before
+      expect(result.length).toBe(2);
+      const types = [...result].map((e) => e.type);
+      expect(types).toEqual(['swap', 'sync']);
+
+      const collected: string[] = [];
+      result.forEach((e) => collected.push(e.type));
+      expect(collected).toEqual(['swap', 'sync']);
+    });
+  });
 });
 
 describe('CoralSwapClient.allEvents', () => {

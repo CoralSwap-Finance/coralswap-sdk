@@ -188,6 +188,8 @@ export type {
   RetryDecision,
   EventCursorOptions,
   TypedEventScanParams,
+  PageInfo,
+  ScanResult,
   DecimalsResolverOptions,
 } from "./utils";
 

@@ -249,6 +249,25 @@ describe('RiskMetricsModule', () => {
       });
       expect(risk.factors).toBeDefined();
     });
+
+    it('changes volatility risk when the window changes', async () => {
+      const positions = [makePosition({ valueUSD: 25_000 })];
+      jest.spyOn(client.portfolio, 'get').mockResolvedValue(
+        makePortfolio(positions)
+      );
+
+      const shortWindow = await riskMetrics.getPortfolioRisk(USER, {
+        volatilityWindowDays: 7,
+      });
+      const longWindow = await riskMetrics.getPortfolioRisk(USER, {
+        volatilityWindowDays: 90,
+      });
+
+      const shortScore = shortWindow.factors.find((f) => f.name === 'Volatility Exposure')!.score;
+      const longScore = longWindow.factors.find((f) => f.name === 'Volatility Exposure')!.score;
+
+      expect(shortScore).not.toBe(longScore);
+    });
   });
 
   describe('Risk factor descriptions', () => {
