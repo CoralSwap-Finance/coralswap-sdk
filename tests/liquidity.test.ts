@@ -563,6 +563,39 @@ describe("LiquidityModule", () => {
       });
     });
 
+    it("returns simulated liquidity amounts instead of placeholder request values", async () => {
+      mockClient.simulateTransaction = jest.fn().mockResolvedValue({
+        success: true,
+        returnValue: {
+          vec: [
+            { i128: () => ({ hi: () => ({ toString: () => '0' }), lo: () => ({ toString: () => '2500' }) }) },
+            { i128: () => ({ hi: () => ({ toString: () => '0' }), lo: () => ({ toString: () => '3600' }) }) },
+            { i128: () => ({ hi: () => ({ toString: () => '0' }), lo: () => ({ toString: () => '4200' }) }) },
+          ],
+        },
+      });
+
+      const request = {
+        tokenA: TOKEN_A,
+        tokenB: TOKEN_B,
+        amountADesired: 1000n,
+        amountBDesired: 2000n,
+        amountAMin: 900n,
+        amountBMin: 1800n,
+        to: TO_ADDRESS,
+      };
+
+      const result = await module.addLiquidity(request);
+
+      expect(result).toEqual({
+        txHash: 'test-tx-hash',
+        amountA: 2500n,
+        amountB: 3600n,
+        liquidity: 4200n,
+        ledger: 12345,
+      });
+    });
+
     it("uses client deadline when not provided in request", async () => {
       const request = {
         tokenA: TOKEN_A,
@@ -929,6 +962,37 @@ describe("LiquidityModule", () => {
         txHash: "test-tx-hash",
         amountA: 400n,
         amountB: 800n,
+        liquidity: 500n,
+        ledger: 12345,
+      });
+    });
+
+    it("returns the simulated removal amounts instead of requested minimums", async () => {
+      mockClient.simulateTransaction = jest.fn().mockResolvedValue({
+        success: true,
+        returnValue: {
+          vec: [
+            { i128: () => ({ hi: () => ({ toString: () => '0' }), lo: () => ({ toString: () => '4200' }) }) },
+            { i128: () => ({ hi: () => ({ toString: () => '0' }), lo: () => ({ toString: () => '8300' }) }) },
+          ],
+        },
+      });
+
+      const request = {
+        tokenA: TOKEN_A,
+        tokenB: TOKEN_B,
+        liquidity: 500n,
+        amountAMin: 400n,
+        amountBMin: 800n,
+        to: TO_ADDRESS,
+      };
+
+      const result = await module.removeLiquidity(request);
+
+      expect(result).toEqual({
+        txHash: 'test-tx-hash',
+        amountA: 4200n,
+        amountB: 8300n,
         liquidity: 500n,
         ledger: 12345,
       });
