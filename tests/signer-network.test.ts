@@ -33,7 +33,8 @@ describe('KeypairSigner network validation', () => {
     const wrongNetworkSigner = new KeypairSigner(kp.secret(), Networks.PUBLIC);
     const signedXdr = await wrongNetworkSigner.signTransaction(tx.toXDR());
     const signed = TransactionBuilder.fromXDR(signedXdr, Networks.TESTNET);
-    const sig = signed.signatures[0].signature();
+    // js-xdr in stellar-sdk 17 exposes DecoratedSignature fields as properties.
+    const sig = signed.signatures[0].signature;
     expect(kp.verify(signed.hash(), sig)).toBe(false);
   });
 });
