@@ -191,14 +191,17 @@ export class StopLossModule {
   ): Promise<{ txHash: string; ledger: number }> {
     const signerPublicKey = await signer.publicKey();
 
+    // An explicit bound, when given, must be positive. When omitted the quote
+    // below derives the bound from the resolved slippage tolerance, so the
+    // swap never executes without a documented bound either way.
     if (swapRequest.tradeType === TradeType.EXACT_IN) {
-      if (swapRequest.minAmountOut === undefined || swapRequest.minAmountOut <= 0n) {
+      if (swapRequest.minAmountOut !== undefined && swapRequest.minAmountOut <= 0n) {
         throw new ValidationError(
           'swapRequest.minAmountOut must be a positive amount for EXACT_IN swaps',
         );
       }
     } else if (swapRequest.tradeType === TradeType.EXACT_OUT) {
-      if (swapRequest.maxAmountIn === undefined || swapRequest.maxAmountIn <= 0n) {
+      if (swapRequest.maxAmountIn !== undefined && swapRequest.maxAmountIn <= 0n) {
         throw new ValidationError(
           'swapRequest.maxAmountIn must be a positive amount for EXACT_OUT swaps',
         );

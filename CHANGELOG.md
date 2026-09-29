@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- Explicit slippage policy on every swap entry point: `slippageToleranceBps` (validated 1-1000, default 100 bps) derives `amountOutMin`/`maxAmountIn` from the current route quote, so no swap path executes without a documented bound (#679)
 - Webhook endpoint verification for the SDK webhook module:
   - `verifyWebhook(webhookId)` posts a signed challenge payload and records the result — a `2xx` marks the endpoint `verified: true`, a failed handshake (non-`2xx`, network error or timeout) marks it `verified: false`
   - `updateWebhook(webhookId, updates)` changes a registered webhook's `url`, `events` and/or `secret` with the same validation as `registerWebhook()`; changing the url resets `verified` and clears the failure counter, re-enabling a webhook that was auto-disabled

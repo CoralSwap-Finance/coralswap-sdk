@@ -422,9 +422,9 @@ const IntervalMsSchema = z
 const LimitOrderParamsSchema = z
   .object({
     targetPrice: z
-      .number({ error: 'targetPrice must be a positive number; 0 is not a valid execution bound' })
-      .finite('targetPrice must be a positive number; 0 is not a valid execution bound')
-      .positive('targetPrice must be a positive number; 0 is not a valid execution bound')
+      .number({ error: 'targetPrice must be positive' })
+      .finite('targetPrice must be positive')
+      .positive('targetPrice must be positive')
       .max(MAX_TARGET_PRICE, 'targetPrice exceeds maximum allowed range (1,000,000)'),
     expiry: z
       .number({ error: 'expiry must be a Unix timestamp in the future' })

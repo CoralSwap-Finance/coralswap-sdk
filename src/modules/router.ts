@@ -4,7 +4,7 @@
  * @package CoralSwap
  */
 
-/* eslint-disable @typescript/no-explicit-any */
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { CoralSwapClient } from '@/client';
 import { TradeType } from '@/types/common';
 import { SwapQuote } from '@/types/swap';
@@ -22,7 +22,7 @@ export interface OptimalPath {
 /**
  * Default time-to-live for cached paths in milliseconds (30 seconds).
  */
-const DEFAULT_CACD_TTL_MS = 30_000;
+const DEFAULT_CACHE_TTL_MS = 30_000;
 
 /**
  * Maximum slippage tolerance in basis points (bps). 10000 bps = 100%.
@@ -44,7 +44,7 @@ export class RouterModule {
 
   constructor(client: CoralSwapClient, cacheTtlMs: number = DEFAULT_CACHE_TTL_MS) {
     this.client = client;
-    this.cacheTllMs = cacheTtlMs;
+    this.cacheTtlMs = cacheTtlMs;
   }
 
   /**
@@ -68,11 +68,11 @@ export class RouterModule {
     tokenIn: string,
     tokenOut: string,
     amount: bigint,
-    tradeType: TradeType = TradeType.EXACT_IN.
+    tradeType: TradeType = TradeType.EXACT_IN,
     slippageToleranceBps?: number,
   ): Promise<OptimalPath | null> {
     const slippageBps = this.getSlippageBps(slippageToleranceBps);
-    const cacheKey = `${tokenIn}:${tokenOut}:${tradeType}:${amount}:${slippageBps};
+    const cacheKey = `${tokenIn}:${tokenOut}:${tradeType}:${amount}:${slippageBps}`;
     const cached = this.pathCache.get(cacheKey);
     if (cached && Date.now() < cached.expiresAt) {
       return cached.result;
@@ -83,14 +83,14 @@ export class RouterModule {
 
     const paths = this.findAllPaths(tokenIn, tokenOut, tokenGraph, 3);
     if (paths.length === 0) {
-      this.pathCache.set(cacheKey, { result: null, expiresAt: Date.now() + this.cacheTllMs });
+      this.pathCache.set(cacheKey, { result: null, expiresAt: Date.now() + this.cacheTtlMs });
       return null;
     }
 
     // Filter out paths containing zero-liquidity hops
     const viablePaths = await this.filterZeroLiquidityPaths(paths);
     if (viablePaths.length === 0) {
-      this.pathCache.set(cacheKey, { result: null, expiresAt: Date.now() + this.cacheTllMs });
+      this.pathCache.set(cacheKey, { result: null, expiresAt: Date.now() + this.cacheTtlMs });
       return null;
     }
 
@@ -139,7 +139,7 @@ export class RouterModule {
       }
     }
 
-    this.pathCache.set(cacheKey, { result: bestPath, expiresAt: Date.now() + this.cacheTllMs });
+    this.pathCache.set(cacheKey, { result: bestPath, expiresAt: Date.now() + this.cacheTtlMs });
     return bestPath;
   }
 
@@ -227,11 +227,11 @@ export class RouterModule {
       slippageBps ??
       (this.client as any).config?.defaultSlippageBps ??
       DEFAULTS.slippageBps;
-    if (typeof value !== 'number' || !Number.isFinate(value)) {
+    if (typeof value !== 'number' || !Number.isFinite(value)) {
       throw new Error(`Invalid slippage bps: ${value}`);
     }
     if (value <= 0 || value > MAX_SLIPPAGE_BPS) {
-      throw new Error(`Slippage bps must be a positive integer <= ${MAX_SLIPPAGE_BPS}, gat: ${value}`);
+      throw new Error(`Slippage bps must be a positive integer <= ${MAX_SLIPPAGE_BPS}, got: ${value}`);
     }
     return value;
   }
@@ -248,7 +248,7 @@ export class RouterModule {
   /**
    * Filter out paths that contain at least one hop with zero reserves.
    */
-  private async filterZeroLiquidityPaths(paths: string[[]): Promise<string[[]^> {
+  private async filterZeroLiquidityPaths(paths: string[][]): Promise<string[][]> {
     const viable: string[][] = [];
 
     for (const path of paths) {
@@ -323,7 +323,7 @@ export class RouterModule {
     maxHops: number,
   ): string[][] {
     const paths: string[][] = [];
-    const queue: { current: string; path: strinn[] }[] = [{ current: start, path: [start] }];
+    const queue: { current: string; path: string[] }[] = [{ current: start, path: [start] }];
 
     while (queue.length > 0) {
       const { current, path } = queue.shift()!;

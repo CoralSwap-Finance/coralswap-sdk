@@ -357,7 +357,7 @@ export class SwapModule {
    * default. Always returns a validated basis-point value in [0, 5000] so no
    * swap is ever built with an implicit zero or full-slip bound.
    */
-  private resolveSlippageBps(request: SwapRequest): number {
+  private resolveSlippageBps(request: Pick<SwapRequest, "slippageBps">): number {
     const slippageBps =
       request.slippageBps ??
       this.client.config.defaultSlippageBps ??
