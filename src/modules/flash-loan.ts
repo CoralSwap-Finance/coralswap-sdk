@@ -327,29 +327,9 @@ export class FlashLoanModule {
             // Ignore decodeEvents failures
           }
 
-          if (!event && hasRawEvents) {
-            // Fallback: raw event accessor existed (older contract) but no match;
-            // synthesise an event from request values with explicit partial decodeStatus.
-            event = {
-              type: "FlashLoanExecuted",
-              borrowedAmount: request.amount,
-              feePaid: feeEstimate.feeAmount,
-              callbackAddress: request.receiverAddress,
-              token: request.token,
-              decodeStatus: "partial",
-            };
-          }
+          // Intentionally do not synthesize a successful FlashLoanExecuted event
+          // when the contract event is absent or the tx status is not a clean success.
         }
-      } else {
-        // Non-SUCCESS status: provide fallback event from request values with explicit partial decodeStatus
-        event = {
-          type: "FlashLoanExecuted",
-          borrowedAmount: request.amount,
-          feePaid: feeEstimate.feeAmount,
-          callbackAddress: request.receiverAddress,
-          token: request.token,
-          decodeStatus: "partial",
-        };
       }
     } catch (err) {
       if (err instanceof FlashLoanError) {
