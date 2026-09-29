@@ -1,4 +1,6 @@
-import { CoralSwapClient } from "@/client";
+
+import { z } from 'zod';
+import { CoralSwapClient } from '@/client';
 import {
   Proposal,
   ProposalAction,
@@ -14,9 +16,9 @@ import {
 } from "@/errors";
 import {
   validateAddress,
-  validateStringLength,
   validateEnumValue,
-} from "@/utils/validation";
+} from '@/utils/validation';
+import { isValidAddress } from '@/utils/addresses';
 import {
   Contract,
   nativeToScVal,
@@ -29,6 +31,38 @@ import {
   getTransactionStatus,
   shouldRetrySubmission,
 } from "@/utils/idempotent-resubmission";
+
+// ---------------------------------------------------------------------------
+// Zod schemas — governance input validation
+// ---------------------------------------------------------------------------
+
+const ProposalActionSchema = z.object({
+  contractAddress: z.string().refine((val) => isValidAddress(val), {
+    message: 'action.contractAddress is not a valid Stellar address',
+  }),
+  functionName: z.string(),
+  args: z.array(z.unknown()),
+});
+
+const CreateProposalInputSchema = z.object({
+  title: z.string()
+    .trim()
+    .min(1, 'title must be at least 1 character(s), got 0')
+    .max(200, 'title must be at most 200 character(s)'),
+  description: z.string()
+    .trim()
+    .min(1, 'description must be at least 1 character(s)')
+    .max(5000, 'description must be at most 5000 character(s)'),
+  actions: z.array(ProposalActionSchema)
+    .min(1, 'actions must be a non-empty array'),
+});
+
+const CastVoteInputSchema = z.object({
+  proposalId: z.string()
+    .trim()
+    .min(1, 'proposalId must not be empty'),
+  voteType: z.enum(['for', 'against', 'abstain']),
+});
 
 /**
  * Governance module — proposal creation, voting, and LP-token delegation.
@@ -148,17 +182,14 @@ export class GovernanceModule {
     actions: ProposalAction[],
     signer: Signer,
   ): Promise<string> {
-    validateStringLength(title, "title", 1, 200);
-    validateStringLength(description, "description", 1, 5000);
-    if (!Array.isArray(actions) || actions.length === 0) {
-      throw new ValidationError("actions must be a non-empty array", {
-        field: "actions",
-        constraint: "non-empty array",
-        operation: "createProposal",
+    const input = CreateProposalInputSchema.safeParse({ title, description, actions });
+    if (!input.success) {
+      const issue = input.error.issues[0];
+      throw new ValidationError(issue.message, {
+        field: issue.path.join('.'),
+        constraint: issue.code,
+        operation: 'createProposal',
       });
-    }
-    for (const action of actions) {
-      validateAddress(action.contractAddress, "action.contractAddress");
     }
 
     const signerPublicKey = await signer.publicKey();
@@ -261,14 +292,15 @@ export class GovernanceModule {
     voteType: VoteType,
     signer: Signer,
   ): Promise<string> {
-    if (!proposalId || proposalId.trim().length === 0) {
-      throw new ValidationError("proposalId must not be empty", {
-        field: "proposalId",
-        constraint: "non-empty string",
-        operation: "castVote",
+    const input = CastVoteInputSchema.safeParse({ proposalId, voteType });
+    if (!input.success) {
+      const issue = input.error.issues[0];
+      throw new ValidationError(issue.message, {
+        field: issue.path.join('.'),
+        constraint: issue.code,
+        operation: 'castVote',
       });
     }
-    validateEnumValue(voteType, "voteType", ["for", "against", "abstain"]);
 
     try {
       await this.getProposal(proposalId);
@@ -343,6 +375,92 @@ export class GovernanceModule {
         `castVote failed: ${result.error?.message ?? "Unknown error"}`,
         result.txHash,
         { operation: "castVote", proposalId, voteType },
+      );
+    }
+
+    return result.txHash!;
+  }
+
+  /**
+   * Cancel an active governance proposal.
+   *
+   * @param proposalId - Unique proposal identifier
+   * @param signer - Wallet signer authorizing the cancellation
+   * @returns Transaction hash of the submitted cancellation
+   * @throws {ValidationError} If proposalId is empty
+   * @throws {TransactionError} If the cancellation fails on-chain
+   */
+  async cancelProposal(
+    proposalId: string,
+    signer: Signer,
+  ): Promise<string> {
+    if (!proposalId || proposalId.trim().length === 0) {
+      throw new ValidationError("proposalId must not be empty", {
+        field: "proposalId",
+        constraint: "non-empty string",
+        operation: "cancelProposal",
+      });
+    }
+
+    const signerPublicKey = await signer.publicKey();
+    const contract = new Contract(this.contractAddress);
+
+    const op = contract.call(
+      "cancel_proposal",
+      nativeToScVal(proposalId, { type: "string" }),
+      new Address(signerPublicKey).toScVal(),
+    );
+
+    const result = await this.client.submitTransaction([op], signerPublicKey);
+
+    if (!result.success) {
+      throw new TransactionError(
+        `cancelProposal failed: ${result.error?.message ?? "Unknown error"}`,
+        result.txHash,
+        { operation: "cancelProposal", proposalId },
+      );
+    }
+
+    return result.txHash!;
+  }
+
+  /**
+   * Execute a passed proposal.
+   *
+   * @param proposalId - Unique proposal identifier
+   * @param signer - Wallet signer authorizing the execution
+   * @returns Transaction hash of the execution
+   * @throws {ValidationError} If proposalId is empty
+   * @throws {TransactionError} If execution fails on-chain
+   */
+  async executeProposal(
+    proposalId: string,
+    signer: Signer,
+  ): Promise<string> {
+    if (!proposalId || proposalId.trim().length === 0) {
+      throw new ValidationError("proposalId must not be empty", {
+        field: "proposalId",
+        constraint: "non-empty string",
+        operation: "executeProposal",
+      });
+    }
+
+    const signerPublicKey = await signer.publicKey();
+    const contract = new Contract(this.contractAddress);
+
+    const op = contract.call(
+      "execute_proposal",
+      nativeToScVal(proposalId, { type: "string" }),
+      new Address(signerPublicKey).toScVal(),
+    );
+
+    const result = await this.client.submitTransaction([op], signerPublicKey);
+
+    if (!result.success) {
+      throw new TransactionError(
+        `executeProposal failed: ${result.error?.message ?? "Unknown error"}`,
+        result.txHash,
+        { operation: "executeProposal", proposalId },
       );
     }
 
@@ -466,7 +584,7 @@ export class GovernanceModule {
    * @returns The full proposal object with vote tallies and metadata
    * @throws {ValidationError} If `proposalId` is empty
    * @throws {InvalidOperationError} If no proposal exists for the given ID
-
+   *
    * @example
    * ```typescript
    * const proposal = await gov.getProposal(proposalId);
@@ -739,6 +857,15 @@ export class GovernanceModule {
   private decodeProposal(val: xdr.ScVal): Proposal {
     const native = scValToNative(val) as Record<string, unknown>;
 
+    let actions: ProposalAction[] = [];
+    if (Array.isArray(native["actions"])) {
+      actions = (native["actions"] as Record<string, unknown>[]).map((a) => ({
+        contractAddress: String(a["contract_address"] ?? a["contractAddress"] ?? ""),
+        functionName: String(a["function_name"] ?? a["functionName"] ?? ""),
+        args: Array.isArray(a["args"]) ? (a["args"] as unknown[]) : [],
+      }));
+    }
+
     return {
       id: String(native["id"] ?? ""),
       title: String(native["title"] ?? ""),
@@ -754,7 +881,7 @@ export class GovernanceModule {
           : undefined,
       proposer: String(native["proposer"] ?? ""),
       createdAt: Number(native["created_at"] ?? 0),
-      actions: [],
+      actions,
     };
   }
 

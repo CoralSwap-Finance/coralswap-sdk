@@ -163,6 +163,15 @@ export {
   ConnectionPool,
   ledgerToApproxTime,
   LEDGER_CLOSE_INTERVAL_SECONDS,
+  decodeI128Strict,
+  TOKEN_DECIMALS,
+  PRICE_SCALE,
+  BPS_DENOMINATOR,
+  CONVERSION_SCALE,
+  SCALE,
+  DecimalsResolver,
+  DEFAULT_DECIMALS_CACHE_CAPACITY,
+  TTL_DISABLED,
 } from './utils';
 
 export type {
@@ -179,10 +188,13 @@ export type {
   RetryDecision,
   EventCursorOptions,
   TypedEventScanParams,
+  PageInfo,
+  ScanResult,
+  DecimalsResolverOptions,
 } from "./utils";
 
 // Schema validation
-export { validateWithSchema, OrderBookAddressSchema, TradeFilterSchema, GetOpenOrdersSchema, GetOrderSummarySchema } from "@/schemas";
+export { validateWithSchema, OrderBookAddressSchema, TradeFilterSchema } from "@/schemas";
 
 // Errors
 export {
@@ -202,6 +214,7 @@ export {
   CircuitBreakerError,
   SignerError,
   MissingPriceFeedError,
+  NotConfiguredError,
   AddressNotFoundError,
   PortfolioCalculationError,
   WebhookError,

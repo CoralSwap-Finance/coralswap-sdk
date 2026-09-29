@@ -279,8 +279,6 @@ export class FlashLoanModule {
       const txResult = await this.client.server.getTransaction(txHash);
       if (txResult.status === "SUCCESS") {
         const rawEvents = this.getRawEvents(txResult);
-        const hasRawEvents =
-          rawEvents.length > 0 || this.hasEventsAccessor(txResult);
 
         // A FlashLoanFailed event means the callback reverted; surface it as an error.
         const failedEvent = this.decodeFailedEvent(rawEvents);
@@ -327,29 +325,9 @@ export class FlashLoanModule {
             // Ignore decodeEvents failures
           }
 
-          if (!event && hasRawEvents) {
-            // Fallback: raw event accessor existed (older contract) but no match;
-            // synthesise an event from request values with explicit partial decodeStatus.
-            event = {
-              type: "FlashLoanExecuted",
-              borrowedAmount: request.amount,
-              feePaid: feeEstimate.feeAmount,
-              callbackAddress: request.receiverAddress,
-              token: request.token,
-              decodeStatus: "partial",
-            };
-          }
+          // Intentionally do not synthesize a successful FlashLoanExecuted event
+          // when the contract event is absent or the tx status is not a clean success.
         }
-      } else {
-        // Non-SUCCESS status: provide fallback event from request values with explicit partial decodeStatus
-        event = {
-          type: "FlashLoanExecuted",
-          borrowedAmount: request.amount,
-          feePaid: feeEstimate.feeAmount,
-          callbackAddress: request.receiverAddress,
-          token: request.token,
-          decodeStatus: "partial",
-        };
       }
     } catch (err) {
       if (err instanceof FlashLoanError) {
@@ -488,16 +466,6 @@ export class FlashLoanModule {
     }
   }
 
-  private hasEventsAccessor(txResult: any): boolean {
-    try {
-      return (
-        Array.isArray(txResult?.resultMetaXdr?.v3?.sorobanMeta?.events) &&
-        txResult.resultMetaXdr.v3.sorobanMeta.events.length > 0
-      );
-    } catch {
-      return false;
-    }
-  }
 
   private decodeExecutedEvent(
     events: xdr.ContractEvent[],

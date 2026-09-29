@@ -28,6 +28,7 @@ import {
 } from "@/utils/validation";
 import { isValidAddress } from "@/utils/addresses";
 import { validateWithSchema } from "@/schemas";
+import { decodeI128 } from "@/utils/numeric";
 import { z } from "zod";
 
 /**
@@ -658,10 +659,11 @@ export class StakingModule {
     if (!entry) return 0n;
     const val = entry.val;
     if (val.type !== "scvI128") return 0n;
-    const i128 = val.i128 as unknown;
-    if (typeof i128 === "bigint") return i128;
-    const parts = i128 as { hi: bigint; lo: bigint };
-    return (parts.hi << 64n) + parts.lo;
+    try {
+      return decodeI128(val);
+    } catch {
+      return 0n;
+    }
   }
 
   /**

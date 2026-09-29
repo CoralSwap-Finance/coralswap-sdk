@@ -103,12 +103,21 @@ function createMockClient(opts: {
     const filter = req.filters[0] ?? {};
     const wantedTopics = new Set(filter.topics?.[0] ?? []);
     const wantedContracts = new Set(filter.contractIds ?? []);
-    const matches = sorted.filter(
-      (e) =>
-        e.ledger >= req.startLedger &&
-        (wantedContracts.size === 0 || wantedContracts.has(e.contractId!.toString())) &&
-        wantedTopics.has(e.topic[0].toXDR('base64')),
-    );
+    // Mirror Soroban RPC: a ledger-range request starts at `startLedger`; a
+    // cursor request resumes right after the event whose paging token equals
+    // the cursor, and carries no ledger range.
+    const cursor = (req as { cursor?: string }).cursor;
+    const matchesFilter = (e: (typeof sorted)[number]) =>
+      (wantedContracts.size === 0 || wantedContracts.has(e.contractId!.toString())) &&
+      wantedTopics.has(e.topic[0].toXDR('base64'));
+    let matches: typeof sorted;
+    if (cursor !== undefined) {
+      const all = sorted.filter(matchesFilter);
+      const idx = all.findIndex((e) => e.pagingToken === cursor);
+      matches = idx >= 0 ? all.slice(idx + 1) : [];
+    } else {
+      matches = sorted.filter((e) => e.ledger >= req.startLedger && matchesFilter(e));
+    }
     return { events: matches.slice(0, req.limit), latestLedger: CURRENT_LEDGER };
   });
 

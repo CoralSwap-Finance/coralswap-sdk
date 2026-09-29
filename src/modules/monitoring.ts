@@ -29,6 +29,7 @@ import { ValidationError } from '@/errors';
 import { validateAddress } from '@/utils/validation';
 import { LEDGER_CLOSE_INTERVAL_SECONDS } from '@/utils/ledger';
 import { TypedEventCursor, MIN_START_LEDGER } from '@/utils/event-cursor';
+import { MonitoringPeriodSchema, validateWithSchema } from '@/schemas';
 import { TreasuryModule, TreasuryModuleOptions } from '@/modules/treasury';
 import { SwapModule } from '@/modules/swap';
 
@@ -391,13 +392,7 @@ export class MonitoringModule {
    * ```
    */
   async getSystemMetrics(period: SystemMetricsPeriod = '24h'): Promise<SystemMetrics> {
-    if (period !== '24h' && period !== '7d' && period !== '30d') {
-      throw new ValidationError(`Invalid system metrics period: ${period}`, {
-        field: 'period',
-        constraint: "'24h' | '7d' | '30d'",
-        actual: period,
-      });
-    }
+    validateWithSchema(MonitoringPeriodSchema, period, `system metrics period (${String(period)})`);
 
     const allPairs = await this.client.factory.getAllPairs();
     if (allPairs.length === 0) {

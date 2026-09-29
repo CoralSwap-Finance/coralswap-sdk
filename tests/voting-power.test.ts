@@ -3,6 +3,7 @@ import {
   getVotingPowerAtLedger,
   setVotingPowerQueryProvider,
 } from '../src/utils/voting-power';
+import { NotConfiguredError } from '../src/errors';
 
 describe('voting power utilities', () => {
   afterEach(() => {
@@ -221,15 +222,23 @@ describe('voting power utilities', () => {
     expect(result.percentOfTotal).toBe(0);
   });
 
-  it('handles undefined provider (fallback to zero)', async () => {
+  it('throws a typed error when the voting-power provider is missing', async () => {
     setVotingPowerQueryProvider(undefined);
 
-    const result = await getVotingPower('GNOFALLBACK');
+    await expect(getVotingPower('GNOFALLBACK')).rejects.toBeInstanceOf(NotConfiguredError);
+    await expect(getVotingPowerAtLedger('GNOFALLBACK', 42)).rejects.toBeInstanceOf(
+      NotConfiguredError,
+    );
+  });
 
-    expect(result.ownStake).toBe(0n);
-    expect(result.delegatedStake).toBe(0n);
-    expect(result.totalPower).toBe(0n);
-    expect(result.percentOfTotal).toBe(0);
+  it('preserves zero power for an empty address', async () => {
+    setVotingPowerQueryProvider(undefined);
+    await expect(getVotingPower('')).resolves.toEqual({
+      ownStake: 0n,
+      delegatedStake: 0n,
+      totalPower: 0n,
+      percentOfTotal: 0,
+    });
   });
 
   it('handles partial snapshot at specific ledger', async () => {
