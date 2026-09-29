@@ -293,6 +293,10 @@ export class LiquidityModule {
       return estimateGas((ops) => this.client.simulateTransaction(ops, {}), [op]);
     }
 
+    const sim = typeof this.client.simulateTransaction === 'function'
+      ? await this.client.simulateTransaction([op], {})
+      : null;
+
     const result = await this.client.submitTransaction([op]);
 
     if (!result.success) {
@@ -302,11 +306,21 @@ export class LiquidityModule {
       );
     }
 
-    return {
-      txHash: result.txHash!,
+    const fallback = {
       amountA: request.amountADesired,
       amountB: request.amountBDesired,
       liquidity: 0n,
+    };
+
+    const amounts = sim && sim.success && sim.returnValue
+      ? this.decodeLiquidityResult(sim.returnValue, 3)
+      : fallback;
+
+    return {
+      txHash: result.txHash!,
+      amountA: amounts.amountA,
+      amountB: amounts.amountB,
+      liquidity: amounts.liquidity ?? 0n,
       ledger: result.data!.ledger,
     };
   }
@@ -363,6 +377,10 @@ export class LiquidityModule {
       return estimateGas((ops) => this.client.simulateTransaction(ops, {}), [op]);
     }
 
+    const sim = typeof this.client.simulateTransaction === 'function'
+      ? await this.client.simulateTransaction([op], {})
+      : null;
+
     const result = await this.client.submitTransaction([op]);
 
     if (!result.success) {
@@ -372,11 +390,21 @@ export class LiquidityModule {
       );
     }
 
-    return {
-      txHash: result.txHash!,
+    const fallback = {
       amountA: request.amountAMin,
       amountB: request.amountBMin,
       liquidity: request.liquidity,
+    };
+
+    const amounts = sim && sim.success && sim.returnValue
+      ? this.decodeLiquidityResult(sim.returnValue, 2)
+      : fallback;
+
+    return {
+      txHash: result.txHash!,
+      amountA: amounts.amountA,
+      amountB: amounts.amountB,
+      liquidity: amounts.liquidity ?? request.liquidity,
       ledger: result.data!.ledger,
     };
   }
@@ -449,6 +477,40 @@ export class LiquidityModule {
   private async getLPTotalSupply(pairAddress: string): Promise<bigint> {
     const lpClient = this.client.lpToken(pairAddress);
     return lpClient.totalSupply();
+  }
+
+  private decodeLiquidityResult(
+    value: unknown,
+    expectedLength: number,
+  ): { amountA: bigint; amountB: bigint; liquidity?: bigint } {
+    const vec = (value as { vec?: unknown[] })?.vec ?? (value as { value?: unknown[] })?.value ?? [];
+    if (!Array.isArray(vec) || vec.length < expectedLength) {
+      throw new TransactionError(
+        "Liquidity simulation returned an unexpected result shape",
+        undefined,
+      );
+    }
+
+    const decodeI128 = (entry: unknown): bigint => {
+      if (typeof entry === 'bigint') return entry;
+      if (typeof entry === 'number') return BigInt(entry);
+      if (typeof entry === 'string') return BigInt(entry);
+      if (entry && typeof entry === 'object') {
+        const obj = entry as Record<string, unknown>;
+        if (typeof obj.i128 === 'bigint') return obj.i128;
+        if (typeof obj.i128 === 'function') {
+          const parts = (obj.i128 as () => { hi(): { toString(): string }; lo(): { toString(): string } })();
+          return (BigInt(parts.hi().toString()) << 64n) + BigInt(parts.lo().toString());
+        }
+      }
+      throw new TransactionError('Liquidity simulation returned a non-i128 value', undefined);
+    };
+
+    const amountA = decodeI128(vec[0]);
+    const amountB = decodeI128(vec[1]);
+    const liquidity = expectedLength === 3 ? decodeI128(vec[2]) : undefined;
+
+    return { amountA, amountB, liquidity };
   }
 
   /**
