@@ -1,12 +1,13 @@
 import {
   Contract,
-  SorobanRpc,
+  rpc,
   TransactionBuilder,
   xdr,
   Address,
   nativeToScVal,
 } from "@stellar/stellar-sdk";
 import { withRetry, RetryOptions } from "@/utils/retry";
+import { decodeI128 } from "@/utils/scval";
 import { Logger } from "@/types/common";
 
 /**
@@ -17,7 +18,7 @@ import { Logger } from "@/types/common";
  */
 export class RouterClient {
   private contract: Contract;
-  private server: SorobanRpc.Server;
+  private server: rpc.Server;
   private networkPassphrase: string;
   private retryOptions: RetryOptions;
   private logger?: Logger;
@@ -33,7 +34,7 @@ export class RouterClient {
    */
   constructor(
     contractAddress: string,
-    server: SorobanRpc.Server,
+    server: rpc.Server,
     networkPassphrase: string,
     retryOptions: RetryOptions,
     logger?: Logger,
@@ -224,7 +225,7 @@ export class RouterClient {
     );
     const result = await this.simulateRead(op);
     if (!result) return 30;
-    return result.u32() ?? 30;
+    return result.type === "scvU32" ? result.u32 : 30;
   }
 
   /**
@@ -249,10 +250,7 @@ export class RouterClient {
     );
     const result = await this.simulateRead(op);
     if (!result) throw new Error("Failed to get quote");
-    return (
-      BigInt(result.i128().lo().toString()) +
-      (BigInt(result.i128().hi().toString()) << 64n)
-    );
+    return decodeI128(result);
   }
 
   /**
@@ -287,7 +285,7 @@ export class RouterClient {
       this.logger,
       "RouterClient_simulateTransaction",
     );
-    if (SorobanRpc.Api.isSimulationSuccess(sim) && sim.result) {
+    if (rpc.Api.isSimulationSuccess(sim) && sim.result) {
       return sim.result.retval;
     }
     return null;

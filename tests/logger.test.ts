@@ -105,7 +105,10 @@ describe('Logger Middleware', () => {
       expect(result.success).toBe(false);
       expect(logger.error).toHaveBeenCalledWith(
         'submitTransaction: unexpected error',
-        expect.any(Error),
+        expect.objectContaining({
+          name: 'Error',
+          message: 'RPC connection lost',
+        }),
       );
     });
 

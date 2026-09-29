@@ -1,4 +1,5 @@
 import { PRECISION } from "@/config";
+import { ValidationError } from "@/errors";
 
 /**
  * Amount utilities for Soroban i128 arithmetic.
@@ -173,7 +174,9 @@ export function fromSorobanAmount(
   const whole = str.slice(0, str.length - decimals);
   const frac = str.slice(str.length - decimals);
 
-  const result = `${whole}.${frac}`;
+  // A zero-decimal token has no fractional part; "123." would not round-trip
+  // through parseTokenAmount.
+  const result = decimals === 0 ? whole : `${whole}.${frac}`;
   return isNegative ? `-${result}` : result;
 }
 
@@ -389,10 +392,22 @@ export function percentDiff(a: bigint, b: bigint): number {
  */
 export function safeMul(a: bigint, b: bigint): bigint {
   if (a === 0n || b === 0n) return 0n;
+
+  const i128Max = (2n ** 127n) - 1n;
+  const i128Min = -i128Max;
   const result = a * b;
-  if (result / a !== b) {
-    throw new Error("Overflow in safeMul");
+
+  if (result > i128Max || result < i128Min) {
+    throw new ValidationError(
+      `Multiplication result ${result} exceeds the Soroban i128 range [${i128Min}, ${i128Max}]`,
+      {
+        a: a.toString(),
+        b: b.toString(),
+        result: result.toString(),
+      },
+    );
   }
+
   return result;
 }
 

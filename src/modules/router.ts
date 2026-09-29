@@ -97,12 +97,10 @@ export class RouterModule {
           quote = await this.buildExactOutMultiHopQuote(swapModule, path, amount);
         } else {
           quote = await swapModule.getMultiHopQuote({
-            tokenIn: path[0],
-            tokenOut: path[path.length - 1],
+            path,
             amount,
             tradeType,
-            path,
-          }, path);
+          });
         }
 
         const isBetter =

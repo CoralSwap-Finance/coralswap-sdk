@@ -1,47 +1,7 @@
 
-import { getQuorumStatus } from '../src/modules/governance';
-
-describe('Governance Module', () => {
-  describe('getQuorumStatus', () => {
-    it('should return the correct quorum status when quorum is not reached', async () => {
-      const status = await getQuorumStatus('proposal-1');
-      expect(status.isQuorumReached).toBe(false);
-      expect(status.quorumRequired).toBe(1000000n);
-      expect(status.currentParticipation).toBe(500000n);
-      expect(status.remainingVotes).toBe(500000n);
-      expect(status.participationPercent).toBe(50);
-    });
-
-    it('should return the correct quorum status when quorum is exactly met', async () => {
-      const status = await getQuorumStatus('proposal-2');
-      expect(status.isQuorumReached).toBe(true);
-      expect(status.quorumRequired).toBe(1000000n);
-      expect(status.currentParticipation).toBe(1000000n);
-      expect(status.remainingVotes).toBe(0n);
-      expect(status.participationPercent).toBe(100);
-    });
-
-    it('should return the correct quorum status when quorum is exceeded', async () => {
-        const status = await getQuorumStatus('proposal-2');
-        // Re-using proposal-2 which is at 100%
-        expect(status.isQuorumReached).toBe(true);
-        expect(status.remainingVotes).toBe(0n);
-        expect(status.participationPercent).toBe(100);
-      });
-
-    it('should calculate participation percentage correctly', async () => {
-      const status = await getQuorumStatus('proposal-3');
-      expect(status.participationPercent).toBe(25);
-    });
-
-    it('should throw a ValidationError if the proposal ID does not exist', async () => {
-      await expect(getQuorumStatus('non-existent-proposal')).rejects.toThrow(
-        'Proposal with ID "non-existent-proposal" not found.'
-      );
-    });
 import { CoralSwapClient } from '../src/client';
 import { GovernanceModule } from '../src/modules/governance';
-import { ValidationError, PairNotFoundError, TransactionError } from '../src/errors';
+import { ValidationError, InvalidOperationError, TransactionError } from '../src/errors';
 import { Network } from '../src/types/common';
 import type { Proposal, DelegationState, ProposalAction } from '../src/types/governance';
 import type { SimulateTransactionResult } from '../src/types/common';
@@ -181,7 +141,7 @@ describe('GovernanceModule', () => {
 
       await expect(
         governance.createProposal('', 'Description', actions, mockSigner),
-      ).rejects.toThrow('title must not be empty');
+      ).rejects.toThrow('title must be at least 1 character(s), got 0');
     });
 
     it('throws ValidationError when description is empty', async () => {
@@ -227,6 +187,12 @@ describe('GovernanceModule', () => {
   // -------------------------------------------------------------------------
 
   describe('castVote()', () => {
+    beforeEach(() => {
+      jest
+        .spyOn(client, 'simulateTransaction')
+        .mockResolvedValue(makeSimResult(makeProposalNative()) as never);
+    });
+
     it('returns a tx hash when vote is cast successfully', async () => {
       jest.spyOn(client, 'submitTransaction').mockResolvedValue({
         success: true,
@@ -305,12 +271,12 @@ describe('GovernanceModule', () => {
       await expect(governance.getProposal('')).rejects.toThrow(ValidationError);
     });
 
-    it('throws PairNotFoundError when the simulation returns no value', async () => {
+    it('throws InvalidOperationError when the simulation returns no value', async () => {
       jest
         .spyOn(client, 'simulateTransaction')
         .mockResolvedValue(makeSimResult(null, false) as never);
 
-      await expect(governance.getProposal('nonexistent')).rejects.toThrow(PairNotFoundError);
+      await expect(governance.getProposal('nonexistent')).rejects.toThrow(InvalidOperationError);
     });
 
     it('decodes executedAt when present in the contract response', async () => {
@@ -522,6 +488,87 @@ describe('GovernanceModule', () => {
 
       await expect(governance.undelegate(mockSigner)).rejects.toThrow(TransactionError);
       await expect(governance.undelegate(mockSigner)).rejects.toThrow('No active delegation found');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Proposal Action Decoding & Lifecycle Matrix
+  // -------------------------------------------------------------------------
+
+  describe('proposal action decoding & lifecycle matrix', () => {
+    it('decodes proposal actions correctly from contract response', async () => {
+      const proposalWithActions = makeProposalNative({
+        id: 'prop-actions-1',
+        actions: [
+          {
+            contract_address: ACTION_CONTRACT,
+            function_name: 'set_fee',
+            args: [30],
+          },
+        ],
+      });
+
+      jest
+        .spyOn(client, 'simulateTransaction')
+        .mockResolvedValue(makeSimResult(proposalWithActions) as never);
+
+      const prop = await governance.getProposal('prop-actions-1');
+
+      expect(prop.actions).toHaveLength(1);
+      expect(prop.actions[0].contractAddress).toBe(ACTION_CONTRACT);
+      expect(prop.actions[0].functionName).toBe('set_fee');
+    });
+
+    describe('cancelProposal()', () => {
+      it('returns tx hash on successful cancellation', async () => {
+        jest.spyOn(client, 'submitTransaction').mockResolvedValue({
+          success: true,
+          txHash: TEST_TX_HASH,
+          data: { txHash: TEST_TX_HASH, ledger: 3000 },
+        });
+
+        const res = await governance.cancelProposal('proposal-1', mockSigner);
+        expect(res).toBe(TEST_TX_HASH);
+      });
+
+      it('throws ValidationError for empty proposalId', async () => {
+        await expect(governance.cancelProposal('', mockSigner)).rejects.toThrow(ValidationError);
+      });
+
+      it('throws TransactionError when cancellation fails', async () => {
+        jest.spyOn(client, 'submitTransaction').mockResolvedValue({
+          success: false,
+          error: { code: 'UNAUTHORIZED', message: 'Not proposal owner' },
+        });
+
+        await expect(governance.cancelProposal('proposal-1', mockSigner)).rejects.toThrow(TransactionError);
+      });
+    });
+
+    describe('executeProposal()', () => {
+      it('returns tx hash on successful execution', async () => {
+        jest.spyOn(client, 'submitTransaction').mockResolvedValue({
+          success: true,
+          txHash: TEST_TX_HASH,
+          data: { txHash: TEST_TX_HASH, ledger: 3001 },
+        });
+
+        const res = await governance.executeProposal('proposal-1', mockSigner);
+        expect(res).toBe(TEST_TX_HASH);
+      });
+
+      it('throws ValidationError for empty proposalId', async () => {
+        await expect(governance.executeProposal('', mockSigner)).rejects.toThrow(ValidationError);
+      });
+
+      it('throws TransactionError when execution fails', async () => {
+        jest.spyOn(client, 'submitTransaction').mockResolvedValue({
+          success: false,
+          error: { code: 'EXECUTION_FAILED', message: 'Action reverted' },
+        });
+
+        await expect(governance.executeProposal('proposal-1', mockSigner)).rejects.toThrow(TransactionError);
+      });
     });
   });
 });

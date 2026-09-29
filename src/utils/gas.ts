@@ -36,7 +36,7 @@ export async function estimateGas(
   const sim = await simulate(operations);
   if (!sim.success) {
     throw new SimulationError(sim.error ?? 'Simulation failed', {
-      simulation: sim.raw,
+      reason: sim.error ?? 'Simulation failed',
     });
   }
   const fee = parseInt(sim.minResourceFee, 10) || 0;

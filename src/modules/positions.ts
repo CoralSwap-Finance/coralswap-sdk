@@ -98,7 +98,7 @@ export class PositionsModule {
   ): Promise<PositionSummary> {
     validateAddress(owner, "owner");
 
-    const { includeEmpty = false, pairAddresses } = options;
+    const { includeEmpty = false, pairAddresses, limit, cursor } = options;
 
     const pairs =
       pairAddresses && pairAddresses.length > 0
@@ -106,7 +106,13 @@ export class PositionsModule {
         : await this.client.factory.getAllPairs();
 
     if (pairs.length === 0) {
-      return { owner, totalPools: 0, positions: [] };
+      return {
+        owner,
+        totalPools: 0,
+        positions: [],
+        truncated: false,
+        pageInfo: { limit, cursor, nextCursor: null, hasNextPage: false },
+      };
     }
 
     const results = await Promise.allSettled(
@@ -123,10 +129,30 @@ export class PositionsModule {
       }
     }
 
+    const safeLimit = limit !== undefined ? Math.max(1, Math.floor(limit)) : undefined;
+    const startIndex = cursor ? Math.max(0, Number.parseInt(cursor, 10) || 0) : 0;
+    const pageStart = safeLimit === undefined ? 0 : startIndex;
+    const pageEnd = safeLimit === undefined ? positions.length : pageStart + safeLimit;
+    const page = safeLimit === undefined ? positions : positions.slice(pageStart, pageEnd);
+    const truncated =
+      safeLimit !== undefined &&
+      positions.length > safeLimit &&
+      pageStart < positions.length &&
+      pageEnd < positions.length;
+    const nextCursor = truncated ? String(pageEnd) : null;
+
     return {
       owner,
       totalPools: positions.length,
-      positions,
+      positions: page,
+      truncated,
+      pageInfo: {
+        limit: safeLimit,
+        cursor: cursor ?? undefined,
+        nextCursor,
+        hasNextPage: truncated,
+        hasMore: truncated,
+      },
     };
   }
 
