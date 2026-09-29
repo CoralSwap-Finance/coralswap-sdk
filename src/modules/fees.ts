@@ -214,11 +214,27 @@ export class FeeModule {
     const toLedger = options.toLedger ?? currentLedger;
 
     const cursor = new TypedEventCursor(this.client.server, pairAddress, ["swap"]);
-    const swapEvents = (await cursor.scan({
+    const swapResult = await cursor.scan({
       fromLedger,
       toLedger,
       limit: this.revenuePageLimit(options.limit),
-    })) as SwapEvent[];
+    });
+
+    // Surface a warning when the page hit the limit so callers know the
+    // revenue window was capped. Use swapResult.pageInfo.nextCursor to
+    // resume from the exact position in subsequent requests.
+    if (swapResult.hasNextPage) {
+      const logger = (this.client as any).logger;
+      if (logger && typeof logger.warn === 'function') {
+        logger.warn(
+          'FeeModule.getFeeRevenue: result set was capped — use a smaller ' +
+          'window or pass a lower limit and resume with pageInfo.nextCursor',
+          { nextCursor: swapResult.pageInfo.nextCursor, pairAddress },
+        );
+      }
+    }
+
+    const swapEvents = swapResult as unknown as SwapEvent[];
 
     let totalFeeStroops = 0n;
     const totalsByToken = new Map<string, bigint>();
