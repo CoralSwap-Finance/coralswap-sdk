@@ -508,7 +508,7 @@ describe('StopLossModule', () => {
 
       const gas = await stopLoss.estimateStopLossGas(makeParams());
 
-      expect(gas.fee).toBe(100);
+      expect(gas.fee).toBe(100n);
       expect(gas.feeXLM).toBe('0.00001 XLM');
       expect(simulate).toHaveBeenCalledTimes(1);
       expect((simulate.mock.calls[0][0] as unknown[])).toHaveLength(1);
@@ -526,7 +526,7 @@ describe('StopLossModule', () => {
         route: [TOKEN_IN, TOKEN_MID, TOKEN_OUT],
       });
 
-      expect(gas.fee).toBe(275);
+      expect(gas.fee).toBe(275n);
       expect(gas.feeXLM).toBe('0.00003 XLM');
       expect((simulate.mock.calls[0][0] as unknown[])).toHaveLength(2);
     });

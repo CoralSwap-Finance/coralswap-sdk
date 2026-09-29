@@ -98,7 +98,7 @@ export type { BatchRequestOptions, BatchResult } from './batch-request';
 export { parseChangelog } from './changelog';
 export { RateLimiter, RateLimiterDestroyedError } from './rate-limiter';
 export type { RateLimiterOptions } from './rate-limiter';
-export { estimateGas } from './gas';
+export { estimateGas, parseStroops, formatStroopsAsXLM } from './gas';
 export type { SimulateFn } from './gas';
 
 export { waitNextLedger, ledgerToApproxTime, LEDGER_CLOSE_INTERVAL_SECONDS } from './ledger';
