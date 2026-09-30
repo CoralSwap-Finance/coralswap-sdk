@@ -23,6 +23,7 @@ import { estimateGas } from '../utils/gas';
 import { resolveTokenIdentifier } from '../utils/addresses';
 import { simulateSwapParamsSchema, multiHopSwapRequestSchema, swapHistoryFilterSchema, priceGuardConfigSchema, parseWithValidationError } from '../schemas/swap';
 import { verifyRedStonePayload, estimateUsdValue, DEFAULT_PRICE_GUARD_CONFIG } from '../utils/redstone';
+import type { PriceGuardResult } from '../utils/redstone';
 import { getTransactionStatus, shouldRetrySubmission } from '../utils/idempotent-resubmission';
 import { sleep } from '../utils/retry';
 
@@ -77,6 +78,8 @@ export class SwapModule {
 
     const { redstonePayload } = request;
 
+    let priceGuard: PriceGuardResult | undefined;
+
     if (redstonePayload) {
       // Determine whether this swap is large enough to require the guard.
       const usdValue = estimateUsdValue(
@@ -89,7 +92,9 @@ export class SwapModule {
         usdValue === null || usdValue >= this.priceGuardConfig.minGuardedAmountUsd;
 
       if (guardRequired) {
-        verifyRedStonePayload(
+        // Propagate the outcome so a skipped guard is visible to the caller
+        // instead of looking like a verified one.
+        priceGuard = verifyRedStonePayload(
           redstonePayload,
           tokenInSymbol,
           tokenOutSymbol,
@@ -100,7 +105,7 @@ export class SwapModule {
       }
     }
 
-    return this.execute({ ...request, quote });
+    return { ...(await this.execute({ ...request, quote })), priceGuard };
   }
 
   /**

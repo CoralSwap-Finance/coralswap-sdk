@@ -140,7 +140,22 @@ export class LeaderboardModule extends TreasuryModule {
       toLedger: endLedger,
       limit: MAX_LEADERBOARD_EVENTS,
     });
+
+    // Warn when the page hit the cap so callers can narrow their window or
+    // use pageInfo.nextCursor to continue from the exact resume point.
+    if (events.pageInfo?.hasMore) {
+      const logger = (this.leaderboardClient as any).logger;
+      if (logger && typeof logger.warn === 'function') {
+        logger.warn(
+          'LeaderboardModule.getLeaderboard: result set was capped at ' +
+          `${MAX_LEADERBOARD_EVENTS} events — rankings may be incomplete`,
+          { nextCursor: events.pageInfo.nextCursor, type, period },
+        );
+      }
+    }
+
     if (events.length === 0) return [];
+
 
     const currentMap = new Map<string, bigint>();
     const previousMap = new Map<string, bigint>();

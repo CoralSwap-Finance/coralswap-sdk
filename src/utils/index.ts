@@ -113,7 +113,7 @@ export {
 export type { DecodeEventsOptions } from './events';
 
 export { EventCursor, TypedEventCursor, decodeEventTopic, MIN_START_LEDGER, MAX_EVENT_LIMIT } from './event-cursor';
-export type { EventCursorOptions, TypedEventScanParams } from './event-cursor';
+export type { EventCursorOptions, TypedEventScanParams, PageInfo, ScanResult } from './event-cursor';
 export { ConnectionPool } from './connection-pool';
 
 export {
