@@ -1,6 +1,6 @@
 import { xdr, rpc, Contract, TransactionBuilder } from "@stellar/stellar-sdk";
 import { CoralSwapClient } from "@/client";
-import { FeeEstimate FeeRevenue, FeeRevenueEntry, FeeRevenueTokenTotal } from "@/types/fee";
+import { FeeEstimate } from "@/types/fee";
 import {
   FeeRevenueByToken,
   FeeRevenueEvent,
@@ -9,27 +9,14 @@ import {
 } from "@/types/fee";
 import { FeeState } from "@/types/pool";
 import { FeeEstimates } from "@/types/fee-estimates";
-import { SwapEvent } from "@/types/events";
 import { estimateGas } from "@/utils/gas";
 import { validateAddress, validatePositiveAmount } from "@/utils/validation";
 import { ledgerToApproxTime, LedgerHead } from "@/utils/ledger";
-import { TypedEventCursor } from "@/utils/event-cursor";
+import { TypedEventCursor, MIN_START_LEDGER, MAX_EVENT_LIMIT } from "@/utils/event-cursor";
 import { SwapEvent } from "@/types/events";
 import { decodeU32 } from "@/utils/scval";
-import { fromSorobanAmount } from "@/utils/amounts";
 import { getTokenDecimals, FALLBACK_TOKEN_DECIMALS } from "@/utils/token-decimals";
 import { ValidationError } from "@/errors";
-
-/** Swap events aggregated by `getFeeRevenue()` when no `limit` is given. */
-const DEFAULT_REVENUE_EVENT_LIMIT = 200;
-/**
- * Per-request page size while paginating the swap stream. `getFeeRevenue()`
- * caps how many swaps it aggregates at `limit`, but fetches them in pages so a
- * window holding more than one page of swaps is not truncated at page one.
- */
-const REVENUE_PAGE_SIZE = 100;
-/** Default revenue window: 30 days of ledgers at a 5s close time. */
-const DEFAULT_REVENUE_WINDOW_LEDGERS = 518_400;
 
 /**
  * Fee module -- dynamic fee transparency and estimation.
@@ -205,7 +192,7 @@ export class FeeModule {
    * @returns Aggregated fee revenue (exact BigInt totals + display values)
    * @example
    * const revenue = await client.fees.getFeeRevenue('C...');
-   * console.log(revenue.byToken[0].totalFeeFormatted, revenue.totalFeeXLM);
+   * console.log(revenue.totalFeeXLM);
    */
   async getFeeRevenue(
     pairAddress: string,
@@ -214,46 +201,20 @@ export class FeeModule {
       toLedger?: number;
       limit?: number;
     } = {},
-  ): Promise<FeeRevenue> {
+  ): Promise<PairFeeRevenue> {
     validateAddress(pairAddress, "pairAddress");
     this.validateRevenueWindow(options);
 
-    const limit = options.limit ?? DEFAULT_REVENUE_EVENT_LIMIT;
-    if (!Number.isInteger(limit) || limit < 1) {
-      throw new ValidationError(
-        `limit must be a positive integer, got ${options.limit}`,
-        { field: "limit", constraint: "positive integer", actual: options.limit },
-      );
-    }
-
     const currentLedger = await this.client.getCurrentLedger();
-    const fromLedger =
-      options.fromLedger ?? Math.max(0, currentLedger - DEFAULT_REVENUE_WINDOW_LEDGERS);
+    // Clamp to MIN_START_LEDGER (1): ledger 0 does not exist and RPC rejects
+    // startLedger below 1 — relevant on young networks with the 30-day window.
+    const fromLedger = Math.max(
+      MIN_START_LEDGER,
+      options.fromLedger ?? currentLedger - FeeModule.DEFAULT_REVENUE_WINDOW_LEDGERS,
+    );
     const toLedger = options.toLedger ?? currentLedger;
-    // Reference head for approximating an event's wall-clock time when the
-    // event omits `ledgerClosedAt`. The chain head is ~now.
-    const head: LedgerHead = {
-      ledger: currentLedger,
-      closeTime: Math.floor(Date.now() / 1000),
-    };
 
-    // The shared cursor base64-encodes the "swap" topic (RPC rejects bare
-    // strings) and follows page cursors so windows past one page are counted.
     const cursor = new TypedEventCursor(this.client.server, pairAddress, ["swap"]);
-    const events = await cursor.scan({
-      fromLedger,
-      toLedger,
-      limit: Math.min(limit, REVENUE_PAGE_SIZE),
-    });
-
-    const swaps: SwapEvent[] = [];
-    for (const event of events) {
-      if (event.type !== "swap") continue;
-      const swap = event as SwapEvent;
-      // The final page can run past toLedger; getEvents has no end bound.
-      if (swap.ledger > toLedger || swap.feeBps <= 0) continue;
-      swaps.push(swap);
-    }
     const swapResult = await cursor.scan({
       fromLedger,
       toLedger,
@@ -284,61 +245,25 @@ export class FeeModule {
       // The final page may run past toLedger; getEvents has no end bound.
       if (event.ledger > toLedger) continue;
 
-    // Resolve every distinct input token's decimals once, then price each fee
-    // at the decimals of the token it was charged in.
-    const decimalsByToken = new Map<string, number>();
-    await Promise.all(
-      [...new Set(swaps.map((swap) => swap.tokenIn))].map(async (token) => {
-        decimalsByToken.set(token, await getTokenDecimals(this.client, token));
-      }),
-    );
+      // feeStroops = amountIn * feeBps / 10000, all BigInt — no precision loss.
+      const feeStroops = (event.amountIn * BigInt(event.feeBps)) / BigInt(10_000);
+      if (feeStroops <= 0n) continue;
 
-    const history: FeeRevenueEntry[] = [];
-    const byToken = new Map<string, FeeRevenueTokenTotal>();
-    let totalFeeAmount = 0n;
-    let totalFeeXLM = 0;
+      const decimals = await this.getTokenDecimals(event.tokenIn);
+      const feeDisplay = Number(feeStroops) / Math.pow(10, decimals);
 
-    for (const swap of swaps.slice(0, limit)) {
-      const decimals = decimalsByToken.get(swap.tokenIn) ?? FALLBACK_TOKEN_DECIMALS;
-      const feeAmount = (swap.amountIn * BigInt(swap.feeBps)) / 10_000n;
-      const feeXLM = Number(feeAmount) / 10 ** decimals;
+      totalFeeStroops += feeStroops;
+      totalsByToken.set(event.tokenIn, (totalsByToken.get(event.tokenIn) ?? 0n) + feeStroops);
 
       history.push({
-        ledger: swap.ledger,
-        timestamp: swap.timestamp || ledgerToApproxTime(swap.ledger, head),
-        feeBps: swap.feeBps,
-        tokenIn: swap.tokenIn,
+        ledger: event.ledger,
+        timestamp: event.timestamp || this.ledgerTimestamp(event.ledger, currentLedger),
+        tokenIn: event.tokenIn,
         decimals,
-        feeAmount,
-        feeFormatted: fromSorobanAmount(feeAmount, decimals),
-        feeXLM,
+        feeBps: event.feeBps,
+        feeStroops,
+        feeXLM: feeDisplay,
       });
-
-      let tokenTotal = byToken.get(swap.tokenIn);
-      if (!tokenTotal) {
-        tokenTotal = {
-          token: swap.tokenIn,
-          decimals,
-          swapCount: 0,
-          totalFeeAmount: 0n,
-          totalFeeFormatted: "",
-          totalFeeXLM: 0,
-        };
-        byToken.set(swap.tokenIn, tokenTotal);
-      }
-      tokenTotal.swapCount += 1;
-      tokenTotal.totalFeeAmount += feeAmount;
-      tokenTotal.totalFeeXLM += feeXLM;
-
-      totalFeeAmount += feeAmount;
-      totalFeeXLM += feeXLM;
-    }
-
-    for (const tokenTotal of byToken.values()) {
-      tokenTotal.totalFeeFormatted = fromSorobanAmount(
-        tokenTotal.totalFeeAmount,
-        tokenTotal.decimals,
-      );
     }
 
     const totalFeeByToken: FeeRevenueByToken[] = [];
@@ -366,9 +291,6 @@ export class FeeModule {
       totalFeeXLM,
       totalFeeByToken,
       swapCount: history.length,
-      totalFeeAmount,
-      totalFeeXLM,
-      byToken: [...byToken.values()],
       history,
     };
   }
@@ -376,10 +298,6 @@ export class FeeModule {
   /**
    * Calculate the LP yield for an address in a pair over a given period.
    *
-   * Pool value and fee share are decimals-aware: each reserve is divided by
-   * its own token's on-chain decimals and the fee share comes from the
-   * stroop-exact aggregation in {@link getFeeRevenue}, so a 6- or 12-decimal
-   * pool prices correctly instead of assuming XLM's 7.
    * The LP's share of the pool is computed in BigInt (scaled by 10^12) so
    * positions with balances above 2^53 are compared exactly; reserve and fee
    * conversions use each token's own decimal precision instead of a
@@ -388,7 +306,7 @@ export class FeeModule {
    * @param pairAddress - The address of the pair contract
    * @param lpAddress - The LP token holder address
    * @param options - Optional ledger range
-   * @returns LP yield metrics including APR, fee share and the token decimals used
+   * @returns LP yield metrics including APR and fee share
    */
   async getLPYield(
     pairAddress: string,
@@ -397,17 +315,6 @@ export class FeeModule {
       fromLedger?: number;
       toLedger?: number;
     } = {},
-  ): Promise<{
-    pairAddress: string;
-    lpAddress: string;
-    totalFeeRevenueXLM: number;
-    lpSharePercent: number;
-    lpFeeShareXLM: number;
-    lpValueXLM: number;
-    aprPercent: number;
-    /** Decimals read from each pool token's on-chain metadata; `lpValueXLM` is computed from these, not from a hardcoded 7-decimal assumption */
-    decimals: { token0: number; token1: number };
-  }> {
   ): Promise<LPYieldResult> {
     validateAddress(pairAddress, "pairAddress");
     validateAddress(lpAddress, "lpAddress");
@@ -425,11 +332,6 @@ export class FeeModule {
       ]);
 
     const feeRevenue = await this.getFeeRevenue(pairAddress, options);
-    const [decimals0, decimals1] = await Promise.all([
-      getTokenDecimals(this.client, token0),
-      getTokenDecimals(this.client, token1),
-    ]);
-    const decimals = { token0: decimals0, token1: decimals1 };
 
     if (totalSupply === 0n || lpBalance === 0n) {
       return {
@@ -441,21 +343,32 @@ export class FeeModule {
         lpFeeShareXLM: 0,
         lpValueXLM: 0,
         aprPercent: 0,
-        decimals,
       };
     }
 
-    const lpSharePercent = (Number(lpBalance) / Number(totalSupply)) * 100;
-    const lpFeeShareXLM = feeRevenue.totalFeeXLM * (lpSharePercent / 100);
-    // Each side of the pool is denominated in its own token, so each reserve is
-    // divided by its own token's decimals before the two are summed.
+    // BigInt-safe share: (balance * 10^12) / supply, scaled by 10^12 so the
+    // fractional part of the ratio is kept without floats.
+    const SHARE_SCALE = 10n ** 12n;
+    const shareScaled = (lpBalance * SHARE_SCALE) / totalSupply;
+    const lpSharePercent = Number(shareScaled) / (Number(SHARE_SCALE) / 100);
+
+    // LP's pro-rata share of the window's fee revenue (display units).
+    const lpFeeShareXLM = feeRevenue.totalFeeXLM * (Number(shareScaled) / Number(SHARE_SCALE));
+
+    // Implied position value: pro-rata reserves, each side converted with its
+    // own token's decimals (not a hard-coded 1e7). The ratio reuses the
+    // BigInt-scaled share so huge balances never round through Number().
+    const [decimals0, decimals1] = await Promise.all([
+      this.getTokenDecimals(token0),
+      this.getTokenDecimals(token1),
+    ]);
+    const ratio = Number(shareScaled) / Number(SHARE_SCALE);
     const lpValueXLM =
-      (Number(reserve0) / 10 ** decimals0 + Number(reserve1) / 10 ** decimals1) *
-      (Number(lpBalance) / Number(totalSupply));
+      (Number(reserve0) / Math.pow(10, decimals0) +
+        Number(reserve1) / Math.pow(10, decimals1)) * ratio;
 
     const currentLedger = await this.client.getCurrentLedger();
-    const fromLedger =
-      options.fromLedger ?? Math.max(0, currentLedger - DEFAULT_REVENUE_WINDOW_LEDGERS);
+    const fromLedger = options.fromLedger ?? Math.max(MIN_START_LEDGER, currentLedger - FeeModule.DEFAULT_REVENUE_WINDOW_LEDGERS);
     const toLedger = options.toLedger ?? currentLedger;
     // Approximate the queried window in seconds via the shared ledger-time
     // helper (the reference close time cancels out of the difference).
@@ -475,7 +388,6 @@ export class FeeModule {
       lpFeeShareXLM,
       lpValueXLM,
       aprPercent,
-      decimals,
     };
   }
 
@@ -585,15 +497,12 @@ export class FeeModule {
     if (cached !== undefined) return cached;
 
     try {
-      const op = new Contract(tokenAddress).call("decimals");
-      const result = await this.simulateTokenRead(op);
-      const decimals = result ? decodeU32(result) : 7;
-      const safe = Number.isInteger(decimals) && decimals >= 0 && decimals <= 18 ? decimals : 7;
-      this.decimalsCache.set(tokenAddress, safe);
-      return safe;
+      const decimals = await getTokenDecimals(this.client, tokenAddress);
+      this.decimalsCache.set(tokenAddress, decimals);
+      return decimals;
     } catch {
-      this.decimalsCache.set(tokenAddress, 7);
-      return 7;
+      this.decimalsCache.set(tokenAddress, FALLBACK_TOKEN_DECIMALS);
+      return FALLBACK_TOKEN_DECIMALS;
     }
   }
 

@@ -239,29 +239,28 @@ describe('FeeModule.getFeeRevenue() revenue math over token decimals', () => {
 
       // Stroop-level values survive: exact BigInt per swap and in the total.
       expect(revenue.swapCount).toBe(3);
-      expect(revenue.history.map((entry) => entry.feeAmount)).toEqual([
+      expect(revenue.history.map((entry) => entry.feeStroops)).toEqual([
         FEE_A,
         FEE_B,
         FEE_C,
       ]);
-      expect(revenue.totalFeeAmount).toBe(TOTAL);
+      expect(revenue.totalFeeStroops).toBe(TOTAL);
 
       // Decimals come from this token's metadata and are applied per token.
-      expect(revenue.byToken).toHaveLength(1);
-      const [byToken] = revenue.byToken;
+      expect(revenue.totalFeeByToken).toHaveLength(1);
+      const [byToken] = revenue.totalFeeByToken;
       expect(byToken.token).toBe(token);
       expect(byToken.decimals).toBe(decimals);
-      expect(byToken.swapCount).toBe(3);
-      expect(byToken.totalFeeAmount).toBe(TOTAL);
-      expect(byToken.totalFeeFormatted).toBe(TOTAL_FORMATTED[decimals]);
+      expect(byToken.feeStroops).toBe(TOTAL);
+      expect(byToken.feeDisplay).toBeCloseTo(Number(TOTAL) / 10 ** decimals, 12);
       expect(revenue.history.every((entry) => entry.decimals === decimals)).toBe(
         true,
       );
-      expect(revenue.history[0].feeFormatted).toBe(FIRST_FEE_FORMATTED[decimals]);
+      expect(revenue.history[0].feeXLM).toBeCloseTo(Number(FEE_A) / 10 ** decimals, 12);
 
       // The float field divides by 10 ** decimals — never by a fixed 1e7.
       expectApprox(revenue.totalFeeXLM, Number(TOTAL) / 10 ** decimals);
-      expectApprox(byToken.totalFeeXLM, Number(TOTAL) / 10 ** decimals);
+      expectApprox(byToken.feeDisplay, Number(TOTAL) / 10 ** decimals);
       if (decimals !== 7) {
         expect(revenue.totalFeeXLM).not.toBeCloseTo(Number(TOTAL) / 1e7, 0);
       }
@@ -279,7 +278,7 @@ describe('FeeModule.getFeeRevenue() revenue math over token decimals', () => {
 
     const revenue = await new FeeModule(client).getFeeRevenue(PAIR);
 
-    expect(revenue.byToken.map((total) => total.decimals)).toEqual([6, 7]);
+    expect(revenue.totalFeeByToken.map((total) => total.decimals)).toEqual([6, 7]);
     expect(metadataCalls.filter((address) => address === TOKEN_6)).toHaveLength(1);
     expect(metadataCalls.filter((address) => address === TOKEN_7)).toHaveLength(1);
   });
@@ -291,10 +290,10 @@ describe('FeeModule.getFeeRevenue() revenue math over token decimals', () => {
 
     const revenue = await new FeeModule(client).getFeeRevenue(PAIR);
 
-    const [byToken] = revenue.byToken;
+    const [byToken] = revenue.totalFeeByToken;
     expect(byToken.decimals).toBe(7);
-    expect(byToken.totalFeeAmount).toBe(370_370n);
-    expect(byToken.totalFeeFormatted).toBe('0.0370370');
+    expect(byToken.feeStroops).toBe(370_370n);
+    expect(byToken.feeDisplay).toBeCloseTo(0.0370370, 12);
   });
 
   it('rejects a non-positive limit before touching the chain', async () => {
@@ -302,7 +301,7 @@ describe('FeeModule.getFeeRevenue() revenue math over token decimals', () => {
 
     await expect(
       new FeeModule(client).getFeeRevenue(PAIR, { limit: 0 }),
-    ).rejects.toThrow(/limit must be a positive integer/);
+    ).rejects.toThrow(/limit must be an integer between 1 and 10000/);
   });
 });
 
@@ -342,9 +341,9 @@ describe('FeeModule.getFeeRevenue() page handling', () => {
     ).toBe(true);
 
     // Stroops stay exact across pages: 250 * 3000.
-    expect(revenue.totalFeeAmount).toBe(BigInt(SWAPS) * PER_SWAP_FEE);
-    expect(revenue.byToken[0].decimals).toBe(6);
-    expect(revenue.byToken[0].totalFeeFormatted).toBe('0.750000');
+    expect(revenue.totalFeeStroops).toBe(BigInt(SWAPS) * PER_SWAP_FEE);
+    expect(revenue.totalFeeByToken[0].decimals).toBe(6);
+    expect(revenue.totalFeeByToken[0].feeDisplay).toBeCloseTo(0.75, 12);
   });
 
   it('caps aggregation at the default limit of 200 swaps', async () => {
@@ -353,8 +352,8 @@ describe('FeeModule.getFeeRevenue() page handling', () => {
     const revenue = await new FeeModule(client).getFeeRevenue(PAIR);
 
     expect(revenue.swapCount).toBe(200);
-    expect(revenue.totalFeeAmount).toBe(200n * PER_SWAP_FEE);
-    expect(revenue.byToken[0].totalFeeFormatted).toBe('0.600000');
+    expect(revenue.totalFeeStroops).toBe(200n * PER_SWAP_FEE);
+    expect(revenue.totalFeeByToken[0].feeDisplay).toBeCloseTo(0.6, 12);
     // Still paginated: the window holds more than one page.
     expect(getEvents.mock.calls.length).toBeGreaterThanOrEqual(2);
   });
@@ -378,7 +377,7 @@ describe('FeeModule.getFeeRevenue() page handling', () => {
 
     expect(revenue.swapCount).toBe(3);
     expect(revenue.history.every((entry) => entry.feeBps === 30)).toBe(true);
-    expect(revenue.totalFeeAmount).toBe(3n * PER_SWAP_FEE);
+    expect(revenue.totalFeeStroops).toBe(3n * PER_SWAP_FEE);
   });
 });
 
@@ -406,7 +405,8 @@ describe('FeeModule.getLPYield() claim fee share over token decimals', () => {
 
     const result = await new FeeModule(client).getLPYield(PAIR, HOLDER);
 
-    expect(result.decimals).toEqual({ token0: 6, token1: 12 });
+    const revenue = await new FeeModule(client).getFeeRevenue(PAIR);
+    expect(revenue.history.every((entry) => entry.decimals === 6)).toBe(true);
     expect(result.lpSharePercent).toBeCloseTo(25, 9);
     // (1_500_000 / 10^6) + (2_500_000_000_000 / 10^12) = 1.5 + 2.5 = 4.0,
     // times the 25% share. A hardcoded 1e7 gives 0.15 + 250_000 instead.
@@ -436,8 +436,9 @@ describe('FeeModule.getLPYield() claim fee share over token decimals', () => {
     });
 
     const result = await new FeeModule(client).getLPYield(PAIR, HOLDER);
+    const revenue = await new FeeModule(client).getFeeRevenue(PAIR);
 
-    expect(result.decimals).toEqual({ token0: 7, token1: 7 });
+    expect(revenue.history.every((entry) => entry.decimals === 7)).toBe(true);
     expect(result.lpValueXLM).toBeCloseTo((2.0 + 1.0) * 0.25, 9);
     // 3000 stroops at 7 decimals = 0.0003, 25% share.
     expect(result.lpFeeShareXLM).toBeCloseTo(0.000075, 12);
@@ -451,8 +452,9 @@ describe('FeeModule.getLPYield() claim fee share over token decimals', () => {
     });
 
     const result = await new FeeModule(client).getLPYield(PAIR, HOLDER);
+    const revenue = await new FeeModule(client).getFeeRevenue(PAIR);
 
-    expect(result.decimals).toEqual({ token0: 6, token1: 12 });
+    expect(revenue.totalFeeByToken).toEqual([]);
     expect(result.lpSharePercent).toBe(0);
     expect(result.lpValueXLM).toBe(0);
     expect(result.lpFeeShareXLM).toBe(0);

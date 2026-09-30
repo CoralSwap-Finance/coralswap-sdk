@@ -292,7 +292,8 @@ export class EventCursor {
       }
 
       if (toLedger !== undefined && lastLedger > toLedger) break;
-      if (events.length < limit) break;
+      if (allEvents.length >= limit) break;
+      if (!resCursor && events.length < limit) break;
     }
 
     const pagedEvents = allEvents as typeof allEvents & {

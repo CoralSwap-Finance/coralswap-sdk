@@ -2,7 +2,6 @@ import { CoralSwapClient } from "@/client";
 import { validateAddress } from "@/utils/validation";
 import { ValidationError } from "@/errors";
 import { EventCursor, decodeEventTopic, MIN_START_LEDGER } from "@/utils/event-cursor";
-import { getTokenDecimals } from "@/utils/token-decimals";
 import { DecimalsResolver } from "@/utils/decimals-resolver";
 import { TreasuryModule, TreasuryModuleOptions } from "./treasury";
 import { SwapModule } from "./swap";
