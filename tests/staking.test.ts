@@ -217,14 +217,22 @@ describe("StakingModule", () => {
       expect(client.submitTransaction).toHaveBeenCalledTimes(1);
     });
 
-    it("should reject zero amount with ValidationError", async () => {
+    it("should reject zero amount with ValidationError and validateWithSchema error shape", async () => {
       const client = createMockClient();
       const module = new StakingModule(client);
       const signer = createMockSigner();
 
-      await expect(
-        module.stake(MOCK_LP_TOKEN, 0n, signer),
-      ).rejects.toThrow(ValidationError);
+      try {
+        await module.stake(MOCK_LP_TOKEN, 0n, signer);
+        fail("Expected ValidationError to be thrown");
+      } catch (err: any) {
+        expect(err).toBeInstanceOf(ValidationError);
+        expect(err.message).toContain("Invalid stake.params");
+        expect(err.message).toContain("amount must be greater than 0");
+        expect(err.details).toHaveProperty("zodErrors");
+        expect(Array.isArray(err.details.zodErrors)).toBe(true);
+        expect(err.details.zodErrors.length).toBeGreaterThan(0);
+      }
     });
 
     it("should reject negative amount with ValidationError", async () => {

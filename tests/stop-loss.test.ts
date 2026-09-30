@@ -205,10 +205,18 @@ describe('StopLossModule', () => {
       expect(id).toBe(TEST_TX_HASH);
     });
 
-    it('throws ValidationError when amount is zero', async () => {
-      await expect(
-        stopLoss.createStopLoss(makeParams({ amount: 0n }), mockSigner),
-      ).rejects.toThrow(ValidationError);
+    it('throws ValidationError with validateWithSchema format and zodErrors when amount is zero', async () => {
+      try {
+        await stopLoss.createStopLoss(makeParams({ amount: 0n }), mockSigner);
+        fail('Expected ValidationError to be thrown');
+      } catch (err: any) {
+        expect(err).toBeInstanceOf(ValidationError);
+        expect(err.message).toContain('Invalid stopLoss.params');
+        expect(err.message).toContain('amount must be greater than 0');
+        expect(err.details).toHaveProperty('zodErrors');
+        expect(Array.isArray(err.details.zodErrors)).toBe(true);
+        expect(err.details.zodErrors.length).toBeGreaterThan(0);
+      }
     });
 
     it('throws ValidationError when token addresses are identical', async () => {

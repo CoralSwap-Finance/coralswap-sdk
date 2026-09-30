@@ -16,7 +16,6 @@ import {
 import { Signer } from "@/types/common";
 import { RemoveLiquidityRequest, LiquidityResult } from "@/types/liquidity";
 import {
-  ValidationError,
   TransactionError,
   CooldownError,
   StakingError,
@@ -28,6 +27,7 @@ import {
   validateDistinctTokens,
 } from "@/utils/validation";
 import { isValidAddress } from "@/utils/addresses";
+import { validateWithSchema } from "@/schemas";
 import { decodeI128 } from "@/utils/numeric";
 import { z } from "zod";
 
@@ -80,15 +80,11 @@ const StakeOperationSchema = z.object({
  * @throws {ValidationError} If any parameter fails validation.
  */
 function validateStakeParams(lpTokenAddress: string, amount: bigint): void {
-  const result = StakeOperationSchema.safeParse({ lpTokenAddress, amount });
-  if (!result.success) {
-    const issues = result.error.issues
-      .map((i: z.ZodIssue) => `${i.path.join(".")}: ${i.message}`)
-      .join("; ");
-    throw new ValidationError(`Invalid stake parameters: ${issues}`, {
-      zodErrors: result.error.issues,
-    });
-  }
+  validateWithSchema(
+    StakeOperationSchema,
+    { lpTokenAddress, amount },
+    "stake.params",
+  );
 }
 
 export class StakingModule {
@@ -119,8 +115,7 @@ export class StakingModule {
     amount: bigint,
     publicKey: string,
   ): xdr.Operation {
-    validateAddress(lpTokenAddress, "lpTokenAddress");
-    validatePositiveAmount(amount, "amount");
+    validateStakeParams(lpTokenAddress, amount);
 
     const contract = new Contract(lpTokenAddress);
 

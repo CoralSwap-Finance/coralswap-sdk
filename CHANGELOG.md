@@ -19,6 +19,7 @@
 
 ### Changed
 - Governance module validates `createProposal` and `castVote` inputs with zod schemas (`CreateProposalInputSchema`, `CastVoteInputSchema`), replacing the hand-written guards while keeping `ValidationError` as the thrown type (#488)
+- `StakingModule` and `StopLossModule` validate parameters with Zod schemas via `validateWithSchema` (#746)
 - `MonitoringModule.getSystemMetrics(period)` validates `period` through the shared `MonitoringPeriodSchema` (zod) via `validateWithSchema`, replacing the hand-written check; the error is still a `ValidationError` (#493)
 - `EventCursor` continues a multi-page scan from the previous page's cursor (paging token) instead of `lastLedger + 1`, so events beyond the page limit inside a single ledger are no longer skipped; continuation requests carry the cursor and no ledger range, as Soroban RPC requires (#657)
 - `Network.STAGING` now targets Stellar Futurenet (`rpc-futurenet.stellar.org`, futurenet passphrase) with empty factory and router addresses instead of aliasing Testnet; `client.factory` / `client.router` throw `NotConfiguredError` on STAGING and MAINNET until deployment addresses are configured (#638)

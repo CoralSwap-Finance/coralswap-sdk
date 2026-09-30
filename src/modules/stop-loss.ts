@@ -18,6 +18,7 @@ import {
 import { isValidAddress } from '@/utils/addresses';
 import { validateAddress } from '@/utils/validation';
 import { estimateGas } from '@/utils/gas';
+import { validateWithSchema } from '@/schemas';
 import type { SwapModule } from '@/modules/swap';
 import {
   Contract,
@@ -443,15 +444,7 @@ export class StopLossModule {
   // ---------------------------------------------------------------------------
 
   private validateStopLossParams(params: StopLossParams): void {
-    const result = StopLossParamsSchema.safeParse(params);
-    if (!result.success) {
-      const issues = result.error.issues
-        .map((i: z.ZodIssue) => `${i.path.join('.')}: ${i.message}`)
-        .join('; ');
-      throw new ValidationError(`Invalid stop-loss params: ${issues}`, {
-        zodErrors: result.error.issues,
-      });
-    }
+    validateWithSchema(StopLossParamsSchema, params, 'stopLoss.params');
   }
 
   private validateRoute(route: string[]): void {
