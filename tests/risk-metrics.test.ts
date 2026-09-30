@@ -267,6 +267,54 @@ describe('RiskMetricsModule', () => {
       const longScore = longWindow.factors.find((f) => f.name === 'Volatility Exposure')!.score;
 
       expect(shortScore).not.toBe(longScore);
+      expect(longScore).toBeGreaterThan(shortScore);
+    });
+
+    it('updates volatility regime description based on window length', async () => {
+      const positions = [makePosition({ valueUSD: 50_000 })];
+      jest.spyOn(client.portfolio, 'get').mockResolvedValue(
+        makePortfolio(positions)
+      );
+
+      const shortRisk = await riskMetrics.getPortfolioRisk(USER, {
+        volatilityWindowDays: 30,
+      });
+      const longRisk = await riskMetrics.getPortfolioRisk(USER, {
+        volatilityWindowDays: 90,
+      });
+
+      const shortFactor = shortRisk.factors.find((f) => f.name === 'Volatility Exposure')!;
+      const longFactor = longRisk.factors.find((f) => f.name === 'Volatility Exposure')!;
+
+      expect(shortFactor.description).toContain('Shorter volatility windows');
+      expect(longFactor.description).toContain('Longer volatility windows');
+    });
+
+    it('clamps volatility window within normalized [1, 180] days range', async () => {
+      const positions = [makePosition({ valueUSD: 20_000 })];
+      jest.spyOn(client.portfolio, 'get').mockResolvedValue(
+        makePortfolio(positions)
+      );
+
+      const clampedLow = await riskMetrics.getPortfolioRisk(USER, {
+        volatilityWindowDays: 0,
+      });
+      const dayOne = await riskMetrics.getPortfolioRisk(USER, {
+        volatilityWindowDays: 1,
+      });
+      const clampedHigh = await riskMetrics.getPortfolioRisk(USER, {
+        volatilityWindowDays: 365,
+      });
+      const day180 = await riskMetrics.getPortfolioRisk(USER, {
+        volatilityWindowDays: 180,
+      });
+
+      expect(clampedLow.factors.find((f) => f.name === 'Volatility Exposure')!.score).toBe(
+        dayOne.factors.find((f) => f.name === 'Volatility Exposure')!.score
+      );
+      expect(clampedHigh.factors.find((f) => f.name === 'Volatility Exposure')!.score).toBe(
+        day180.factors.find((f) => f.name === 'Volatility Exposure')!.score
+      );
     });
   });
 
