@@ -15,7 +15,7 @@ import { LPTokenClient } from '@/contracts/lp-token';
 import { TokenListModule } from '@/modules/tokens';
 import { FactoryModule } from '@/modules/factory';
 import { PortfolioModule } from '@/modules/portfolio';
-import { KeypairSigner } from '@/utils/signer';
+import { KeypairSigner, assertSignerNetwork } from '@/utils/signer';
 import { TransactionPoller, PollingStrategy, PollingOptions } from '@/utils/polling';
 import { ConnectionPool } from '@/utils/connection-pool';
 import { buildSimulationResult } from '@/utils/simulation';
@@ -204,10 +204,12 @@ export class CoralSwapClient {
     this._server = this.createRpcServer(this._activeRpcUrl);
 
     if (config.signer) {
+      assertSignerNetwork(config.signer.networkPassphrase, this.networkConfig.networkPassphrase);
       this.signer = config.signer;
     } else if (config.secretKey) {
       const kpSigner = new KeypairSigner(
           config.secretKey,
+          this.networkConfig.networkPassphrase,
           this.networkConfig.networkPassphrase,
       );
       this.signer = kpSigner;
@@ -399,9 +401,12 @@ export class CoralSwapClient {
       const kpSigner = new KeypairSigner(
           this.config.secretKey,
           this.networkConfig.networkPassphrase,
+          this.networkConfig.networkPassphrase,
       );
       this.signer = kpSigner;
       this._publicKeyCache = kpSigner.publicKeySync;
+    } else if (this.signer) {
+      assertSignerNetwork(this.signer.networkPassphrase, this.networkConfig.networkPassphrase);
     }
 
     this.logger?.info("setNetwork: network switched", {

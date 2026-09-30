@@ -190,9 +190,8 @@ describeIntegration('StopLossModule (testnet)', () => {
     const estimate = await stopLoss.estimateStopLossGas(params);
 
     // fee must be a positive integer (stroops)
-    expect(typeof estimate.fee).toBe('number');
-    expect(Number.isInteger(estimate.fee)).toBe(true);
-    expect(estimate.fee).toBeGreaterThan(0);
+    expect(typeof estimate.fee).toBe('bigint');
+    expect(estimate.fee).toBeGreaterThan(0n);
 
     // feeXLM must be a non-empty string ending in " XLM"
     expect(typeof estimate.feeXLM).toBe('string');
@@ -201,8 +200,8 @@ describeIntegration('StopLossModule (testnet)', () => {
 
     // Sanity bounds: 1 stroop to 100 XLM (1_000_000_000 stroops)
     // Typical Soroban fees are in the hundreds to low thousands of stroops.
-    expect(estimate.fee).toBeGreaterThanOrEqual(1);
-    expect(estimate.fee).toBeLessThan(1_000_000_000);
+    expect(estimate.fee).toBeGreaterThanOrEqual(1n);
+    expect(estimate.fee).toBeLessThan(1_000_000_000n);
   });
 
   // -------------------------------------------------------------------------
