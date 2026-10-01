@@ -13,6 +13,13 @@ export interface BatchRequestOptions {
    * Defaults to the length of the task array (i.e. all at once).
    */
   concurrency?: number;
+
+  /**
+   * Optional per-task timeout in milliseconds.
+   * Tasks that exceed this duration are rejected with a TimeoutError.
+   * If omitted, tasks have no timeout.
+   */
+  taskTimeoutMs?: number;
 }
 
 export type BatchResult<T> =
@@ -23,13 +30,13 @@ export type BatchResult<T> =
  * Run `tasks` with at most `options.concurrency` running in parallel.
  *
  * @param tasks  - Array of zero-argument async factory functions.
- * @param options - Optional configuration (concurrency limit).
+ * @param options - Optional configuration (concurrency limit, per-task timeout).
  * @returns Array of `BatchResult` objects in input order.
  *
  * @example
  * const results = await batchRequest(
  *   tokens.map(t => () => fetchPrice(t)),
- *   { concurrency: 5 },
+ *   { concurrency: 5, taskTimeoutMs: 5000 },
  * );
  * results.forEach((r, i) => {
  *   if (r.status === 'fulfilled') console.log(tokens[i], r.value);
@@ -45,11 +52,27 @@ export async function batchRequest<T>(
 
   let nextIndex = 0;
 
+  async function executeTask(task: () => Promise<T>): Promise<T> {
+    if (!options.taskTimeoutMs) {
+      return task();
+    }
+
+    return Promise.race([
+      task(),
+      new Promise<T>((_, reject) =>
+        setTimeout(
+          () => reject(new Error(`Task timeout after ${options.taskTimeoutMs}ms`)),
+          options.taskTimeoutMs,
+        ),
+      ),
+    ]);
+  }
+
   async function worker(): Promise<void> {
     while (nextIndex < tasks.length) {
       const index = nextIndex++;
       try {
-        results[index] = { status: 'fulfilled', value: await tasks[index]() };
+        results[index] = { status: 'fulfilled', value: await executeTask(tasks[index]) };
       } catch (err) {
         results[index] = { status: 'rejected', reason: err };
       }

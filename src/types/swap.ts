@@ -3,6 +3,7 @@ import { TradeType } from "./common";
 export { TradeType };
 import type { DeviationResult } from "../modules/price-feed";
 import type { PriceFeed } from "../modules/price-feed";
+import type { PriceGuardResult } from "../utils/redstone";
 
 /**
  * Filter parameters for querying historical swap events.
@@ -186,6 +187,17 @@ export interface SwapResult {
    * swap to avoid unfavourable execution.
    */
   deviation?: DeviationResult;
+  /**
+   * RedStone price guard outcome, populated by `swapWithPriceGuard()` when a
+   * guard was required and evaluated.
+   *
+   * `guardSkipped: true` means the amounts were degenerate and no deviation could
+   * be computed — the swap was **not** oracle-verified. Callers requiring a guard
+   * for large swaps should treat a skipped guard as "no oracle evidence", not "safe".
+   *
+   * Absent when no payload was supplied or the swap was below the guard threshold.
+   */
+  priceGuard?: PriceGuardResult;
 }
 
 /**

@@ -308,6 +308,9 @@ export interface PortfolioPnL {
  * // Restrict the portfolio query to two specific pools
  * const view = await portfolio.getPortfolio("GOWNER...", {
  *   pairAddresses: ["CPAIR_A...", "CPAIR_B..."],
+ *   fromDate: new Date("2026-01-01T00:00:00.000Z"),
+ *   toDate: new Date("2026-06-01T00:00:00.000Z"),
+ *   limit: 50,
  * });
  * ```
  */
@@ -321,6 +324,35 @@ export interface GetPortfolioOptions {
    *
    * Providing a filtered list significantly reduces RPC call volume for
    * wallets with known positions.
+   *
+   * Every entry must be a valid Stellar address (`G…` or `C…`);
+   * otherwise a {@link ValidationError} is thrown before any RPC call.
    */
   pairAddresses?: string[];
+
+  /**
+   * Lower bound (inclusive) of the historical window to query.
+   *
+   * Must be a valid `Date` that is not in the future. When `toDate` is
+   * also supplied, `fromDate` must be strictly earlier than `toDate`.
+   */
+  fromDate?: Date;
+
+  /**
+   * Upper bound of the historical window to query.
+   *
+   * Must be a valid `Date` that is not in the future. Historical queries
+   * cannot reach beyond the current time, so a future `toDate` is rejected
+   * with a {@link ValidationError}.
+   */
+  toDate?: Date;
+
+  /**
+   * Maximum number of positions to return.
+   *
+   * Must be a positive integer no greater than `1000`. Values that are
+   * zero, negative, fractional, or above the cap are rejected with a
+   * {@link ValidationError}.
+   */
+  limit?: number;
 }

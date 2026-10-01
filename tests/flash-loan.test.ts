@@ -177,13 +177,13 @@ describe('FlashLoanModule.execute()', () => {
       expect(result.event.decodeStatus).toBe('complete');
     });
 
-    it('falls back to request values when no FlashLoanExecuted event is present with partial decodeStatus', async () => {
+    it('returns the raw transaction without synthesizing a FlashLoanExecuted event when no event can be decoded', async () => {
       const client = buildMockClient({
         txResult: {
           status: 'SUCCESS',
           resultMetaXdr: buildMockMeta([
             buildContractEvent('Transfer', { amount: 5n, token: 'SOME_TOKEN' }),
-          ]), // event accessor present but no FlashLoanExecuted
+          ]),
         },
       });
 
@@ -191,13 +191,10 @@ describe('FlashLoanModule.execute()', () => {
       const result = await module.execute(FLASH_REQUEST);
 
       expect(result.txHash).toBe('MOCK_TX');
-      // Fallback event still satisfies the interface and is labeled with partial decodeStatus
-      expect(result.event.type).toBe('FlashLoanExecuted');
-      expect(result.event.borrowedAmount).toBe(FLASH_REQUEST.amount);
-      expect(result.event.decodeStatus).toBe('partial');
+      expect(result.event).toBeUndefined();
     });
 
-    it('ignores events when getTransaction returns non-SUCCESS status and labels partial decodeStatus', async () => {
+    it('does not fabricate a successful event when the transaction status is not SUCCESS', async () => {
       const client = buildMockClient({
         txResult: { status: 'NOT_FOUND' },
       });
@@ -206,8 +203,22 @@ describe('FlashLoanModule.execute()', () => {
       const result = await module.execute(FLASH_REQUEST);
 
       expect(result.txHash).toBe('MOCK_TX');
-      expect(result.event.type).toBe('FlashLoanExecuted');
-      expect(result.event.decodeStatus).toBe('partial');
+      expect(result.event).toBeUndefined();
+    });
+
+    it('returns raw tx with undefined event when events array is empty or corrupt', async () => {
+      const client = buildMockClient({
+        txResult: {
+          status: 'SUCCESS',
+          resultMetaXdr: buildMockMeta([]),
+        },
+      });
+
+      const module = new FlashLoanModule(client as any);
+      const result = await module.execute(FLASH_REQUEST);
+
+      expect(result.txHash).toBe('MOCK_TX');
+      expect(result.event).toBeUndefined();
     });
   });
 

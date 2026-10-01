@@ -120,12 +120,12 @@ export const MAINNET_NETWORK: NetworkConfig = {
   sorobanTimeout: 30,
 };
 
-/** Network configuration for the CoralSwap staging environment (runs on testnet RPC). */
+/** Staging target uses Stellar Futurenet; CoralSwap contracts are not deployed there. */
 export const STAGING_NETWORK: NetworkConfig = {
-  rpcUrl: "https://soroban-testnet.stellar.org",
-  networkPassphrase: "Test SDF Network ; September 2015",
-  factoryAddress: "CBLBMYODT37R3GJZLEFCGCYWOOVEUZ3MMTVR2QCOKOK2UPKSI3CXZBNB",
-  routerAddress: "CCDQYZKX5AUI7KSWXIFI7AFRQMWCZMOOUJXIDWEJ4IYX7XE7PHCMCBAF",
+  rpcUrl: "https://rpc-futurenet.stellar.org",
+  networkPassphrase: "Test SDF Future Network ; October 2022",
+  factoryAddress: "",
+  routerAddress: "",
   sorobanTimeout: 30,
 };
 

@@ -70,6 +70,9 @@ export {
   validateNonNegativeAmount,
   validateSlippage,
   validateDistinctTokens,
+  validateDateRange,
+  validateLimit,
+  MAX_LIMIT,
   isValidPath,
 } from './validation';
 
@@ -93,7 +96,7 @@ export {
 export type { BatchRequestOptions, BatchResult } from './batch-request';
 
 export { parseChangelog } from './changelog';
-export { RateLimiter } from './rate-limiter';
+export { RateLimiter, RateLimiterDestroyedError } from './rate-limiter';
 export type { RateLimiterOptions } from './rate-limiter';
 export { estimateGas } from './gas';
 export type { SimulateFn } from './gas';
@@ -110,7 +113,7 @@ export {
 export type { DecodeEventsOptions } from './events';
 
 export { EventCursor, TypedEventCursor, decodeEventTopic, MIN_START_LEDGER, MAX_EVENT_LIMIT } from './event-cursor';
-export type { EventCursorOptions, TypedEventScanParams } from './event-cursor';
+export type { EventCursorOptions, TypedEventScanParams, PageInfo, ScanResult } from './event-cursor';
 export { ConnectionPool } from './connection-pool';
 
 export {
@@ -123,6 +126,23 @@ export type { VotingPower, VotingPowerQueryProvider, VotingPowerQueryResult } fr
 export { checkCompatibility } from './migration';
 export type { BreakingChange, CompatibilityReport } from './migration';
 export { suppressDeprecationWarnings, deprecated } from './deprecation-warnings';
+
+export { decodeI128 as decodeI128Strict } from './numeric';
+
+export {
+  TOKEN_DECIMALS,
+  PRICE_SCALE,
+  BPS_DENOMINATOR,
+  CONVERSION_SCALE,
+  SCALE,
+} from './scale-constants';
+
+export {
+  DecimalsResolver,
+  DEFAULT_DECIMALS_CACHE_CAPACITY,
+  TTL_DISABLED,
+} from './decimals-resolver';
+export type { DecimalsResolverOptions } from './decimals-resolver';
 
 /**
  * Idempotent-resubmission helpers for state-changing on-chain calls.

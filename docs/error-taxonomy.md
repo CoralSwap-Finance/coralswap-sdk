@@ -29,6 +29,8 @@ This document maps CoralSwap SDK error classes to their string codes and recomme
 | `StakingError` | `STAKING_ERROR` | `fail-fast` |
 | `CooldownError` | `COOLDOWN_ERROR` | `fail-fast` |
 | `MissingPriceFeedError` | `MISSING_PRICE_FEED` | `fail-fast` |
+| `DecodeError` | `DECODE_ERROR` | `fail-fast` |
+| `NotConfiguredError` | `NOT_CONFIGURED` | `fail-fast` |
 | `WebhookError` | `WEBHOOK_ERROR` | `fail-fast` |
 | `AddressNotFoundError` | `ADDRESS_NOT_FOUND` | `fail-fast` |
 | `PortfolioCalculationError` | `PORTFOLIO_CALCULATION_ERROR` | `fail-fast` |

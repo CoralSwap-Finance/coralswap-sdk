@@ -1,3 +1,5 @@
+import { NotConfiguredError } from '../errors';
+
 export interface VotingPower {
   ownStake: bigint;
   delegatedStake: bigint;
@@ -74,21 +76,19 @@ export function setVotingPowerQueryProvider(provider?: VotingPowerQueryProvider)
 export async function getVotingPower(address: string): Promise<VotingPower> {
   if (!address) return zeroVotingPower();
 
-  if (votingPowerQueryProvider) {
-    const snapshot = await votingPowerQueryProvider(address);
-    return buildVotingPower(snapshot);
+  if (!votingPowerQueryProvider) {
+    throw new NotConfiguredError('Voting power query provider');
   }
-
-  return zeroVotingPower();
+  const snapshot = await votingPowerQueryProvider(address);
+  return buildVotingPower(snapshot);
 }
 
 export async function getVotingPowerAtLedger(address: string, ledger: number): Promise<VotingPower> {
   if (!address) return zeroVotingPower();
 
-  if (votingPowerQueryProvider) {
-    const snapshot = await votingPowerQueryProvider(address, ledger);
-    return buildVotingPower(snapshot);
+  if (!votingPowerQueryProvider) {
+    throw new NotConfiguredError('Voting power query provider');
   }
-
-  return zeroVotingPower();
+  const snapshot = await votingPowerQueryProvider(address, ledger);
+  return buildVotingPower(snapshot);
 }
