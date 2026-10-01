@@ -74,6 +74,8 @@ export interface PageInfo {
   startLedger?: number;
   /** Ledger sequence of the last event returned (or the scan end). */
   endLedger?: number;
+  /** Event position within `endLedger`, when supplied by the RPC response. */
+  endIndexWithinLedger?: number;
   /** Per-request page limit that was used. */
   limit?: number;
   /**
@@ -124,8 +126,10 @@ export type ScanResult<T> = T[] & {
  *   raw strings directly to RPC filters.
  * - Persists a cursor in-memory per-instance and advances it as scans
  *   progress.
- * - Handles pagination by looping while RPC responses are full (== limit)
- *   and advancing the start ledger to `lastEvent.ledger + 1`.
+ * - Handles pagination by preferring the RPC's opaque cursor. If a response
+ *   does not include one, the fallback resumes at the last event's ledger and
+ *   de-duplicates by its `(ledger,indexWithinLedger)` position instead of
+ *   skipping the remainder of a page-spanning ledger.
  *
  * Usage example:
  *
@@ -189,6 +193,7 @@ export class EventCursor {
     pageInfo?: {
       startLedger?: number;
       endLedger?: number;
+      endIndexWithinLedger?: number;
       limit?: number;
       hasMore?: boolean;
       nextCursor?: string | null;
@@ -228,6 +233,18 @@ export class EventCursor {
     };
 
     let currentCursor: string | undefined = undefined;
+    const seenEventKeys = new Set<string>();
+
+    const eventPosition = (event: any, fallbackIndex: number) => {
+      const ledger = Number(event?.ledger);
+      if (!Number.isFinite(ledger)) return undefined;
+      const rawIndex = event?.indexWithinLedger ?? event?.index ?? event?.id;
+      const indexWithinLedger = Number(rawIndex);
+      return {
+        ledger,
+        indexWithinLedger: Number.isFinite(indexWithinLedger) ? indexWithinLedger : fallbackIndex,
+      };
+    };
 
     while (true) {
       // Soroban RPC rejects a request that carries both a cursor and a ledger
@@ -257,12 +274,22 @@ export class EventCursor {
         break;
       }
 
-      allEvents.push(...(events as rpc.Api.EventResponse[]));
+      const newEvents = (events as rpc.Api.EventResponse[]).filter((event, index) => {
+        const position = eventPosition(event, index);
+        const key = position
+          ? `${position.ledger}:${position.indexWithinLedger}`
+          : `${event.id ?? ''}:${event.pagingToken ?? ''}`;
+        if (seenEventKeys.has(key)) return false;
+        seenEventKeys.add(key);
+        return true;
+      });
+      allEvents.push(...newEvents);
 
       const lastEvent = events[events.length - 1] as any;
       const lastLedger =
         lastEvent?.ledger ??
-        (typeof res.latestLedger === 'number' ? res.latestLedger : undefined);
+          (typeof res.latestLedger === 'number' ? res.latestLedger : undefined);
+      const lastPosition = eventPosition(lastEvent, events.length - 1);
 
       const resCursor =
         typeof res?.cursor === "string" && res.cursor.length > 0
@@ -275,6 +302,7 @@ export class EventCursor {
         pageInfo = {
           startLedger,
           endLedger: lastLedger,
+          endIndexWithinLedger: lastPosition?.indexWithinLedger,
           limit,
           hasMore: events.length >= limit,
           nextCursor: resCursor,
@@ -287,12 +315,16 @@ export class EventCursor {
         currentCursor = resCursor;
         this.cursor = lastLedger;
       } else {
-        startLedger = lastLedger + 1;
+        // Do not advance to ledger + 1: the page may have ended halfway
+        // through a ledger. Re-requesting the same ledger and filtering by
+        // position preserves the remaining events in cursor-less fixtures and
+        // RPC adapters while still terminating on a repeated page.
+        startLedger = lastPosition?.ledger ?? lastLedger;
         this.cursor = startLedger;
       }
 
       if (toLedger !== undefined && lastLedger > toLedger) break;
-      if (events.length < limit) break;
+      if (events.length < limit || newEvents.length === 0) break;
     }
 
     const pagedEvents = allEvents as typeof allEvents & {
