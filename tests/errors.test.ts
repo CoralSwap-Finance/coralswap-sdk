@@ -13,6 +13,7 @@ import {
   FlashLoanError,
   SignerError,
   InvalidOperationError,
+  NotConfiguredError,
   mapError,
 } from "../src/errors";
 
@@ -46,6 +47,62 @@ describe("Error Hierarchy", () => {
     const err = new PairNotFoundError("TOKEN_A", "TOKEN_B");
     expect(err.code).toBe("PAIR_NOT_FOUND");
     expect(err.details?.tokenA).toBe("TOKEN_A");
+  });
+
+  describe("NotConfiguredError", () => {
+    it("keeps the plain message when no hint is supplied", () => {
+      const err = new NotConfiguredError("Voting power query provider");
+
+      expect(err).toBeInstanceOf(NotConfiguredError);
+      expect(err.code).toBe("NOT_CONFIGURED");
+      expect(err.name).toBe("NotConfiguredError");
+      expect(err.message).toBe("Voting power query provider is not configured");
+      expect(err.configKey).toBeUndefined();
+    });
+
+    it("mirrors details.configKey onto the typed configKey field", () => {
+      const err = new NotConfiguredError("Factory contract", {
+        network: "mainnet",
+        configKey: "factoryAddress",
+      });
+
+      expect(err.configKey).toBe("factoryAddress");
+      expect(err.details).toEqual({
+        resource: "Factory contract",
+        network: "mainnet",
+        configKey: "factoryAddress",
+      });
+      expect(err.toJSON()).toMatchObject({
+        name: "NotConfiguredError",
+        code: "NOT_CONFIGURED",
+        details: { configKey: "factoryAddress" },
+      });
+    });
+
+    it("appends an actionable hint naming the key and network", () => {
+      const err = new NotConfiguredError(
+        "Factory contract",
+        { network: "mainnet", configKey: "factoryAddress" },
+        'set factoryAddress for network "mainnet" before accessing client.factory',
+      );
+
+      expect(err.message).toBe(
+        "Factory contract is not configured — " +
+          'set factoryAddress for network "mainnet" before accessing client.factory',
+      );
+      expect(err.message).toContain("factoryAddress");
+      expect(err.message).toContain("mainnet");
+    });
+
+    it("lets callers branch on the class when the value is typed as unknown", () => {
+      const caught: unknown = new NotConfiguredError("Router contract", {
+        network: "mainnet",
+        configKey: "routerAddress",
+      });
+
+      expect(caught).toBeInstanceOf(NotConfiguredError);
+      expect((caught as NotConfiguredError).configKey).toBe("routerAddress");
+    });
   });
 
   describe("mapError", () => {

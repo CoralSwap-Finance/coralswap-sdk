@@ -265,11 +265,21 @@ export class CoralSwapClient {
 
   /**
    * Access the Factory contract client (singleton).
+   *
+   * @throws {NotConfiguredError} If the active network has no
+   *   `factoryAddress` configured (mainnet and staging deployments are
+   *   empty until CoralSwap contracts are deployed). The error's
+   *   `configKey` is `"factoryAddress"`.
    */
   get factory(): FactoryClient {
     if (!this._factory) {
       if (!this.networkConfig.factoryAddress) {
-        throw new NotConfiguredError("Factory contract", { network: this.network });
+        throw new NotConfiguredError(
+            "Factory contract",
+            { network: this.network, configKey: "factoryAddress" },
+            `set factoryAddress for network "${this.network}" ` +
+                `(NetworkConfig.factoryAddress) before accessing client.factory`,
+        );
       }
       this._factory = new FactoryClient(
           this.networkConfig.factoryAddress,
@@ -284,11 +294,21 @@ export class CoralSwapClient {
 
   /**
    * Access the Router contract client (singleton).
+   *
+   * @throws {NotConfiguredError} If the active network has no
+   *   `routerAddress` configured (mainnet and staging deployments are
+   *   empty until CoralSwap contracts are deployed). The error's
+   *   `configKey` is `"routerAddress"`.
    */
   get router(): RouterClient {
     if (!this._router) {
       if (!this.networkConfig.routerAddress) {
-        throw new NotConfiguredError("Router contract", { network: this.network });
+        throw new NotConfiguredError(
+            "Router contract",
+            { network: this.network, configKey: "routerAddress" },
+            `set routerAddress for network "${this.network}" ` +
+                `(NetworkConfig.routerAddress) before accessing client.router`,
+        );
       }
       this._router = new RouterClient(
           this.networkConfig.routerAddress,
