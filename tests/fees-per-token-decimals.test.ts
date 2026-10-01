@@ -325,13 +325,14 @@ describe('FeeModule.getFeeRevenue() page handling', () => {
       pageCap: PAGE_CAP,
     });
 
+    // `limit` is the per-request page size: full pages keep the scan going.
     const revenue = await new FeeModule(client).getFeeRevenue(PAIR, {
-      limit: SWAPS,
+      limit: PAGE_CAP,
     });
 
     expect(revenue.swapCount).toBe(SWAPS);
     expect(revenue.history).toHaveLength(SWAPS);
-    // 250 events at a 100-event page cap cannot fit in a single response.
+    // 250 events at a 100-event page size cannot fit in a single response.
     expect(getEvents.mock.calls.length).toBeGreaterThanOrEqual(3);
     // Every page after the first continues from the previous page's cursor.
     expect(
@@ -346,16 +347,17 @@ describe('FeeModule.getFeeRevenue() page handling', () => {
     expect(revenue.totalFeeByToken[0].feeDisplay).toBeCloseTo(0.75, 12);
   });
 
-  it('caps aggregation at the default limit of 200 swaps', async () => {
-    const { client, getEvents } = buildClient({ events: events(SWAPS) });
+  it('pages through the whole window at the default page size of 200', async () => {
+    const { client, getEvents } = buildClient({ events: events(SWAPS), pageCap: 200 });
 
     const revenue = await new FeeModule(client).getFeeRevenue(PAIR);
 
-    expect(revenue.swapCount).toBe(200);
-    expect(revenue.totalFeeStroops).toBe(200n * PER_SWAP_FEE);
-    expect(revenue.totalFeeByToken[0].feeDisplay).toBeCloseTo(0.6, 12);
-    // Still paginated: the window holds more than one page.
-    expect(getEvents.mock.calls.length).toBeGreaterThanOrEqual(2);
+    // The default limit sizes each page; it does not cap the aggregation.
+    expect(getEvents.mock.calls[0][0].limit).toBe(200);
+    expect(getEvents.mock.calls.length).toBe(2);
+    expect(revenue.swapCount).toBe(SWAPS);
+    expect(revenue.totalFeeStroops).toBe(BigInt(SWAPS) * PER_SWAP_FEE);
+    expect(revenue.totalFeeByToken[0].feeDisplay).toBeCloseTo(0.75, 12);
   });
 
   it('ignores swaps past toLedger and zero-fee swaps', async () => {

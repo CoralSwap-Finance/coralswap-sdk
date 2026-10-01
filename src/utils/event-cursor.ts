@@ -283,29 +283,16 @@ export class EventCursor {
 
       if (lastLedger === undefined) break;
 
-      if (toLedger !== undefined && lastLedger > toLedger) break;
-
       if (resCursor) {
-        if (currentCursor && resCursor === currentCursor) {
-          pageInfo = {
-            ...pageInfo,
-            startLedger,
-            endLedger: lastLedger,
-            limit,
-            hasMore: events.length >= limit,
-            nextCursor: resCursor,
-          };
-          break;
-        }
         currentCursor = resCursor;
         this.cursor = lastLedger;
-        continue;
+      } else {
+        startLedger = lastLedger + 1;
+        this.cursor = startLedger;
       }
 
+      if (toLedger !== undefined && lastLedger > toLedger) break;
       if (events.length < limit) break;
-
-      startLedger = lastLedger + 1;
-      this.cursor = startLedger;
     }
 
     const pagedEvents = allEvents as typeof allEvents & {
@@ -313,7 +300,7 @@ export class EventCursor {
       truncated?: boolean;
     };
     pagedEvents.pageInfo = pageInfo;
-    pagedEvents.truncated = pageInfo.hasMore ?? false;
+    pagedEvents.truncated = (pageInfo.hasMore ?? false) || allEvents.length >= limit;
     return pagedEvents;
   }
 }

@@ -496,14 +496,23 @@ export class FeeModule {
     const cached = this.decimalsCache.get(tokenAddress);
     if (cached !== undefined) return cached;
 
+    let decimals: number | undefined;
     try {
-      const decimals = await getTokenDecimals(this.client, tokenAddress);
-      this.decimalsCache.set(tokenAddress, decimals);
-      return decimals;
+      const result = await this.simulateTokenRead(new Contract(tokenAddress).call("decimals"));
+      if (result) decimals = decodeU32(result);
     } catch {
-      this.decimalsCache.set(tokenAddress, FALLBACK_TOKEN_DECIMALS);
-      return FALLBACK_TOKEN_DECIMALS;
+      // Simulation unavailable: fall through to the token metadata read.
     }
+    if (decimals === undefined) {
+      decimals = await getTokenDecimals(this.client, tokenAddress);
+    }
+
+    const safe =
+      Number.isInteger(decimals) && decimals >= 0 && decimals <= 18
+        ? decimals
+        : FALLBACK_TOKEN_DECIMALS;
+    this.decimalsCache.set(tokenAddress, safe);
+    return safe;
   }
 
   /**
