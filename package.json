@@ -1,6 +1,6 @@
 {
   "name": "@coralswap/sdk",
-  "version": "x.1.0",
+  "version": "1.0.0",
   "description": "TypeScript SDK for CoralSwap -- contract-first AMM on Stellar/Soroban",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -29,10 +29,8 @@
     "test:integration:treasury": "jest --config jest.integration.config.js --testPathPatterns=treasury.integration",
     "test:integration:squid": "jest --config jest.integration.config.js --testPathPatterns=squid.integration",
     "type-check:strict": "tsc --project smoke-test/tsconfig.strict.json",
-    "lint": "eslint src/**/*.ts",
-    "check:bundle-size": "node scripts/check-bundle-size.mjs",
-    "lint:fix": "eslint src/**/*.ts --fix",
     "lint": "eslint src/**/*.ts examples/**/*.ts",
+    "check:bundle-size": "node scripts/check-bundle-size.mjs",
     "lint:fix": "eslint src/**/*.ts examples/**/*.ts --fix",
     "clean": "rimraf dist",
     "prepare": "npm run build",
@@ -52,7 +50,6 @@
     "check:changelog": "ts-node --transpile-only scripts/check-changelog.ts",
     "examples:signer": "ts-node examples/signer.ts",
     "examples:serialized-submission-bot": "ts-node examples/serialized-submission-bot.ts",
-    "examples:tax-reporting": "ts-node examples/tax-reporting.ts",
     "docs:errors": "ts-node scripts/generate-error-doc.ts"
   },
   "keywords": [
@@ -83,7 +80,6 @@
     "@typescript/native": "npm:typescript@^7.0.2",
     "dotenv": "^18.0.4",
     "esbuild": "^0.28.2",
-    "eslint": "^10.8.0",
     "eslint": "^10.11.0",
     "fast-check": "^4.10.2",
     "jest": "^30.5.2",
