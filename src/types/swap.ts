@@ -1,4 +1,6 @@
 import { TradeType } from "./common";
+
+export { TradeType };
 import type { DeviationResult } from "../modules/price-feed";
 import type { PriceFeed } from "../modules/price-feed";
 import type { PriceGuardResult } from "../utils/redstone";
@@ -97,6 +99,10 @@ export interface SwapRequest {
   /** Optional explicit routing path. Tokens are Soroban contract addresses. */
   path?: string[];
   slippageBps?: number;
+  /** Explicit lower bound on output for EXACT_IN swaps (smallest unit). */
+  minAmountOut?: bigint;
+  /** Explicit upper bound on input for EXACT_OUT swaps (smallest unit). */
+  maxAmountIn?: bigint;
   /** Optional deadline as Unix timestamp */
   deadline?: number;
   /** Optional recipient address */
@@ -143,6 +149,8 @@ export interface SwapQuote {
   amountOut: bigint;
   /** Minimum output amount factoring in slippage */
   amountOutMin: bigint;
+  /** Maximum input amount factoring in slippage (EXACT_OUT quotes) */
+  maxAmountIn?: bigint;
   /** Price impact of the trade in basis points */
   priceImpactBps: number;
   /** Total fee in basis points */
