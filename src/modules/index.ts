@@ -2,9 +2,17 @@ export { SwapModule } from './swap';
 export { LiquidityModule } from './liquidity';
 export { FlashLoanModule } from './flash-loan';
 export { FeeModule } from './fees';
-export { OracleModule, TWAPObservation, TWAPResult, MIN_TWAP_WINDOW_SECONDS } from './oracle';
+export { OracleModule, TWAPObservation, TWAPResult, MIN_TWAP_WINDOW_SECONDS, MAX_OBSERVATIONS } from './oracle';
 export { PortfolioModule } from './portfolio';
 export { RiskMetricsModule } from './risk-metrics';
+export {
+  RiskScoringModule,
+  RiskLabel,
+} from './risk-scoring';
+export type {
+  ConcentrationRiskReport,
+  PortfolioRiskReport,
+} from './risk-scoring';
 export { TokenListModule } from './tokens';
 export { FactoryModule } from './factory';
 export {

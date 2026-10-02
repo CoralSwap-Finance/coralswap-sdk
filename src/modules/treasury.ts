@@ -1,5 +1,7 @@
 import { CoralSwapClient } from "@/client";
+import { ValidationError } from "@/errors";
 import { EventCursor, decodeEventTopic, MIN_START_LEDGER } from "@/utils/event-cursor";
+import { Contract, TransactionBuilder, scValToNative, rpc } from "@stellar/stellar-sdk";
 import {
   TreasuryBalance,
   TokenBalance,
@@ -17,7 +19,7 @@ const LEDGERS_PER_30_DAYS = 518_400; // 30 days × 86 400 s/day ÷ 5 s/ledger
 const MAX_REVENUE_EVENTS = 10_000;
 
 /**
- * Options for constructing a TreasuryModule.
+ * Options for constructing a TreasuryModule (and its subclass LeaderboardModule).
  */
 export interface TreasuryModuleOptions {
   /**
@@ -26,6 +28,24 @@ export interface TreasuryModuleOptions {
    * Without at least one stable address, all valueUSD fields default to 0.
    */
   stableAddresses?: string[];
+
+  /**
+   * Maximum number of token addresses to keep in the LRU decimals cache
+   * used by {@link LeaderboardModule}.
+   *
+   * Defaults to `512`. Lower values reduce peak memory usage at the cost of
+   * more on-chain metadata fetches on very large scans.
+   */
+  decimalsCacheCapacity?: number;
+
+  /**
+   * Per-entry TTL (milliseconds) for the LRU decimals cache.
+   *
+   * When set, a cached decimal count is considered stale after this duration
+   * and the next call triggers a fresh on-chain fetch.  Defaults to `0`
+   * (TTL disabled — entries live until evicted by LRU capacity pressure).
+   */
+  decimalsCacheTtlMs?: number;
 }
 
 /**
@@ -38,6 +58,7 @@ export interface TreasuryModuleOptions {
 export class TreasuryModule {
   private readonly client: CoralSwapClient;
   private readonly stableSet: Set<string>;
+  private readonly tokenDecimalsCache = new Map<string, number>();
 
   constructor(client: CoralSwapClient, options: TreasuryModuleOptions = {}) {
     this.client = client;
@@ -141,6 +162,22 @@ export class TreasuryModule {
    * console.log(revenue.trend); // 'rising' | 'falling' | 'stable'
    */
   async getFeeRevenue(period?: RevenuePeriod): Promise<RevenueData> {
+    if (period?.fromLedger !== undefined && period.fromLedger < 0) {
+      throw new ValidationError('period.fromLedger must be non-negative', {
+        fromLedger: period.fromLedger,
+      });
+    }
+    if (period?.toLedger !== undefined && period.toLedger < 0) {
+      throw new ValidationError('period.toLedger must be non-negative', {
+        toLedger: period.toLedger,
+      });
+    }
+    if (period?.fromLedger !== undefined && period?.toLedger !== undefined && period.fromLedger > period.toLedger) {
+      throw new ValidationError('period.fromLedger must not exceed period.toLedger', {
+        fromLedger: period.fromLedger,
+        toLedger: period.toLedger,
+      });
+    }
     // Anchor the window once against the chain head and reuse it for every
     // pool cursor, so all pools scan an identical, valid ledger range.
     const currentLedger = await this.client.getCurrentLedger();
@@ -195,55 +232,50 @@ export class TreasuryModule {
     midLedger: number,
     priceMap: Map<string, number>,
   ): Promise<{ revenueUSD: number; volumeUSD: number; firstHalf: number; secondHalf: number }> {
-    try {
-      // Delegated to the shared EventCursor: it encodes the "swap" topic as a
-      // base64 XDR ScVal and paginates — no hand-rolled request building here.
-      // The window is passed explicitly, so the cursor never has to fall back
-      // to its own anchoring.
-      const cursor = new EventCursor(this.client.server);
-      const events = await cursor.scan({
-        contractIds: [pairAddress],
-        topics: ["swap"],
-        fromLedger,
-        toLedger,
-        limit: MAX_REVENUE_EVENTS,
-      });
+    // Delegated to the shared EventCursor: it encodes the "swap" topic as a
+    // base64 XDR ScVal and paginates — no hand-rolled request building here.
+    // The window is passed explicitly, so the cursor never has to fall back
+    // to its own anchoring.
+    const cursor = new EventCursor(this.client.server);
+    const events = await cursor.scan({
+      contractIds: [pairAddress],
+      topics: ["swap"],
+      fromLedger,
+      toLedger,
+      limit: MAX_REVENUE_EVENTS,
+    });
 
-      if (events.length === 0) {
-        return { revenueUSD: 0, volumeUSD: 0, firstHalf: 0, secondHalf: 0 };
-      }
-
-      let revenueUSD = 0;
-      let volumeUSD = 0;
-      let firstHalf = 0;
-      let secondHalf = 0;
-
-      for (const event of events) {
-        if (event.ledger > toLedger) continue;
-        const parsed = this.parseSwapEventForRevenue(event);
-        if (!parsed) continue;
-
-        const priceUSD = priceMap.get(parsed.tokenIn) ?? 0;
-        const decimals = await defaultDecimalsResolver.resolveDecimals(this.client, parsed.tokenIn);
-        const divisor = 10 ** decimals;
-        
-        const feeUSD = (Number(parsed.feeAmount) / divisor) * priceUSD;
-        const volUSD = (Number(parsed.amountIn) / divisor) * priceUSD;
-
-        revenueUSD += feeUSD;
-        volumeUSD += volUSD;
-
-        if (event.ledger <= midLedger) {
-          firstHalf += feeUSD;
-        } else {
-          secondHalf += feeUSD;
-        }
-      }
-
-      return { revenueUSD, volumeUSD, firstHalf, secondHalf };
-    } catch {
+    if (events.length === 0) {
       return { revenueUSD: 0, volumeUSD: 0, firstHalf: 0, secondHalf: 0 };
     }
+
+    let revenueUSD = 0;
+    let volumeUSD = 0;
+    let firstHalf = 0;
+    let secondHalf = 0;
+
+    for (const event of events) {
+      if (event.ledger > toLedger) continue;
+      const parsed = this.parseSwapEventForRevenue(event);
+      if (!parsed) continue;
+
+      const priceUSD = priceMap.get(parsed.tokenIn) ?? 0;
+      const decimals = await this.getTokenDecimals(parsed.tokenIn);
+      const divider = 10 ** decimals;
+      const feeUSD = (Number(parsed.feeAmount) / divider) * priceUSD;
+      const volUSD = (Number(parsed.amountIn) / divider) * priceUSD;
+
+      revenueUSD += feeUSD;
+      volumeUSD += volUSD;
+
+      if (event.ledger <= midLedger) {
+        firstHalf += feeUSD;
+      } else {
+        secondHalf += feeUSD;
+      }
+    }
+
+    return { revenueUSD, volumeUSD, firstHalf, secondHalf };
   }
 
   private parseSwapEventForRevenue(rawEvent: unknown): {
@@ -343,6 +375,43 @@ export class TreasuryModule {
     } catch {
       return null;
     }
+  }
+
+  private async getTokenDecimals(tokenAddress: string): Promise<number> {
+    const cached = this.tokenDecimalsCache.get(tokenAddress);
+    if (cached !== undefined) return cached;
+
+    try {
+      const op = new Contract(tokenAddress).call('decimals');
+      const account = await this.client.server.getAccount(
+        'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF',
+      );
+      const tx = new TransactionBuilder(account, {
+        fee: '100',
+        networkPassphrase: this.client.networkConfig.networkPassphrase,
+      })
+        .addOperation(op)
+        .setTimeout(30)
+        .build();
+
+      const sim = await this.client.server.simulateTransaction(tx);
+      if (rpc.Api.isSimulationSuccess(sim) && sim.result?.retval) {
+        const decoded = scValToNative(sim.result.retval) as { u32?: number } | number | null;
+        const decimals = typeof decoded === 'object' && decoded !== null && 'u32' in decoded
+          ? Number(decoded.u32 ?? 7)
+          : typeof decoded === 'number'
+            ? decoded
+            : 7;
+        const safe = Number.isInteger(decimals) && decimals >= 0 && decimals <= 18 ? decimals : 7;
+        this.tokenDecimalsCache.set(tokenAddress, safe);
+        return safe;
+      }
+    } catch {
+      // Fall back to the Stellar-standard precision instead of hiding the error.
+    }
+
+    this.tokenDecimalsCache.set(tokenAddress, 7);
+    return 7;
   }
 
   private computeTrend(first: number, second: number): 'rising' | 'falling' | 'stable' {

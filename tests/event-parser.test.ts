@@ -3,7 +3,7 @@ import { EventParser, EVENT_TOPICS, decodeEventsFromXdr } from '../src/utils/eve
 import {
   SwapEvent,
   LiquidityEvent,
-  FlashLoanEvent,
+  FlashLoanContractEvent,
   MintEvent,
   BurnEvent,
   SyncEvent,
@@ -54,7 +54,7 @@ function makeDiagnosticEvent(
   topic: string,
   data: xdr.ScVal,
   inSuccess = true,
-  contractBuf: Buffer = CONTRACT_BUF,
+  contractBuf: Buffer | Uint8Array = CONTRACT_BUF,
 ): xdr.DiagnosticEvent {
   const topics = [symbolVal(topic)];
   const bodyV0 = new xdr.ContractEventV0({ topics, data });
@@ -63,7 +63,7 @@ function makeDiagnosticEvent(
 
   const contractEvent = new xdr.ContractEvent({
     ext: xdr.ExtensionPoint.v0() as xdr.ExtensionPoint,
-    contractId: contractBuf,
+    contractId: contractBuf ? new xdr.ContractId(contractBuf) : null,
     type: xdr.ContractEventType.contract,
     body,
   });
@@ -167,7 +167,7 @@ describe('EventParser', () => {
       const result = parser.parse([diag]);
 
       expect(result).toHaveLength(1);
-      const fl = result[0] as FlashLoanEvent;
+      const fl = result[0] as FlashLoanContractEvent;
       expect(fl.type).toBe('flash_loan');
       expect(fl.borrower).toBe(ADDR_SENDER);
       expect(fl.amount).toBe(2000000n);
@@ -359,10 +359,10 @@ describe('EventParser', () => {
   });
 
   // -----------------------------------------------------------------------
-  // Strict mode
+  // Strict mode & No silent fabrication
   // -----------------------------------------------------------------------
 
-  describe('parseStrict', () => {
+  describe('parseStrict and no silent fabrication', () => {
     it('still skips unknown topics without throwing', () => {
       const diag = makeDiagnosticEvent('unknown_topic', xdr.ScVal.scvVoid());
       const result = parser.parseStrict([diag]);
@@ -373,7 +373,178 @@ describe('EventParser', () => {
       const diag = makeDiagnosticEvent('swap', xdr.ScVal.scvVoid());
       expect(() => parser.parseStrict([diag])).toThrow();
     });
+
+    it('attaches decodeStatus complete to all successfully parsed events', () => {
+      const swapData = scMap([
+        ['sender', addressVal(ADDR_SENDER)],
+        ['token_in', addressVal(ADDR_TOKEN_A)],
+        ['token_out', addressVal(ADDR_TOKEN_B)],
+        ['amount_in', i128Val(1000000n)],
+        ['amount_out', i128Val(980000n)],
+        ['fee_bps', u32Val(30)],
+      ]);
+      const diag = makeDiagnosticEvent(EVENT_TOPICS.SWAP, swapData);
+      const result = parser.parse([diag]);
+      expect(result).toHaveLength(1);
+      expect(result[0].decodeStatus).toBe('complete');
+    });
+
+    it('throws ValidationError instead of silently fabricating 0n for invalid i128 field', () => {
+      const invalidSwapData = scMap([
+        ['sender', addressVal(ADDR_SENDER)],
+        ['token_in', addressVal(ADDR_TOKEN_A)],
+        ['token_out', addressVal(ADDR_TOKEN_B)],
+        ['amount_in', xdr.ScVal.scvString('not_an_i128')], // invalid type
+        ['amount_out', i128Val(980000n)],
+        ['fee_bps', u32Val(30)],
+      ]);
+      const diag = makeDiagnosticEvent(EVENT_TOPICS.SWAP, invalidSwapData);
+      expect(() => parser.parseStrict([diag])).toThrow(/Expected i128 ScVal/);
+    });
+
+    it('throws ValidationError instead of silently fabricating 0 for invalid u32 field', () => {
+      const invalidFeeData = scMap([
+        ['previous_fee_bps', xdr.ScVal.scvString('30')], // string instead of u32
+        ['new_fee_bps', u32Val(45)],
+        ['volatility', i128Val(150000n)],
+      ]);
+      const diag = makeDiagnosticEvent(EVENT_TOPICS.FEE_UPDATE, invalidFeeData);
+      expect(() => parser.parseStrict([diag])).toThrow(/Expected u32 ScVal/);
+    });
+
+    it('throws ValidationError when required field is missing', () => {
+      const incompleteSwapData = scMap([
+        ['sender', addressVal(ADDR_SENDER)],
+        ['token_in', addressVal(ADDR_TOKEN_A)],
+        ['token_out', addressVal(ADDR_TOKEN_B)],
+        ['amount_in', i128Val(1000000n)],
+        // amount_out is missing
+        ['fee_bps', u32Val(30)],
+      ]);
+      const diag = makeDiagnosticEvent(EVENT_TOPICS.SWAP, incompleteSwapData);
+      expect(() => parser.parseStrict([diag])).toThrow(/Missing required event field/);
+    });
   });
+});
+
+// ---------------------------------------------------------------------------
+// Formatted-event regression table (timestamp/ledger contract)
+//
+// Locks in the fix for a bug where `timestamp` was populated with the ledger
+// sequence number instead of the transaction's seconds-since-epoch close
+// time. Every recognised event type must independently report a `timestamp`
+// equal to the epoch seconds supplied by the caller and a `ledger` equal to
+// the sequence number supplied by the caller -- the two must never collapse
+// into the same value.
+// ---------------------------------------------------------------------------
+
+describe('formatted event timestamp/ledger contract', () => {
+  const REGRESSION_LEDGER = 4242424;
+  const REGRESSION_TIMESTAMP = 1732000000; // arbitrary seconds-since-epoch, deliberately != ledger
+
+  const swapData = scMap([
+    ['sender', addressVal(ADDR_SENDER)],
+    ['token_in', addressVal(ADDR_TOKEN_A)],
+    ['token_out', addressVal(ADDR_TOKEN_B)],
+    ['amount_in', i128Val(1000000n)],
+    ['amount_out', i128Val(980000n)],
+    ['fee_bps', u32Val(30)],
+  ]);
+
+  const liquidityData = scMap([
+    ['provider', addressVal(ADDR_SENDER)],
+    ['token_a', addressVal(ADDR_TOKEN_A)],
+    ['token_b', addressVal(ADDR_TOKEN_B)],
+    ['amount_a', i128Val(500000n)],
+    ['amount_b', i128Val(600000n)],
+    ['liquidity', i128Val(547722n)],
+  ]);
+
+  const flashLoanData = scMap([
+    ['borrower', addressVal(ADDR_SENDER)],
+    ['token', addressVal(ADDR_TOKEN_A)],
+    ['amount', i128Val(2000000n)],
+    ['fee', i128Val(600n)],
+  ]);
+
+  const mintData = scMap([
+    ['sender', addressVal(ADDR_SENDER)],
+    ['amount_a', i128Val(300000n)],
+    ['amount_b', i128Val(400000n)],
+    ['liquidity', i128Val(346410n)],
+  ]);
+
+  const burnData = scMap([
+    ['sender', addressVal(ADDR_SENDER)],
+    ['amount_a', i128Val(150000n)],
+    ['amount_b', i128Val(200000n)],
+    ['liquidity', i128Val(173205n)],
+    ['to', addressVal(ADDR_SENDER)],
+  ]);
+
+  const syncData = scMap([
+    ['reserve0', i128Val(5000000n)],
+    ['reserve1', i128Val(6000000n)],
+  ]);
+
+  const feeUpdateData = scMap([
+    ['previous_fee_bps', u32Val(30)],
+    ['new_fee_bps', u32Val(45)],
+    ['volatility', i128Val(150000n)],
+  ]);
+
+  const rows: Array<[string, string, xdr.ScVal]> = [
+    ['swap', EVENT_TOPICS.SWAP, swapData],
+    ['add_liquidity', EVENT_TOPICS.ADD_LIQUIDITY, liquidityData],
+    ['remove_liquidity', EVENT_TOPICS.REMOVE_LIQUIDITY, liquidityData],
+    ['flash_loan', EVENT_TOPICS.FLASH_LOAN, flashLoanData],
+    ['mint', EVENT_TOPICS.MINT, mintData],
+    ['burn', EVENT_TOPICS.BURN, burnData],
+    ['sync', EVENT_TOPICS.SYNC, syncData],
+    ['fee_update', EVENT_TOPICS.FEE_UPDATE, feeUpdateData],
+  ];
+
+  it.each(rows)(
+    '%s events report seconds-since-epoch timestamp and sequence ledger',
+    (expectedType, topic, data) => {
+      const diag = makeDiagnosticEvent(topic, data);
+      const parser = new EventParser();
+      const result = parser.parse(
+        [diag],
+        'tx_regression',
+        REGRESSION_LEDGER,
+        REGRESSION_TIMESTAMP,
+      );
+
+      expect(result).toHaveLength(1);
+      const event = result[0];
+      expect(event.type).toBe(expectedType);
+      expect(event.ledger).toBe(REGRESSION_LEDGER);
+      expect(event.timestamp).toBe(REGRESSION_TIMESTAMP);
+      expect(event.timestamp).not.toBe(event.ledger);
+    },
+  );
+
+  it.each(rows)(
+    '%s events keep the same contract through decodeEventsFromXdr',
+    (expectedType, topic, data) => {
+      const diag = makeDiagnosticEvent(topic, data);
+      const result = decodeEventsFromXdr(
+        [diag],
+        {},
+        'tx_regression',
+        REGRESSION_LEDGER,
+        REGRESSION_TIMESTAMP,
+      );
+
+      expect(result).toHaveLength(1);
+      const event = result[0];
+      expect(event.type).toBe(expectedType);
+      expect(event.ledger).toBe(REGRESSION_LEDGER);
+      expect(event.timestamp).toBe(REGRESSION_TIMESTAMP);
+      expect(event.timestamp).not.toBe(event.ledger);
+    },
+  );
 });
 
 // ---------------------------------------------------------------------------

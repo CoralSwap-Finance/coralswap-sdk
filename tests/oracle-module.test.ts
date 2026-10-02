@@ -1,4 +1,4 @@
-import { OracleModule, TWAPObservation } from '../src/modules/oracle';
+import { OracleModule, TWAPObservation, MIN_TWAP_WINDOW_SECONDS, MAX_OBSERVATIONS } from '../src/modules/oracle';
 import { CoralSwapClient } from '../src/client';
 import { PRECISION } from '../src/config';
 import { ValidationError, InsufficientLiquidityError } from '../src/errors';
@@ -47,12 +47,44 @@ function makeObs(
     };
 }
 
+/**
+ * Create a mock client whose getCumulativePrices() returns a new timestamp
+ * on each call: startTs, startTs + stepSeconds, startTs + 2*stepSeconds, ...
+ * Cumulative prices are kept at zero for simplicity (pruning logic only
+ * inspects timestamps).
+ */
+function createSequentialMockClient(
+    startTs: number,
+    stepSeconds: number,
+): CoralSwapClient {
+    let call = 0;
+    return {
+        pair: jest.fn().mockReturnValue({
+            getReserves: jest.fn().mockResolvedValue({
+                reserve0: 1_000_000n,
+                reserve1: 1_000_000n,
+            }),
+            getTokens: jest.fn().mockResolvedValue({
+                token0: 'TOKEN_0',
+                token1: 'TOKEN_1',
+            }),
+            getCumulativePrices: jest.fn().mockImplementation(() =>
+                Promise.resolve({
+                    price0CumulativeLast: 0n,
+                    price1CumulativeLast: 0n,
+                    blockTimestampLast: startTs + call++ * stepSeconds,
+                }),
+            ),
+        }),
+    } as unknown as CoralSwapClient;
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
 describe('OracleModule', () => {
-    const PAIR = 'PAIR_CONTRACT';
+    const PAIR = 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC';
 
     // -----------------------------------------------------------------------
     // computeTWAP() — pure function
@@ -154,52 +186,152 @@ describe('OracleModule', () => {
             expect(oracle.getObservationCount(PAIR)).toBe(2);
         });
 
-        it('cache is capped at 100 entries (oldest pruned)', async () => {
-            const client = createMockClient();
-            const oracle = new OracleModule(client);
+        // --- hard cap ---
 
-            // Insert 105 observations
-            for (let i = 0; i < 105; i++) {
+        it('hard cap: cache is bounded at MAX_OBSERVATIONS when all entries are within the minimum window', async () => {
+            // 1-second steps → all observations stay within MIN_TWAP_WINDOW_SECONDS (300 s),
+            // so window-coverage pruning never fires; the hard cap must engage.
+            const oracle = new OracleModule(
+                createSequentialMockClient(0, 1),
+            );
+
+            const overCap = MAX_OBSERVATIONS + 10;
+            for (let i = 0; i < overCap; i++) {
                 await oracle.observe(PAIR);
             }
 
-            expect(oracle.getObservationCount(PAIR)).toBe(100);
+            expect(oracle.getObservationCount(PAIR)).toBeLessThanOrEqual(MAX_OBSERVATIONS);
+        });
+
+        // --- window-coverage pruning ---
+
+        it('window-coverage: drops oldest entry once the window is comfortably covered', async () => {
+            // Poll every MIN_TWAP_WINDOW_SECONDS seconds so each new observation
+            // immediately gives the next-oldest enough room to become the new oldest.
+            const step = MIN_TWAP_WINDOW_SECONDS; // 300 s
+            const oracle = new OracleModule(
+                createSequentialMockClient(0, step),
+            );
+
+            // After 3 observations (ts 0, 300, 600) the gap from obs[1] (ts=300)
+            // to obs[2] (ts=600) = 300 = MIN_TWAP_WINDOW_SECONDS, so obs[0] is dropped.
+            await oracle.observe(PAIR); // ts = 0   → [0]
+            await oracle.observe(PAIR); // ts = 300 → [0, 300]
+            await oracle.observe(PAIR); // ts = 600 → drop 0, keep [300, 600]
+
+            const count = oracle.getObservationCount(PAIR);
+            expect(count).toBe(2);
+
+            const series = oracle.getObservationSeries(PAIR);
+            expect(series[0].blockTimestampLast).toBe(300);
+            expect(series[series.length - 1].blockTimestampLast).toBe(600);
+        });
+
+        it('window-coverage: never drops below 2 entries', async () => {
+            // Even with very long gaps the cache must keep at least 2 entries.
+            const oracle = new OracleModule(
+                createSequentialMockClient(0, MIN_TWAP_WINDOW_SECONDS * 100),
+            );
+
+            await oracle.observe(PAIR);
+            await oracle.observe(PAIR);
+
+            expect(oracle.getObservationCount(PAIR)).toBeGreaterThanOrEqual(2);
+        });
+
+        it('window-coverage: minimum window is preserved for high-frequency polling', async () => {
+            // 1-second steps: after >MIN_TWAP_WINDOW_SECONDS polls the window-coverage
+            // pruner fires and stabilises the cache so that the oldest timestamp is
+            // always within MIN_TWAP_WINDOW_SECONDS of the newest.
+            const step = 1; // 1-second polls
+            const numPolls = MIN_TWAP_WINDOW_SECONDS * 2; // well past the window
+            const oracle = new OracleModule(
+                createSequentialMockClient(0, step),
+            );
+
+            for (let i = 0; i < numPolls; i++) {
+                await oracle.observe(PAIR);
+            }
+
+            const series = oracle.getObservationSeries(PAIR);
+            const coverageSeconds =
+                series[series.length - 1].blockTimestampLast - series[0].blockTimestampLast;
+
+            expect(coverageSeconds).toBeGreaterThanOrEqual(MIN_TWAP_WINDOW_SECONDS);
+        });
+
+        it('window-coverage: retains only a bounded set once history spans the window', async () => {
+            // Same scenario as above: once the window is covered the cache should
+            // not keep growing unboundedly.
+            const step = 1;
+            const numPolls = MIN_TWAP_WINDOW_SECONDS * 3;
+            const oracle = new OracleModule(
+                createSequentialMockClient(0, step),
+            );
+
+            for (let i = 0; i < numPolls; i++) {
+                await oracle.observe(PAIR);
+            }
+
+            // Stabilised count ≈ MIN_TWAP_WINDOW_SECONDS + 1 (one observation per second).
+            // Allow a small tolerance for off-by-one edge cases.
+            const count = oracle.getObservationCount(PAIR);
+            expect(count).toBeLessThanOrEqual(MIN_TWAP_WINDOW_SECONDS + 2);
+        });
+
+        it('window-coverage: slow-polling pair accumulates < MIN_TWAP_WINDOW_SECONDS observations without pruning', async () => {
+            // 60-second steps; after 4 observations (0, 60, 120, 180) the span is
+            // only 180 s which is less than MIN_TWAP_WINDOW_SECONDS (300 s), so
+            // nothing should be pruned.
+            const oracle = new OracleModule(
+                createSequentialMockClient(0, 60),
+            );
+            for (let i = 0; i < 4; i++) {
+                await oracle.observe(PAIR);
+            }
+            expect(oracle.getObservationCount(PAIR)).toBe(4);
         });
 
         it('clearCache() removes observations for a specific pair', async () => {
             const client = createMockClient();
             const oracle = new OracleModule(client);
 
-            await oracle.observe('PAIR_A');
-            await oracle.observe('PAIR_B');
-            expect(oracle.getObservationCount('PAIR_A')).toBe(1);
-            expect(oracle.getObservationCount('PAIR_B')).toBe(1);
+            const PAIR_A = 'CCVAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA463';
+            const PAIR_B = 'CC5QAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB4CG';
+            await oracle.observe(PAIR_A);
+            await oracle.observe(PAIR_B);
+            expect(oracle.getObservationCount(PAIR_A)).toBe(1);
+            expect(oracle.getObservationCount(PAIR_B)).toBe(1);
 
-            oracle.clearCache('PAIR_A');
+            oracle.clearCache(PAIR_A);
 
-            expect(oracle.getObservationCount('PAIR_A')).toBe(0);
-            expect(oracle.getObservationCount('PAIR_B')).toBe(1);
+            expect(oracle.getObservationCount(PAIR_A)).toBe(0);
+            expect(oracle.getObservationCount(PAIR_B)).toBe(1);
         });
 
         it('clearCache() without args removes all observations', async () => {
             const client = createMockClient();
             const oracle = new OracleModule(client);
 
-            await oracle.observe('PAIR_A');
-            await oracle.observe('PAIR_B');
-            await oracle.observe('PAIR_C');
+            const PAIR_A = 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC';
+            const PAIR_B = 'CCVAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA463';
+            const PAIR_C = 'CC5QAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB4CG';
+            await oracle.observe(PAIR_A);
+            await oracle.observe(PAIR_B);
+            await oracle.observe(PAIR_C);
 
             oracle.clearCache();
 
-            expect(oracle.getObservationCount('PAIR_A')).toBe(0);
-            expect(oracle.getObservationCount('PAIR_B')).toBe(0);
-            expect(oracle.getObservationCount('PAIR_C')).toBe(0);
+            expect(oracle.getObservationCount(PAIR_A)).toBe(0);
+            expect(oracle.getObservationCount(PAIR_B)).toBe(0);
+            expect(oracle.getObservationCount(PAIR_C)).toBe(0);
         });
 
         it('getObservationCount() returns 0 for unknown pairs', () => {
             const oracle = new OracleModule(createMockClient());
 
-            expect(oracle.getObservationCount('UNKNOWN_PAIR')).toBe(0);
+            const UNKNOWN = 'CDGAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGVG';
+            expect(oracle.getObservationCount(UNKNOWN)).toBe(0);
         });
     });
 

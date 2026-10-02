@@ -92,6 +92,14 @@ Configuration lives in [jest.config.js](jest.config.js); tests must reside in `t
 | `npm test` | Run the full test suite once |
 | `npm run test:watch` | Re-run tests on file save (TDD mode) |
 | `npm run test:coverage` | Run tests and generate a coverage report |
+| `npm run test:integration` | Run every Testnet integration suite |
+| `npm run test:integration -- --testPathPattern=<module>` | Run one module's integration suite |
+
+`jest.integration.config.js` picks up everything under `tests/integration/`, so a new
+integration suite needs no `package.json` entry. Do not add a per-module
+`test:integration:<name>` script: fifteen of those existed at one point, every one a
+wrapper around the same command, and because each new suite appended to the same block
+they collided with each other constantly. Pass `--testPathPattern` instead.
 
 Coverage output is written to `coverage/` and reported in three formats: `text` (terminal), `lcov`, and `json-summary`.
 All PRs must keep the test suite passing; coverage regressions will block merge.

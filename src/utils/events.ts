@@ -11,6 +11,7 @@ import {
   FeeUpdateEvent,
 } from "@/types/events";
 import { ValidationError } from "@/errors";
+import { decodeI128 } from "./numeric";
 
 /** Response type that may include hash/id for transaction identifier. */
 type TxWithOptionalHash = rpc.Api.GetSuccessfulTransactionResponse & {
@@ -40,38 +41,40 @@ const KNOWN_TOPICS = new Set<string>(Object.values(EVENT_TOPICS));
 // ScVal decoding helpers (safe-guarded against invalid XDR)
 // ---------------------------------------------------------------------------
 
-/**
- * Decode an ScVal i128 to a bigint.
- */
-function decodeI128(val: xdr.ScVal): bigint {
-  if (val.type !== "scvI128") return 0n;
-  const i128 = val.i128 as unknown;
-  if (typeof i128 === "bigint") return i128;
-  const parts = i128 as { hi: bigint; lo: bigint };
-  return (parts.hi << 64n) + parts.lo;
-}
 
 /**
  * Decode an ScVal u32 to a number.
+ * Throws ValidationError on type mismatch rather than fabricating a zero fallback.
  */
 function decodeU32(val: xdr.ScVal): number {
-  return val.type === "scvU32" ? val.u32 : 0;
+  if (val.type !== "scvU32") {
+    throw new ValidationError(`Expected u32 ScVal, got ${val.type}`);
+  }
+  return val.u32;
 }
 
 /**
  * Decode an ScVal address to a string.
+ * Throws ValidationError on invalid address ScVal.
  */
 function decodeAddress(val: xdr.ScVal): string {
-  return Address.fromScVal(val).toString();
+  try {
+    return Address.fromScVal(val).toString();
+  } catch (err) {
+    throw new ValidationError(
+      `Invalid address ScVal: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 }
 
 /**
  * Decode an ScVal symbol or string to a JS string.
+ * Throws ValidationError on type mismatch rather than fabricating an empty string.
  */
 function decodeString(val: xdr.ScVal): string {
   if (val.type === "scvSymbol") return val.sym.toString();
   if (val.type === "scvString") return val.str.toString();
-  return val.value?.toString() ?? "";
+  throw new ValidationError(`Expected symbol or string ScVal, got ${val.type}`);
 }
 
 /**
@@ -110,7 +113,11 @@ function extractContractId(evt: xdr.DiagnosticEvent): string {
   try {
     const contractId = evt.event.contractId;
     if (contractId) {
-      return Address.contract(contractId as unknown as Uint8Array).toString();
+      const rawBytes =
+        'value' in contractId && contractId.value instanceof Uint8Array
+          ? contractId.value
+          : (contractId as unknown as Uint8Array);
+      return Address.contract(rawBytes).toString();
     }
   } catch {
     // contractId may be absent for system events
@@ -186,17 +193,19 @@ export class EventParser {
    * @param events - Diagnostic events from transaction result meta.
    * @param txHash - Transaction hash to attach to parsed events.
    * @param ledger - Ledger sequence number.
+   * @param timestamp - Unix timestamp (seconds since epoch) when the ledger closed.
    * @returns Array of typed CoralSwapEvent (only successfully parsed events).
    */
   parse(
     events: xdr.DiagnosticEvent[],
     txHash = "",
     ledger = 0,
+    timestamp = 0,
   ): CoralSwapEvent[] {
     const parsed: CoralSwapEvent[] = [];
     for (const evt of events) {
       try {
-        const result = this.decodeSingle(evt, txHash, ledger);
+        const result = this.decodeSingle(evt, txHash, ledger, timestamp);
         if (result) parsed.push(result);
       } catch {
         // Skip malformed events in lenient mode
@@ -211,6 +220,7 @@ export class EventParser {
    * @param events - Diagnostic events from transaction result meta.
    * @param txHash - Transaction hash to attach to parsed events.
    * @param ledger - Ledger sequence number.
+   * @param timestamp - Unix timestamp (seconds since epoch) when the ledger closed.
    * @returns Array of typed CoralSwapEvent.
    * @throws {ValidationError} If any recognised event cannot be decoded.
    */
@@ -218,10 +228,11 @@ export class EventParser {
     events: xdr.DiagnosticEvent[],
     txHash = "",
     ledger = 0,
+    timestamp = 0,
   ): CoralSwapEvent[] {
     const parsed: CoralSwapEvent[] = [];
     for (const evt of events) {
-      const result = this.decodeSingle(evt, txHash, ledger);
+      const result = this.decodeSingle(evt, txHash, ledger, timestamp);
       if (result) parsed.push(result);
     }
     return parsed;
@@ -243,7 +254,48 @@ export class EventParser {
     const txHash = tx.hash ?? tx.id ?? '';
 
     const ledger = response.ledger ?? 0;
-    return this.parse(diagnosticEvents, txHash, ledger);
+    const timestamp = response.createdAt ?? 0;
+    return this.parse(diagnosticEvents, txHash, ledger, timestamp);
+  }
+
+  /**
+   * Decode a single Soroban `getEvents` response entry into a typed
+   * {@link CoralSwapEvent}.
+   *
+   * Unlike {@link parse}/{@link fromTransaction}, which operate on
+   * `xdr.DiagnosticEvent`s from transaction result meta, this consumes the
+   * `rpc.Api.EventResponse` shape returned by live event streaming (see
+   * {@link EventCursor}). It applies the same contract-filter and
+   * topic-dispatch rules, so streamed events are typed identically to
+   * transaction-parsed ones.
+   *
+   * @param event - A single event entry from `server.getEvents`.
+   * @returns The typed event, or `null` when it is not a recognised CoralSwap
+   *   event, is filtered out, or did not run in a successful contract call.
+   */
+  fromEventResponse(event: rpc.Api.EventResponse): CoralSwapEvent | null {
+    if (event.inSuccessfulContractCall === false) return null;
+
+    const contractId = event.contractId ? event.contractId.toString() : "";
+    const topics = event.topic ?? [];
+    const data = event.value;
+    if (!data) return null;
+
+    const closedAtMs = event.ledgerClosedAt ? Date.parse(event.ledgerClosedAt) : NaN;
+    const timestamp = Number.isNaN(closedAtMs) ? 0 : Math.floor(closedAtMs / 1000);
+
+    try {
+      return this.decodeParts(
+        contractId,
+        topics,
+        data,
+        event.txHash ?? "",
+        event.ledger ?? 0,
+        timestamp,
+      );
+    } catch {
+      return null;
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -258,16 +310,12 @@ export class EventParser {
     evt: xdr.DiagnosticEvent,
     txHash: string,
     ledger: number,
+    timestamp: number,
   ): CoralSwapEvent | null {
     // Only process contract-type events that ran in a successful call
     if (!evt.inSuccessfulContractCall) return null;
 
     const contractId = extractContractId(evt);
-
-    // If contract filter is configured, skip non-matching contracts
-    if (this.contractIds.size > 0 && !this.contractIds.has(contractId)) {
-      return null;
-    }
 
     let topics: xdr.ScVal[];
     let data: xdr.ScVal;
@@ -278,16 +326,50 @@ export class EventParser {
       return null;
     }
 
+    return this.decodeParts(contractId, topics, data, txHash, ledger, timestamp);
+  }
+
+  /**
+   * Decode an already-extracted `(contractId, topics, data)` triple into a
+   * typed {@link CoralSwapEvent}.
+   *
+   * This is the shared core used by both {@link decodeSingle} (diagnostic
+   * events) and {@link fromEventResponse} (Soroban `getEvents` responses), so
+   * live-event streaming and transaction-result parsing apply identical
+   * contract-filtering and topic-dispatch rules.
+   *
+   * @returns The typed event, or `null` when the contract is filtered out or
+   *   the topic is not a recognised CoralSwap event.
+   */
+  private decodeParts(
+    contractId: string,
+    topics: xdr.ScVal[],
+    data: xdr.ScVal,
+    txHash: string,
+    ledger: number,
+    timestamp: number,
+  ): CoralSwapEvent | null {
+    // If contract filter is configured, skip non-matching contracts
+    if (this.contractIds.size > 0 && !this.contractIds.has(contractId)) {
+      return null;
+    }
+
     if (topics.length === 0) return null;
 
-    const topicName = decodeString(topics[0]);
+    let topicName: string;
+    try {
+      topicName = decodeString(topics[0]);
+    } catch {
+      return null;
+    }
     if (!KNOWN_TOPICS.has(topicName)) return null;
 
     const base: Omit<ContractEvent, "type"> = {
       contractId,
       ledger,
-      timestamp: ledger,
+      timestamp,
       txHash,
+      decodeStatus: "complete",
     };
 
     switch (topicName) {
@@ -496,11 +578,12 @@ export function decodeEvents(
   const tx = response as TxWithOptionalHash;
   const txHash = tx.hash ?? tx.id ?? "";
   const ledger = response.ledger ?? 0;
+  const timestamp = response.createdAt ?? 0;
 
   if (options.strict) {
-    return parser.parseStrict(diagnosticEvents, txHash, ledger);
+    return parser.parseStrict(diagnosticEvents, txHash, ledger, timestamp);
   }
-  return parser.parse(diagnosticEvents, txHash, ledger);
+  return parser.parse(diagnosticEvents, txHash, ledger, timestamp);
 }
 
 /**
@@ -516,6 +599,7 @@ export function decodeEvents(
  * @param options.strict - If true, throws on malformed event data. Defaults to false.
  * @param txHash - Transaction hash to attach to parsed events.
  * @param ledger - Ledger sequence number.
+ * @param timestamp - Unix timestamp (seconds since epoch) when the ledger closed.
  * @returns Array of typed CoralSwapEvent objects.
  *
  * @example
@@ -534,12 +618,13 @@ export function decodeEventsFromXdr(
   options: DecodeEventsOptions = {},
   txHash = "",
   ledger = 0,
+  timestamp = 0,
 ): CoralSwapEvent[] {
   const contractIds = options.contractId ? [options.contractId] : [];
   const parser = new EventParser(contractIds);
 
   if (options.strict) {
-    return parser.parseStrict(events, txHash, ledger);
+    return parser.parseStrict(events, txHash, ledger, timestamp);
   }
-  return parser.parse(events, txHash, ledger);
+  return parser.parse(events, txHash, ledger, timestamp);
 }

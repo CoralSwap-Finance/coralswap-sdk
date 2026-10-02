@@ -1,10 +1,16 @@
 import { xdr, rpc } from "@stellar/stellar-sdk";
+import { ValidationError } from "@/errors";
+import { EventParser } from "./events";
+import { CoralSwapEvent } from "@/types/events";
 
 /**
  * Lowest ledger sequence that can legally be passed as `startLedger`.
  * Ledger 0 does not exist, so anchoring must never clamp below this.
  */
 export const MIN_START_LEDGER = 1;
+
+/** Maximum number of events that can be requested in a single scan call. */
+export const MAX_EVENT_LIMIT = 10_000;
 
 /**
  * Decode a topic segment from a `getEvents` **response** back to its symbol.
@@ -55,6 +61,55 @@ export interface EventCursorOptions {
   /** Default per-request limit passed to getEvents. */
   defaultLimit?: number;
 }
+
+/**
+ * Paging metadata attached to every {@link EventCursor} and
+ * {@link TypedEventCursor} scan result.
+ *
+ * Consumers can use `hasMore` / `nextCursor` to drive further pages
+ * without pre-querying total counts.
+ */
+export interface PageInfo {
+  /** Ledger the scan started from. */
+  startLedger?: number;
+  /** Ledger sequence of the last event returned (or the scan end). */
+  endLedger?: number;
+  /** Per-request page limit that was used. */
+  limit?: number;
+  /**
+   * `true` when the response page was full — further pages likely exist.
+   * Equivalent to `hasNextPage` on the result object.
+   */
+  hasMore?: boolean;
+  /**
+   * Opaque RPC cursor string to resume from on the next request.
+   * `null` when the result set is exhausted.
+   */
+  nextCursor?: string | null;
+}
+
+/**
+ * An array of `T` augmented with cursor-paging metadata so callers can
+ * drive subsequent pages without hand-rolling their own caps.
+ *
+ * @example
+ * ```ts
+ * const result = await cursor.scan({ limit: 200 });
+ * processEvents(result);           // still a plain array
+ * if (result.hasNextPage) {
+ *   const next = await cursor.scan({ limit: 200 }); // cursor already advanced
+ * }
+ * ```
+ */
+export type ScanResult<T> = T[] & {
+  /** Full paging metadata for the completed scan. */
+  pageInfo: PageInfo;
+  /**
+   * `true` when the last page hit the limit and further pages may exist.
+   * Shorthand for `pageInfo.hasMore`.
+   */
+  hasNextPage: boolean;
+};
 
 /**
  * EventCursor — shared utility to scan Soroban `getEvents` safely and
@@ -138,14 +193,35 @@ export class EventCursor {
     fromLedger?: number;
     toLedger?: number;
     limit?: number;
+<<<<<<< HEAD
   } = {}): Promise<rpc.Api.EventResponse[]> {
     if (params.fromLedger !== undefined) {
       this.cursor = Math.max(MIN_START_LEDGER, params.fromLedger);
     } else {
       await this.anchorIfNeeded();
     }
+=======
+  } = {}): Promise<Array<rpc.Api.EventResponse> & {
+    pageInfo?: {
+      startLedger?: number;
+      endLedger?: number;
+      limit?: number;
+      hasMore?: boolean;
+      nextCursor?: string | null;
+      [key: string]: unknown;
+    };
+    truncated?: boolean;
+  }> {
+    await this.anchorIfNeeded();
+>>>>>>> c9779862fa59d2d48796a9d4042fb9f9ed616e6e
 
     const limit = params.limit ?? this.defaultLimit;
+    if (!Number.isInteger(limit) || limit < 1 || limit > MAX_EVENT_LIMIT) {
+      throw new ValidationError(
+        `limit must be an integer between 1 and ${MAX_EVENT_LIMIT}, got ${limit}`,
+        { field: "limit", constraint: `integer 1-${MAX_EVENT_LIMIT}`, actual: limit },
+      );
+    }
     const toLedger = params.toLedger; // may be undefined -> will be treated as open
 
     let startLedger = params.fromLedger !== undefined ? Math.max(MIN_START_LEDGER, params.fromLedger) : this.cursor!;
@@ -153,10 +229,30 @@ export class EventCursor {
     const topics = this.encodeTopics(params.topics);
 
     const allEvents: rpc.Api.EventResponse[] = [];
+    let pageInfo: {
+      startLedger?: number;
+      endLedger?: number;
+      limit?: number;
+      hasMore?: boolean;
+      nextCursor?: string | null;
+      [key: string]: unknown;
+    } = {
+      startLedger,
+      endLedger: startLedger,
+      limit,
+      hasMore: false,
+      nextCursor: null,
+    };
+
+    let currentCursor: string | undefined = undefined;
 
     while (true) {
-      const request: rpc.Server.GetEventsRequest = {
-        startLedger,
+      // Soroban RPC rejects a request that carries both a cursor and a ledger
+      // range: the first page is fetched by ledger range, every following
+      // page continues from the cursor of the previous one so that events
+      // beyond the page limit inside a single ledger are never skipped.
+      const request: Record<string, unknown> = {
+        ...(currentCursor ? {} : { startLedger }),
         filters: [
           {
             type: 'contract',
@@ -165,37 +261,187 @@ export class EventCursor {
           },
         ],
         limit,
-      } as unknown as rpc.Server.GetEventsRequest;
+      };
+
+      if (currentCursor) {
+        request.cursor = currentCursor;
+      }
 
       const res = await this.server.getEvents(request as any);
       const events = Array.isArray(res?.events) ? res.events : [];
       if (events.length === 0) {
-        // Update cursor to latest inspected ledger (if RPC returns latestLedger)
         if (typeof res?.latestLedger === 'number') this.cursor = res.latestLedger;
         break;
       }
 
-      allEvents.push(...events as rpc.Api.EventResponse[]);
+      allEvents.push(...(events as rpc.Api.EventResponse[]));
 
-      // Determine last seen ledger to advance the cursor and next startLedger
-      const lastLedger = (events[events.length - 1] as any).ledger ??
+      const lastEvent = events[events.length - 1] as any;
+      const lastLedger =
+        lastEvent?.ledger ??
         (typeof res.latestLedger === 'number' ? res.latestLedger : undefined);
+
+      const resCursor =
+        typeof res?.cursor === "string" && res.cursor.length > 0
+          ? res.cursor
+          : typeof lastEvent?.pagingToken === "string"
+          ? lastEvent.pagingToken
+          : null;
+
+      if (lastLedger !== undefined) {
+        pageInfo = {
+          startLedger,
+          endLedger: lastLedger,
+          limit,
+          hasMore: events.length >= limit,
+          nextCursor: resCursor,
+        };
+      }
 
       if (lastLedger === undefined) break;
 
-      // Advance to the ledger after the last event to avoid duplicates
-      startLedger = lastLedger + 1;
-      this.cursor = startLedger;
+      if (resCursor) {
+        currentCursor = resCursor;
+        this.cursor = lastLedger;
+      } else {
+        startLedger = lastLedger + 1;
+        this.cursor = startLedger;
+      }
 
-      // Stop if we've reached an explicit toLedger
-      if (toLedger !== undefined && startLedger > toLedger) break;
-
-      // If fewer than limit results returned, no more pages
+      if (toLedger !== undefined && lastLedger > toLedger) break;
       if (events.length < limit) break;
     }
 
-    return allEvents;
+    const pagedEvents = allEvents as typeof allEvents & {
+      pageInfo?: typeof pageInfo;
+      truncated?: boolean;
+    };
+    pagedEvents.pageInfo = pageInfo;
+    pagedEvents.truncated = (pageInfo.hasMore ?? false) || allEvents.length >= limit;
+    return pagedEvents;
   }
 }
+
+/**
+ * Per-scan overrides for a {@link TypedEventCursor}. The `contractIds`/`topics`
+ * filters are fixed for the lifetime of the cursor (they are the whole point of
+ * composing a single filtered cursor), so only the ledger window and page limit
+ * are adjustable here.
+ */
+export interface TypedEventScanParams {
+  /** Explicit start ledger. Defaults to the cursor's anchored position. */
+  fromLedger?: number;
+  /** Explicit end ledger. When omitted the scan runs to the chain head. */
+  toLedger?: number;
+  /** Per-request page limit passed through to `getEvents`. */
+  limit?: number;
+}
+
+/**
+ * TypedEventCursor — a single, filtered, cursor-pagination-aware stream of
+ * typed {@link CoralSwapEvent}s.
+ *
+ * Composed listeners historically forked topic filtering per module, each
+ * re-issuing `getEvents` and re-decoding raw responses. This cursor bakes the
+ * contract and topic filters in once (applied at the cursor level via the
+ * shared {@link EventCursor}) and decodes every page through the shared
+ * {@link EventParser}, so multiple listeners can compose over one cursor
+ * instead of each re-filtering.
+ *
+ * Pagination semantics are inherited verbatim from {@link EventCursor}:
+ * ledger-window anchoring against `getLatestLedger()`, base64-XDR topic
+ * encoding, in-memory cursor advancement, and full-page pagination.
+ *
+ * @example
+ * ```ts
+ * const cursor = client.allEvents(pairAddress, ["swap", "sync"]);
+ * for await (const event of cursor.stream()) {
+ *   if (event.type === "swap") console.log(event.amountIn, event.amountOut);
+ * }
+ * ```
+ */
+export class TypedEventCursor {
+  private readonly cursor: EventCursor;
+  private readonly parser: EventParser;
+  private readonly contractId?: string;
+  private readonly topicFilters?: string[];
+
+  /**
+   * @param server - Soroban RPC server used for `getEvents`.
+   * @param contractId - Contract whose events are streamed. When omitted,
+   *   events from any contract are returned (still topic-filtered).
+   * @param filters - Topic symbols to filter on at the cursor level (e.g.
+   *   `["swap", "sync"]`). Omit for all recognised topics.
+   * @param opts - Ledger-window / page-limit defaults for the underlying cursor.
+   */
+  constructor(
+    server: rpc.Server,
+    contractId?: string,
+    filters?: string[],
+    opts: EventCursorOptions = {},
+  ) {
+    this.cursor = new EventCursor(server, opts);
+    this.parser = new EventParser(contractId ? [contractId] : []);
+    this.contractId = contractId;
+    this.topicFilters = filters;
+  }
+
+  /** Reset the underlying cursor position. Useful for tests / re-scans. */
+  reset(): void {
+    this.cursor.reset();
+  }
+
+  /**
+   * Scan the next window and return the decoded, typed events.
+   *
+   * Applies the cursor's fixed contract/topic filters, advances the shared
+   * pagination cursor, and decodes each raw response into a typed event
+   * (undecodable / unrecognised entries are dropped).
+   *
+   * The returned value is a plain array extended with `.pageInfo` and
+   * `.hasNextPage` so callers can drive subsequent pages without
+   * pre-querying total counts or hand-rolling their own caps.
+   */
+  async scan(params: TypedEventScanParams = {}): Promise<ScanResult<CoralSwapEvent>> {
+    const raw = await this.cursor.scan({
+      contractIds: this.contractId ? [this.contractId] : [],
+      topics: this.topicFilters,
+      fromLedger: params.fromLedger,
+      toLedger: params.toLedger,
+      limit: params.limit,
+    });
+    const decoded = this.decode(raw);
+    const pageInfo: PageInfo = raw.pageInfo ?? {};
+    const result = Object.assign(decoded, {
+      pageInfo,
+      hasNextPage: pageInfo.hasMore ?? false,
+    }) as ScanResult<CoralSwapEvent>;
+    return result;
+  }
+
+  /**
+   * Stream the decoded, typed events one at a time.
+   *
+   * A thin async-iterable wrapper over {@link scan} so listeners can consume
+   * the filtered cursor with `for await`.
+   */
+  async *stream(
+    params: TypedEventScanParams = {},
+  ): AsyncGenerator<CoralSwapEvent, void, unknown> {
+    for (const event of await this.scan(params)) {
+      yield event;
+    }
+  }
+
+  private decode(raw: rpc.Api.EventResponse[]): CoralSwapEvent[] {
+    const decoded: CoralSwapEvent[] = [];
+    for (const event of raw) {
+      const typed = this.parser.fromEventResponse(event);
+      if (typed) decoded.push(typed);
+    }
+    return decoded;
+  }
+}
+
 
 export default EventCursor;

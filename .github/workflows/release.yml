@@ -2,116 +2,41 @@ name: Release
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      bump_type:
+        description: "Version bump type (patch, minor, major, or none)"
+        required: false
+        default: "none"
+        type: choice
+        options:
+          - none
+          - patch
+          - minor
+          - major
 
 permissions:
   contents: write
-  id-token: write
+  pull-requests: write
 
 jobs:
-  release:
+  release-please:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - name: Run release-please
+        uses: googleapis/release-please-action@v4
+        id: release
         with:
-          fetch-depth: 0
+          release-type: node
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: actions/setup-node@v7
-        with:
-          node-version: '20'
-          cache: 'npm'
-          registry-url: 'https://registry.npmjs.org'
-
-      - run: npm ci
-
-      - name: Determine version bump
-        id: version
+      - name: Print release info
+        if: ${{ steps.release.outputs.releases_created == 'true' }}
         run: |
-          # Get commits since last tag
-          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-          if [ -z "$LAST_TAG" ]; then
-            COMMITS=$(git log --pretty=format:"%s" HEAD)
-          else
-            COMMITS=$(git log --pretty=format:"%s" "${LAST_TAG}..HEAD")
-          fi
-
-          echo "Commits since last tag:"
-          echo "$COMMITS"
-
-          BUMP="none"
-          if echo "$COMMITS" | grep -qiE "BREAKING CHANGE|^[a-z]+(\(.+\))?!:"; then
-            BUMP="major"
-          elif echo "$COMMITS" | grep -qE "^feat(\(.+\))?:"; then
-            BUMP="minor"
-          elif echo "$COMMITS" | grep -qE "^fix(\(.+\))?:"; then
-            BUMP="patch"
-          fi
-
-          echo "bump=$BUMP" >> "$GITHUB_OUTPUT"
-
-      - name: Bump version & tag
-        id: bump
-        if: steps.version.outputs.bump != 'none'
-        run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          NEW_VERSION=$(npm version ${{ steps.version.outputs.bump }} --no-git-tag-version)
-          echo "new_version=${NEW_VERSION}" >> "$GITHUB_OUTPUT"
-
-          git add package.json package-lock.json
-          git commit -m "chore(release): ${NEW_VERSION} [skip ci]"
-          git tag "${NEW_VERSION}"
-          git push origin main --follow-tags
-
-      - name: Generate changelog
-        if: steps.version.outputs.bump != 'none'
-        run: |
-          NEW_VERSION=${{ steps.bump.outputs.new_version }}
-          DATE=$(date +%Y-%m-%d)
-          LAST_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
-
-          if [ -z "$LAST_TAG" ]; then
-            COMMITS=$(git log --pretty=format:"- %s" HEAD^)
-          else
-            COMMITS=$(git log --pretty=format:"- %s" "${LAST_TAG}..HEAD^")
-          fi
-
-          ENTRY="## ${NEW_VERSION} (${DATE})\n\n${COMMITS}\n"
-
-          # Prepend new entry after the first line (title)
-          awk -v entry="$ENTRY" 'NR==1{print; print ""; print entry; next}1' CHANGELOG.md > CHANGELOG.tmp
-          mv CHANGELOG.tmp CHANGELOG.md
-
-          git add CHANGELOG.md
-          git commit -m "docs(changelog): update for ${NEW_VERSION} [skip ci]"
-          git push origin main
-
-      - name: Build
-        if: steps.version.outputs.bump != 'none'
-        run: npm run build
-
-      - name: Publish to npm
-        if: steps.version.outputs.bump != 'none'
-        run: npm publish --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-      - name: Create GitHub Release
-        if: steps.version.outputs.bump != 'none'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          NEW_VERSION=${{ steps.bump.outputs.new_version }}
-          LAST_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
-
-          if [ -z "$LAST_TAG" ]; then
-            NOTES=$(git log --pretty=format:"- %s" HEAD^)
-          else
-            NOTES=$(git log --pretty=format:"- %s" "${LAST_TAG}..HEAD^")
-          fi
-
-          gh release create "${NEW_VERSION}" \
-            --title "${NEW_VERSION}" \
-            --notes "$NOTES"
+          echo "🚀 Release created!"
+          echo "  Tag: ${{ steps.release.outputs.tag_name }}"
+          echo "  Version: ${{ steps.release.outputs.version }}"
