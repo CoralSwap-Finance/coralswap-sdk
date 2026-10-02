@@ -1189,4 +1189,162 @@ describe('LimitOrderModule', () => {
       });
     });
   });
+
+  describe('zod input validation (#486)', () => {
+    const TOKEN_IN = 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM';
+    const TOKEN_OUT = 'GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFSHONUCEOASW7QC7OX2H';
+    const PAIR_ADDR = 'CAAQEAYEAUDAOCAJBIFQYDIOB4IBCEQTCQKRMFYYDENBWHA5DYPSBFLM';
+    const SIGNER = 'GAZGE6TCGY5SW4GMFRVY2DMFXBOZVDDWOJ6CJZQ6ZUXY3SQQE2FTCAJF';
+
+    const validParams = () => ({
+      tokenIn: TOKEN_IN,
+      tokenOut: TOKEN_OUT,
+      amountIn: 1000n,
+      targetPrice: 1.5,
+      expiry: Math.floor(Date.now() / 1000) + 3600,
+      pairAddress: PAIR_ADDR,
+    });
+
+    /**
+     * One row per rule the hand-written `if` guards used to enforce on
+     * `placeLimitOrder()`'s parameters. `patch` applies the single invalid
+     * value, `message` is the exact message the old guard threw. A dropped or
+     * loosened rule fails its row.
+     */
+    const paramRuleCases: Array<[string, Partial<ReturnType<typeof validParams>>, string]> = [
+      ['rejects zero targetPrice', { targetPrice: 0 }, 'targetPrice must be positive'],
+      ['rejects negative targetPrice', { targetPrice: -1 }, 'targetPrice must be positive'],
+      ['rejects NaN targetPrice', { targetPrice: NaN }, 'targetPrice must be positive'],
+      ['rejects non-numeric targetPrice', { targetPrice: '1.5' as any }, 'targetPrice must be positive'],
+      ['rejects targetPrice above the maximum', { targetPrice: 1_000_001 }, 'targetPrice exceeds maximum allowed range (1,000,000)'],
+      ['rejects past expiry', { expiry: Math.floor(Date.now() / 1000) - 10 }, 'expiry must be a Unix timestamp in the future'],
+      ['rejects expiry at the current second', { expiry: Math.floor(Date.now() / 1000) }, 'expiry must be a Unix timestamp in the future'],
+      ['rejects empty tokenIn', { tokenIn: '' }, 'tokenIn must not be empty'],
+      ['rejects malformed tokenIn', { tokenIn: 'not-an-address' }, 'tokenIn is not a valid Stellar address: not-an-address'],
+      ['rejects empty tokenOut', { tokenOut: '' }, 'tokenOut must not be empty'],
+      ['rejects identical tokens', { tokenOut: TOKEN_IN }, 'tokenIn and tokenOut must be different addresses'],
+      ['rejects malformed pairAddress', { pairAddress: 'nope' }, 'pairAddress is not a valid Stellar address: nope'],
+      ['rejects zero amountIn', { amountIn: 0n }, 'amountIn must be greater than 0, got 0'],
+      ['rejects negative amountIn', { amountIn: -100n }, 'amountIn must be greater than 0, got -100'],
+    ];
+
+    it.each(paramRuleCases)('%s, with the pre-migration message', async (_name, patch, message) => {
+      await expect(
+        module.placeLimitOrder({ ...validParams(), ...patch }),
+      ).rejects.toThrow(message);
+    });
+
+    it('accepts the boundary values the old guards accepted', async () => {
+      mockServer.simulateTransaction.mockResolvedValue(
+        mockSimulationResult(xdr.ScVal.scvString('boundary-order')),
+      );
+      mockClient.submitTransaction = jest.fn().mockResolvedValue({
+        success: true,
+        data: { txHash: '0xboundary', ledger: 1 },
+      });
+
+      const result = await module.placeLimitOrder({
+        ...validParams(),
+        targetPrice: 1_000_000,
+        expiry: Math.floor(Date.now() / 1000) + 1,
+      });
+
+      expect(result.orderId).toBe('boundary-order');
+    });
+
+    it('reports ValidationError with every broken rule in zodErrors', async () => {
+      const err = await module
+        .placeLimitOrder({ ...validParams(), targetPrice: 0, tokenIn: 'bad', amountIn: 0n })
+        .catch((e) => e);
+
+      expect(err).toBeInstanceOf(ValidationError);
+      // The old guards stopped at the first failure; the schema reports all
+      // three, and the surfaced message is still the first one's.
+      expect(err.message).toBe('targetPrice must be positive');
+      const messages = err.details?.zodErrors.map((issue: { message: string }) => issue.message);
+      expect(messages).toEqual([
+        'targetPrice must be positive',
+        'tokenIn is not a valid Stellar address: bad',
+        'amountIn must be greater than 0, got 0',
+      ]);
+    });
+
+    it('validates the optional signer with the old messages', async () => {
+      await expect(module.placeLimitOrder(validParams(), 'nope')).rejects.toThrow(
+        'signer is not a valid Stellar address: nope',
+      );
+      await expect(module.placeLimitOrder(validParams(), '')).rejects.toThrow(
+        'signer must not be empty',
+      );
+      await expect(
+        module.cancelLimitOrder('order-1', 'nope'),
+      ).rejects.toThrow('signer is not a valid Stellar address: nope');
+      // A valid signer still goes through.
+      mockServer.simulateTransaction.mockResolvedValue(
+        mockSimulationResult(xdr.ScVal.scvString('signed-order')),
+      );
+      mockClient.submitTransaction = jest.fn().mockResolvedValue({
+        success: true,
+        data: { txHash: '0xsigned', ledger: 2 },
+      });
+      await expect(module.placeLimitOrder(validParams(), SIGNER)).resolves.toEqual({
+        orderId: 'signed-order',
+      });
+    });
+
+    it('rejects bad orderIds across every method that takes one', async () => {
+      await expect(module.getLimitOrderStatus('')).rejects.toThrow(
+        'orderId must be a non-empty string',
+      );
+      await expect(module.getLimitOrder('   ')).rejects.toThrow(
+        'orderId must be a non-empty string',
+      );
+      await expect(module.cancelLimitOrder('')).rejects.toThrow(
+        'orderId must be a non-empty string',
+      );
+      await expect(
+        module.getLimitOrderStatus(null as unknown as string),
+      ).rejects.toThrow('orderId must be a non-empty string');
+      expect(() => module.watchOrder('', () => {})).toThrow(
+        'orderId must be a non-empty string',
+      );
+      expect(() => module.watchOrder('  ', () => {})).toThrow(
+        'orderId must be a non-empty string',
+      );
+    });
+
+    it('rejects a non-function callback and bad intervals with the old messages', () => {
+      expect(() => module.watchOrder('order-1', null as unknown as () => void)).toThrow(
+        'callback must be a function',
+      );
+      for (const intervalMs of [0, -5, NaN, Infinity]) {
+        expect(() => module.watchOrder('order-1', () => {}, intervalMs)).toThrow(
+          'intervalMs must be a positive number',
+        );
+      }
+      // A valid interval still accepts and returns an unsubscribe function.
+      const unsub = module.watchOrder('order-1', () => {}, 1000);
+      expect(typeof unsub).toBe('function');
+      unsub();
+    });
+
+    it('rejects a malformed address in getOpenOrders', async () => {
+      await expect(module.getOpenOrders('')).rejects.toThrow('address must not be empty');
+      await expect(module.getOpenOrders('nope')).rejects.toThrow(
+        'address is not a valid Stellar address: nope',
+      );
+    });
+
+    it('keeps the constructor guards', () => {
+      expect(() => new LimitOrderModule(null as unknown as any)).toThrow(
+        'client must be a valid CoralSwapClient instance',
+      );
+      expect(() => new LimitOrderModule(mockClient, 'nope')).toThrow(
+        'contractAddress is not a valid Stellar address: nope',
+      );
+      expect(() => new LimitOrderModule(mockClient, '')).toThrow(
+        'contractAddress must not be empty',
+      );
+    });
+  });
 });

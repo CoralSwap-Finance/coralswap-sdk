@@ -174,7 +174,9 @@ export function fromSorobanAmount(
   const whole = str.slice(0, str.length - decimals);
   const frac = str.slice(str.length - decimals);
 
-  const result = `${whole}.${frac}`;
+  // A zero-decimal token has no fractional part; "123." would not round-trip
+  // through parseTokenAmount.
+  const result = decimals === 0 ? whole : `${whole}.${frac}`;
   return isNegative ? `-${result}` : result;
 }
 

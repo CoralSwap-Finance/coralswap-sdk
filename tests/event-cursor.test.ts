@@ -2,7 +2,9 @@ import { xdr } from "@stellar/stellar-sdk";
 import EventCursor, {
   decodeEventTopic,
   MIN_START_LEDGER,
+  MAX_EVENT_LIMIT,
 } from "../src/utils/event-cursor";
+import { ValidationError } from "../src/errors";
 
 describe("EventCursor", () => {
   it("anchors initial cursor via getLatestLedger and uses defaultWindow", async () => {
@@ -67,6 +69,75 @@ describe("EventCursor", () => {
 
     expect(server.getEvents).toHaveBeenCalledTimes(2);
     expect(all.map((e: any) => e.txHash)).toEqual(['a','b','c','d','e']);
+  });
+
+  it("exposes pageInfo metadata and a truncated flag when a page hits the cap", async () => {
+    const eventsPage1 = [
+      { ledger: 1, txHash: 'a' },
+      { ledger: 2, txHash: 'b' },
+      { ledger: 3, txHash: 'c' },
+    ];
+
+    const server: any = {
+      getLatestLedger: jest.fn().mockResolvedValue({ sequence: 500 }),
+      getEvents: jest.fn().mockImplementation(async (req: any) => {
+        if (req.startLedger === 1) {
+          return {
+            events: eventsPage1,
+            latestLedger: 3,
+            cursor: 'next-page',
+          };
+        }
+        return { events: [], latestLedger: 3, cursor: 'final-page' };
+      }),
+    };
+
+    const cursor = new EventCursor(server);
+    const all = await cursor.scan({ fromLedger: 1, limit: 3 });
+
+    expect(all.truncated).toBe(true);
+    expect(all.pageInfo).toMatchObject({
+      startLedger: 1,
+      endLedger: 3,
+      limit: 3,
+      hasMore: true,
+      nextCursor: 'next-page',
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // limit validation
+  // ---------------------------------------------------------------------------
+  describe("limit validation", () => {
+    let server: any;
+    beforeEach(() => {
+      server = {
+        getLatestLedger: jest.fn().mockResolvedValue({ sequence: 2000 }),
+        getEvents: jest.fn().mockResolvedValue({ events: [], latestLedger: 2000 }),
+      };
+    });
+
+    it.each([0, -1, -100])("rejects limit=%i (non-positive)", async (bad) => {
+      const cursor = new EventCursor(server);
+      await expect(cursor.scan({ limit: bad })).rejects.toThrow(ValidationError);
+    });
+
+    it("rejects a decimal limit", async () => {
+      const cursor = new EventCursor(server);
+      await expect(cursor.scan({ limit: 1.5 })).rejects.toThrow(ValidationError);
+    });
+
+    it("rejects a limit above MAX_EVENT_LIMIT", async () => {
+      const cursor = new EventCursor(server);
+      await expect(cursor.scan({ limit: MAX_EVENT_LIMIT + 1 })).rejects.toThrow(ValidationError);
+    });
+
+    it("accepts limit=1 and limit=MAX_EVENT_LIMIT without throwing", async () => {
+      const cursor = new EventCursor(server);
+      await expect(cursor.scan({ limit: 1 })).resolves.not.toThrow();
+      cursor.reset();
+      await expect(cursor.scan({ limit: MAX_EVENT_LIMIT })).resolves.not.toThrow();
+    });
   });
 
   // ---------------------------------------------------------------------------

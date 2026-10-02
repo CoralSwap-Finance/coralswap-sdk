@@ -2,6 +2,7 @@ import { CoralSwapClient } from "@/client";
 import { validateAddress } from "@/utils/validation";
 import { ValidationError } from "@/errors";
 import { EventCursor, decodeEventTopic, MIN_START_LEDGER } from "@/utils/event-cursor";
+import { DecimalsResolver } from "@/utils/decimals-resolver";
 import { TreasuryModule, TreasuryModuleOptions } from "./treasury";
 import { defaultDecimalsResolver } from "@/utils/index";
 import { SwapModule } from "./swap";
@@ -60,16 +61,31 @@ export interface GetTopTradersOptions {
 const MAX_LEADERBOARD_EVENTS = 1000;
 
 /**
+ * Default capacity for the per-instance LRU decimals cache.
+ *
+ * 512 entries covers any realistic multi-pair scan without unbounded growth.
+ * This can be overridden via {@link TreasuryModuleOptions.decimalsCacheCapacity}
+ * and {@link TreasuryModuleOptions.decimalsCacheTtlMs}.
+ */
+const DEFAULT_DECIMALS_CACHE_CAPACITY = 512;
+
+/**
  * Leaderboard module — ranks top LPs and traders by yield/volume.
  */
 export class LeaderboardModule extends TreasuryModule {
   private readonly leaderboardClient: CoralSwapClient;
   private readonly leaderboardStableSet: Set<string>;
+  /** LRU-bounded cache for token decimal counts. */
+  private readonly decimalsResolver: DecimalsResolver;
 
   constructor(client: CoralSwapClient, options: TreasuryModuleOptions = {}) {
     super(client, options);
     this.leaderboardClient = client;
     this.leaderboardStableSet = new Set(options.stableAddresses ?? []);
+    this.decimalsResolver = new DecimalsResolver({
+      capacity: options.decimalsCacheCapacity ?? DEFAULT_DECIMALS_CACHE_CAPACITY,
+      ttlMs: options.decimalsCacheTtlMs ?? 0,
+    });
   }
 
   /**
@@ -124,7 +140,22 @@ export class LeaderboardModule extends TreasuryModule {
       toLedger: endLedger,
       limit: MAX_LEADERBOARD_EVENTS,
     });
+
+    // Warn when the page hit the cap so callers can narrow their window or
+    // use pageInfo.nextCursor to continue from the exact resume point.
+    if (events.pageInfo?.hasMore) {
+      const logger = (this.leaderboardClient as any).logger;
+      if (logger && typeof logger.warn === 'function') {
+        logger.warn(
+          'LeaderboardModule.getLeaderboard: result set was capped at ' +
+          `${MAX_LEADERBOARD_EVENTS} events — rankings may be incomplete`,
+          { nextCursor: events.pageInfo.nextCursor, type, period },
+        );
+      }
+    }
+
     if (events.length === 0) return [];
+
 
     const currentMap = new Map<string, bigint>();
     const previousMap = new Map<string, bigint>();
@@ -236,9 +267,12 @@ export class LeaderboardModule extends TreasuryModule {
     }
 
     // Fetch decimals for all tokens concurrently
-    const decimalsMap = await defaultDecimalsResolver.resolveMultiple(
-      this.leaderboardClient,
-      Array.from(uniqueTokens)
+    const decimalsMap = new Map<string, number>();
+    await Promise.all(
+      Array.from(uniqueTokens).map(async (token) => {
+        const dec = await this.decimalsResolver.resolve(this.leaderboardClient, token);
+        decimalsMap.set(token, dec);
+      })
     );
 
     // Get all pairs and prices

@@ -9,6 +9,7 @@ import {
 } from "@/types/flash-loan";
 import { FlashLoanConfig } from "@/types/pool";
 import { GasEstimate } from "@/types/gas";
+import { FlashLoanContractEvent } from "@/types/events";
 import {
   calculateRepayment,
   validateFeeFloor,
@@ -278,8 +279,6 @@ export class FlashLoanModule {
       const txResult = await this.client.server.getTransaction(txHash);
       if (txResult.status === "SUCCESS") {
         const rawEvents = this.getRawEvents(txResult);
-        const hasRawEvents =
-          rawEvents.length > 0 || this.hasEventsAccessor(txResult);
 
         // A FlashLoanFailed event means the callback reverted; surface it as an error.
         const failedEvent = this.decodeFailedEvent(rawEvents);
@@ -309,41 +308,26 @@ export class FlashLoanModule {
             );
 
             // Look for FlashLoanExecuted or FlashLoanFailed events
-            const flashLoanEvent = events.find((e) => e.type === "flash_loan");
-            if (flashLoanEvent && flashLoanEvent.type === "flash_loan") {
+            const flashLoanEvent = events.find(
+              (e): e is FlashLoanContractEvent => e.type === "flash_loan",
+            );
+            if (flashLoanEvent) {
               event = {
                 type: "FlashLoanExecuted",
                 borrowedAmount: flashLoanEvent.amount,
                 feePaid: flashLoanEvent.fee,
                 callbackAddress: flashLoanEvent.borrower,
                 token: request.token,
+                decodeStatus: flashLoanEvent.decodeStatus,
               };
             }
           } catch {
             // Ignore decodeEvents failures
           }
 
-          if (!event && hasRawEvents) {
-            // Fallback: raw event accessor existed (older contract) but no match;
-            // synthesise an event from request values.
-            event = {
-              type: "FlashLoanExecuted",
-              borrowedAmount: request.amount,
-              feePaid: feeEstimate.feeAmount,
-              callbackAddress: request.receiverAddress,
-              token: request.token,
-            };
-          }
+          // Intentionally do not synthesize a successful FlashLoanExecuted event
+          // when the contract event is absent or the tx status is not a clean success.
         }
-      } else {
-        // Non-SUCCESS status: provide fallback event from request values
-        event = {
-          type: "FlashLoanExecuted",
-          borrowedAmount: request.amount,
-          feePaid: feeEstimate.feeAmount,
-          callbackAddress: request.receiverAddress,
-          token: request.token,
-        };
       }
     } catch (err) {
       if (err instanceof FlashLoanError) {
@@ -453,14 +437,17 @@ export class FlashLoanModule {
         const events = decodeEvents(txResult, {
           contractId: request.pairAddress,
         });
-        const flashLoanEvent = events.find((e) => e.type === "flash_loan");
-        if (flashLoanEvent && flashLoanEvent.type === "flash_loan") {
+        const flashLoanEvent = events.find(
+          (e): e is FlashLoanContractEvent => e.type === "flash_loan",
+        );
+        if (flashLoanEvent) {
           return {
             type: "FlashLoanExecuted",
             borrowedAmount: flashLoanEvent.amount,
             feePaid: flashLoanEvent.fee,
             callbackAddress: flashLoanEvent.borrower,
             token: request.token,
+            decodeStatus: flashLoanEvent.decodeStatus,
           };
         }
       } catch {
@@ -479,16 +466,6 @@ export class FlashLoanModule {
     }
   }
 
-  private hasEventsAccessor(txResult: any): boolean {
-    try {
-      return (
-        Array.isArray(txResult?.resultMetaXdr?.v3?.sorobanMeta?.events) &&
-        txResult.resultMetaXdr.v3.sorobanMeta.events.length > 0
-      );
-    } catch {
-      return false;
-    }
-  }
 
   private decodeExecutedEvent(
     events: xdr.ContractEvent[],
@@ -523,6 +500,7 @@ export class FlashLoanModule {
               "",
           ),
           token: String(data["token"] ?? ""),
+          decodeStatus: "complete",
         };
       } catch {
         continue;
@@ -560,6 +538,7 @@ export class FlashLoanModule {
           reason: String(
             data["reason"] ?? data["error"] ?? "callback reverted",
           ),
+          decodeStatus: "complete",
         };
       } catch {
         continue;

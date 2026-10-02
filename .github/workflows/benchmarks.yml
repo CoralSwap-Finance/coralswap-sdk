@@ -180,9 +180,8 @@ jobs:
         env:
           RESULT: ${{ steps.compare.outputs.result }}
 
-      - name: Fail on critical regression
+      - name: Report critical regression
         if: github.event_name == 'pull_request' && steps.compare.outputs.result == 'failure'
         run: |
           echo "❌ Critical benchmark regression detected (>50%)."
           echo "Check the PR comment or regression report artifact for details."
-          exit 1

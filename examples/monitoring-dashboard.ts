@@ -1,11 +1,14 @@
 /**
  * CoralSwap Protocol Monitoring Dashboard
  *
- * Displays a real-time metrics dashboard for the CoralSwap protocol:
+ * Displays a real-time metrics dashboard for the CoralSwap protocol,
+ * consuming real TVL / volume / fees aggregation from the SDK's
+ * MonitoringModule instead of fabricated fixtures.
+ *
  *   - TVL per pool and protocol-wide
- *   - 24-hour trading volume
- *   - Protocol revenue (treasury)
- *   - Active liquidity providers
+ *   - 24-hour trading volume and fee revenue
+ *   - Protocol treasury revenue
+ *   - Active traders and swap counts
  *   - Dynamic fee rates per pool
  *   - Trend indicators (↑ ↓ →) based on the delta between refreshes
  *
@@ -14,16 +17,15 @@
  *
  * Required env vars for live testnet data:
  *   CORALSWAP_RPC_URL      — Soroban RPC endpoint
- *   CORALSWAP_TOKEN_A      — First token contract address
- *   CORALSWAP_TOKEN_B      — Second token contract address
  *
  * Optional:
- *   CORALSWAP_NETWORK      — "testnet" (default) | "mainnet"
- *   CORALSWAP_PAIR_ADDRESS — Pre-known pair address (skips factory lookup)
- *   CORALSWAP_REFRESH_SEC  — Refresh interval in seconds (default: 30)
+ *   CORALSWAP_NETWORK           — "testnet" (default) | "mainnet"
+ *   CORALSWAP_REFRESH_SEC       — Refresh interval in seconds (default: 30)
+ *   CORALSWAP_STABLE_ADDRESSES  — Comma-separated stablecoin addresses for USD pricing
  *
- * When env vars are absent a deterministic demo dashboard runs instead,
- * showing how the output looks with synthetic but realistic data.
+ * When CORALSWAP_RPC_URL is absent a deterministic demo dashboard runs instead,
+ * showing how the output looks with fixture data that mirrors the real
+ * aggregation types.
  */
 
 import 'dotenv/config';
@@ -62,6 +64,14 @@ interface PoolMetrics {
   tvlB: bigint;
   /** USD TVL — only non-zero when stablecoin pricing is available */
   tvlUSD: number;
+  /** 24h trading volume in USD */
+  volume24hUSD: number;
+  /** 24h fee revenue in USD */
+  fees24hUSD: number;
+  /** Number of swaps in the trailing 24h window */
+  totalSwaps24h: number;
+  /** Unique senders in the trailing 24h window */
+  uniqueUsers24h: number;
   feeBps: number;
   isFeeStalse: boolean;
 }
@@ -70,9 +80,13 @@ interface ProtocolMetrics {
   timestamp: Date;
   pools: PoolMetrics[];
   totalTVLUSD: number;
+  totalVolume24hUSD: number;
+  totalFees24hUSD: number;
   treasuryUSD: number;
   topTraderVolume: number;
   topTraderCount: number;
+  totalSwaps24h: number;
+  uniqueUsers24h: number;
 }
 
 // ─── Trend helpers ───────────────────────────────────────────────────────────
@@ -85,11 +99,6 @@ function trend(current: number, previous: number): Trend {
   return delta > 0 ? '↑' : '↓';
 }
 
-function trendBigInt(current: bigint, previous: bigint): Trend {
-  if (current === previous) return '→';
-  return current > previous ? '↑' : '↓';
-}
-
 function colorTrend(t: Trend): string {
   if (t === '↑') return `\x1b[32m${t}\x1b[0m`; // green
   if (t === '↓') return `\x1b[31m${t}\x1b[0m`; // red
@@ -97,13 +106,6 @@ function colorTrend(t: Trend): string {
 }
 
 // ─── Formatting helpers ───────────────────────────────────────────────────────
-
-function fmtAmount(amount: bigint, decimals = 7): string {
-  const scale = 10n ** BigInt(decimals);
-  const whole = amount / scale;
-  const frac = (amount % scale).toString().padStart(decimals, '0').replace(/0+$/, '');
-  return frac ? `${whole}.${frac}` : `${whole}`;
-}
 
 function fmtUSD(value: number): string {
   if (value === 0) return 'n/a';
@@ -149,19 +151,23 @@ function renderDashboard(current: ProtocolMetrics, previous: ProtocolMetrics | n
   console.log(DIVIDER);
 
   const tvlT = previous ? trend(current.totalTVLUSD, previous.totalTVLUSD) : '→';
+  const volT = previous ? trend(current.totalVolume24hUSD, previous.totalVolume24hUSD) : '→';
+  const feeT = previous ? trend(current.totalFees24hUSD, previous.totalFees24hUSD) : '→';
   const revT = previous ? trend(current.treasuryUSD, previous.treasuryUSD) : '→';
-  const volT = previous ? trend(current.topTraderVolume, previous.topTraderVolume) : '→';
-  const usrT = previous ? trend(current.topTraderCount, previous.topTraderCount) : '→';
+  const swapT = previous ? trend(current.totalSwaps24h, previous.totalSwaps24h) : '→';
+  const usrT = previous ? trend(current.uniqueUsers24h, previous.uniqueUsers24h) : '→';
 
   const kpiRows = [
-    ['Total TVL',        fmtUSD(current.totalTVLUSD),       colorTrend(tvlT)],
-    ['Treasury Revenue', fmtUSD(current.treasuryUSD),       colorTrend(revT)],
-    ['Top Trader Vol.',  fmtUSD(current.topTraderVolume),   colorTrend(volT)],
-    ['Active Traders',   String(current.topTraderCount),    colorTrend(usrT)],
+    ['Total TVL',           fmtUSD(current.totalTVLUSD),           colorTrend(tvlT)],
+    ['24h Volume',          fmtUSD(current.totalVolume24hUSD),     colorTrend(volT)],
+    ['24h Fees',            fmtUSD(current.totalFees24hUSD),       colorTrend(feeT)],
+    ['Treasury Revenue',    fmtUSD(current.treasuryUSD),           colorTrend(revT)],
+    ['24h Swaps',           String(current.totalSwaps24h),         colorTrend(swapT)],
+    ['Unique Traders (24h)',String(current.uniqueUsers24h),        colorTrend(usrT)],
   ];
 
   for (const [label, value, arrow] of kpiRows) {
-    console.log(`  ${padRight(label, 20)} ${padLeft(value, 12)}  ${arrow}`);
+    console.log(`  ${padRight(label, 24)} ${padLeft(value, 12)}  ${arrow}`);
   }
 
   // ── Pool table ────────────────────────────────────────────────────────────
@@ -170,31 +176,35 @@ function renderDashboard(current: ProtocolMetrics, previous: ProtocolMetrics | n
   console.log(DIVIDER);
   console.log(
     `  ${padRight('Pool', 24)}` +
-    `${padLeft('Reserve A', 16)}` +
-    `${padLeft('Reserve B', 16)}` +
     `${padLeft('TVL (USD)', 12)}` +
+    `${padLeft('24h Vol.', 12)}` +
+    `${padLeft('24h Fees', 10)}` +
+    `${padLeft('Swaps', 8)}` +
     `${padLeft('Fee', 8)}  ` +
-    `Stale`,
+    `Status`,
   );
-  console.log(`  ${DIM}${'·'.repeat(70)}${RESET}`);
+  console.log(`  ${DIM}${'·'.repeat(76)}${RESET}`);
 
   for (const pool of current.pools) {
     const prevPool = previous?.pools.find((p) => p.address === pool.address) ?? null;
     const tvlArrow  = prevPool ? colorTrend(trend(pool.tvlUSD, prevPool.tvlUSD)) : colorTrend('→');
+    const volArrow  = prevPool ? colorTrend(trend(pool.volume24hUSD, prevPool.volume24hUSD)) : colorTrend('→');
     const feeArrow  = prevPool ? colorTrend(trend(pool.feeBps, prevPool.feeBps)) : colorTrend('→');
     const staleStr  = pool.isFeeStalse ? `${DIM}stale${RESET}` : `\x1b[32mlive\x1b[0m`;
 
-    const resA = fmtAmount(pool.tvlA);
-    const resB = fmtAmount(pool.tvlB);
-    const tvlStr = fmtUSD(pool.tvlUSD);
-    const feeStr = fmtBps(pool.feeBps);
+    const tvlStr  = fmtUSD(pool.tvlUSD);
+    const volStr  = fmtUSD(pool.volume24hUSD);
+    const feeStr  = fmtUSD(pool.fees24hUSD);
+    const swapStr = String(pool.totalSwaps24h);
+    const feeBps  = fmtBps(pool.feeBps);
 
     console.log(
       `  ${padRight(pool.label, 24)}` +
-      `${padLeft(resA, 16)}` +
-      `${padLeft(resB, 16)}` +
-      `${padLeft(tvlStr, 12)}` +
-      `${padLeft(feeArrow + feeStr, 12)}  ` +
+      `${padLeft(tvlArrow + tvlStr, 16)}` +
+      `${padLeft(volArrow + volStr, 16)}` +
+      `${padLeft(feeStr, 14)}` +
+      `${padLeft(swapStr, 12)}` +
+      `${padLeft(feeArrow + feeBps, 12)}  ` +
       staleStr,
     );
   }
@@ -217,6 +227,10 @@ function buildDemoMetrics(tick: number): ProtocolMetrics {
       tvlA:    BigInt(Math.round((500_000 + rng(tick * 1.1) * 10_000) * 1e7)),
       tvlB:    BigInt(Math.round((1_800_000 + rng(tick * 1.3) * 50_000) * 1e7)),
       tvlUSD:  500_000 + rng(tick * 1.1) * 10_000,
+      volume24hUSD: 85_000 + rng(tick * 1.5) * 12_000,
+      fees24hUSD:   255 + rng(tick * 1.6) * 36,
+      totalSwaps24h: 320 + Math.round(rng(tick * 1.7) * 60),
+      uniqueUsers24h: 45 + Math.round(rng(tick * 1.8) * 10),
       feeBps:  30 + Math.round(rng(tick * 0.7) * 20),
       isFeeStalse: tick % 3 === 0,
     },
@@ -226,6 +240,10 @@ function buildDemoMetrics(tick: number): ProtocolMetrics {
       tvlA:    BigInt(Math.round((200_000 + rng(tick * 2.1) * 5_000) * 1e7)),
       tvlB:    BigInt(Math.round((60 + rng(tick * 2.3) * 5) * 1e7)),
       tvlUSD:  200_000 + rng(tick * 2.1) * 5_000,
+      volume24hUSD: 42_000 + rng(tick * 2.5) * 6_000,
+      fees24hUSD:   210 + rng(tick * 2.6) * 30,
+      totalSwaps24h: 180 + Math.round(rng(tick * 2.7) * 40),
+      uniqueUsers24h: 28 + Math.round(rng(tick * 2.8) * 8),
       feeBps:  50 + Math.round(rng(tick * 1.9) * 30),
       isFeeStalse: false,
     },
@@ -235,71 +253,92 @@ function buildDemoMetrics(tick: number): ProtocolMetrics {
       tvlA:    BigInt(Math.round((900_000 + rng(tick * 3.1) * 20_000) * 1e7)),
       tvlB:    BigInt(Math.round((3 + rng(tick * 3.3) * 0.5) * 1e7)),
       tvlUSD:  90_000 + rng(tick * 3.1) * 2_000,
+      volume24hUSD: 18_000 + rng(tick * 3.5) * 3_000,
+      fees24hUSD:   180 + rng(tick * 3.6) * 30,
+      totalSwaps24h: 95 + Math.round(rng(tick * 3.7) * 20),
+      uniqueUsers24h: 15 + Math.round(rng(tick * 3.8) * 5),
       feeBps:  100 + Math.round(rng(tick * 2.7) * 50),
       isFeeStalse: tick % 5 === 0,
     },
   ];
 
-  const totalTVLUSD  = pools.reduce((s, p) => s + p.tvlUSD, 0);
-  const treasuryUSD  = totalTVLUSD * 0.003 * (1 + rng(tick * 4.1) * 0.1);
-  const topVolume    = 120_000 + rng(tick * 5.1) * 15_000;
-  const topTraders   = 42 + Math.round(rng(tick * 6.1) * 8);
+  const totalTVLUSD       = pools.reduce((s, p) => s + p.tvlUSD, 0);
+  const totalVolume24hUSD = pools.reduce((s, p) => s + p.volume24hUSD, 0);
+  const totalFees24hUSD   = pools.reduce((s, p) => s + p.fees24hUSD, 0);
+  const totalSwaps24h     = pools.reduce((s, p) => s + p.totalSwaps24h, 0);
+  const uniqueUsers24h    = pools.reduce((s, p) => s + p.uniqueUsers24h, 0);
+  const treasuryUSD       = totalFees24hUSD * 0.15 * (1 + rng(tick * 4.1) * 0.1);
+  const topVolume         = 35_000 + rng(tick * 5.1) * 8_000;
+  const topTraders        = 12 + Math.round(rng(tick * 6.1) * 5);
 
-  return { timestamp: new Date(), pools, totalTVLUSD, treasuryUSD, topTraderVolume: topVolume, topTraderCount: topTraders };
+  return {
+    timestamp: new Date(),
+    pools,
+    totalTVLUSD,
+    totalVolume24hUSD,
+    totalFees24hUSD,
+    treasuryUSD,
+    topTraderVolume: topVolume,
+    topTraderCount: topTraders,
+    totalSwaps24h,
+    uniqueUsers24h,
+  };
 }
 
 // ─── Live data fetching ───────────────────────────────────────────────────────
 
 async function fetchProtocolMetrics(
-  client: any,
-  tokenA: string,
-  tokenB: string,
-  pairAddressOverride: string | undefined,
-  FeeModule: any,
-  FactoryModule: any,
-  TreasuryModule: any,
-  LeaderboardModule: any,
+  monitor: any,
+  treasury: any,
+  leaderboard: any,
 ): Promise<ProtocolMetrics> {
-  const factory     = new FactoryModule(client);
-  const fees        = new FeeModule(client);
-  const treasury    = new TreasuryModule(client);
-  const leaderboard = new LeaderboardModule(client);
+  // ── Protocol-wide metrics (TVL, 24h volume, active pools, users, swaps) ──
+  const protocolMetrics = await monitor.getProtocolMetrics();
 
-  // ── Pair info ──────────────────────────────────────────────────────────
-  let pairAddress = pairAddressOverride;
-  if (!pairAddress) {
-    pairAddress = (await factory.getPairAddress(tokenA, tokenB)) ?? undefined;
-  }
-
+  // ── Per-pool metrics ──────────────────────────────────────────────────────
+  const allPairs = await monitor.client.factory.getAllPairs();
   const pools: PoolMetrics[] = [];
 
-  if (pairAddress) {
-    const [info, feeEstimate] = await Promise.all([
-      factory.getPairInfo(tokenA, tokenB),
-      fees.getCurrentFee(pairAddress),
-    ]);
-
-    pools.push({
-      address:     pairAddress,
-      label:       `${tokenA.slice(0, 4)}… / ${tokenB.slice(0, 4)}…`,
-      tvlA:        info.reserveA,
-      tvlB:        info.reserveB,
-      tvlUSD:      0, // stablecoin anchor not provided in basic example
-      feeBps:      feeEstimate.currentFeeBps,
-      isFeeStalse: feeEstimate.isStale,
-    });
+  for (const pairAddress of allPairs) {
+    try {
+      const pm = await monitor.getPoolMetrics(pairAddress);
+      // Skip pools with zero reserves (inactive)
+      if (pm.reserve0 === 0n && pm.reserve1 === 0n) continue;
+      pools.push({
+        address: pairAddress,
+        label: `${pm.pairAddress.slice(0, 4)}…`,
+        tvlA: pm.reserve0,
+        tvlB: pm.reserve1,
+        tvlUSD: pm.tvlUSD,
+        volume24hUSD: pm.volume24hUSD,
+        fees24hUSD: 0, // populated below from treasury
+        totalSwaps24h: pm.totalSwaps24h,
+        uniqueUsers24h: pm.uniqueUsers24h,
+        feeBps: pm.feeBps,
+        isFeeStalse: false,
+      });
+    } catch {
+      // Skip pools we can't read — non-fatal
+    }
   }
 
-  // ── Treasury ───────────────────────────────────────────────────────────
+  // ── Treasury fee revenue ──────────────────────────────────────────────────
   let treasuryUSD = 0;
   try {
-    const balance = await treasury.getTreasuryBalance();
-    treasuryUSD = balance.totalUSD;
+    const revenue = await treasury.getFeeRevenue();
+    treasuryUSD = revenue.totalUSD;
+    // Enrich pool fees from treasury revenue data
+    for (const pool of pools) {
+      const poolRev = revenue.byPool.find((r: any) => r.pairAddress === pool.address);
+      if (poolRev) {
+        pool.fees24hUSD = poolRev.revenueUSD;
+      }
+    }
   } catch {
     // treasury may be empty on testnet — non-fatal
   }
 
-  // ── Leaderboard ────────────────────────────────────────────────────────
+  // ── Leaderboard top traders ───────────────────────────────────────────────
   let topTraderVolume = 0;
   let topTraderCount = 0;
   try {
@@ -310,15 +349,17 @@ async function fetchProtocolMetrics(
     // leaderboard may have no data on testnet — non-fatal
   }
 
-  const totalTVLUSD = pools.reduce((s, p) => s + p.tvlUSD, 0);
-
   return {
     timestamp: new Date(),
     pools,
-    totalTVLUSD,
+    totalTVLUSD: protocolMetrics.tvlUSD,
+    totalVolume24hUSD: protocolMetrics.volume24hUSD,
+    totalFees24hUSD: treasuryUSD,
     treasuryUSD,
     topTraderVolume,
     topTraderCount,
+    totalSwaps24h: protocolMetrics.totalSwaps24h,
+    uniqueUsers24h: protocolMetrics.uniqueUsers24h,
   };
 }
 
@@ -326,18 +367,16 @@ async function fetchProtocolMetrics(
 
 async function main() {
   const rpcUrl         = process.env.CORALSWAP_RPC_URL;
-  const tokenA         = process.env.CORALSWAP_TOKEN_A;
-  const tokenB         = process.env.CORALSWAP_TOKEN_B;
   const networkEnv     = process.env.CORALSWAP_NETWORK ?? 'testnet';
-  const pairOverride   = process.env.CORALSWAP_PAIR_ADDRESS;
   const refreshSec     = Math.max(5, Number(process.env.CORALSWAP_REFRESH_SEC ?? 30));
 
-  const canUseLive = Boolean(rpcUrl && tokenA && tokenB);
+  const canUseLive = Boolean(rpcUrl);
 
   if (!canUseLive) {
     // ── Demo mode ──────────────────────────────────────────────────────────
     console.log(`${BOLD}${CYAN}CoralSwap Protocol Monitor — Demo Mode${RESET}`);
-    console.log(`${DIM}Set CORALSWAP_RPC_URL, CORALSWAP_TOKEN_A, and CORALSWAP_TOKEN_B to connect to Stellar Testnet.${RESET}`);
+    console.log(`${DIM}Set CORALSWAP_RPC_URL to connect to Stellar Testnet and see real aggregation data.${RESET}`);
+    console.log(`${DIM}Optionally set CORALSWAP_STABLE_ADDRESSES (comma-separated) for USD pricing.${RESET}`);
     console.log();
 
     let previous: ProtocolMetrics | null = null;
@@ -365,8 +404,7 @@ async function main() {
   registerTsNodePathAlias();
 
   const { CoralSwapClient, Network }  = await import('../src/client' as any);
-  const { FeeModule }                 = await import('../src/modules/fees');
-  const { FactoryModule }             = await import('../src/modules/factory');
+  const { MonitoringModule }          = await import('../src/modules/monitoring');
   const { TreasuryModule }            = await import('../src/modules/treasury');
   const { LeaderboardModule }         = await import('../src/modules/leaderboard');
 
@@ -388,19 +426,22 @@ async function main() {
     process.exit(1);
   }
 
+  // Accept stable addresses for USD pricing (optional, defaults to no pricing)
+  const stableEnv = process.env.CORALSWAP_STABLE_ADDRESSES;
+  const stableAddresses = stableEnv ? stableEnv.split(',').map((s) => s.trim()) : [];
+
+  const monitor    = new MonitoringModule(client, { stableAddresses });
+  const treasury   = new TreasuryModule(client, { stableAddresses });
+  const leaderboard = new LeaderboardModule(client);
+
   let previous: ProtocolMetrics | null = null;
 
   const refresh = async () => {
     try {
       const current = await fetchProtocolMetrics(
-        client,
-        tokenA!,
-        tokenB!,
-        pairOverride,
-        FeeModule,
-        FactoryModule,
-        TreasuryModule,
-        LeaderboardModule,
+        monitor,
+        treasury,
+        leaderboard,
       );
       renderDashboard(current, previous);
       previous = current;
