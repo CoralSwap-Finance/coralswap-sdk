@@ -103,13 +103,21 @@ export class EventCursor {
 
   private async anchorIfNeeded(): Promise<void> {
     if (this.cursor !== undefined) return;
-    const latest = await this.server.getLatestLedger();
-    const seq = typeof latest.sequence === 'number' ? latest.sequence : Number(latest.sequence);
-    // Clamp to MIN_START_LEDGER, not 0: ledger 0 does not exist, and RPC
-    // rejects `startLedger: 0`. On a young network (or a large defaultWindow)
-    // `seq - defaultWindow` goes non-positive, which is the zero-anchored
-    // cursor bug this utility exists to prevent.
-    this.cursor = Math.max(MIN_START_LEDGER, seq - this.defaultWindow);
+
+    try {
+      const latest = await this.server.getLatestLedger();
+      const seq = typeof latest.sequence === 'number' ? latest.sequence : Number(latest.sequence);
+      // Clamp to MIN_START_LEDGER, not 0: ledger 0 does not exist, and RPC
+      // rejects `startLedger: 0`. On a young network (or a large defaultWindow)
+      // `seq - defaultWindow` goes non-positive, which is the zero-anchored
+      // cursor bug this utility exists to prevent.
+      this.cursor = Math.max(MIN_START_LEDGER, seq - this.defaultWindow);
+    } catch {
+      // The caller may already provide a ledger window, and some RPCs can be
+      // temporarily unavailable. A safe floor keeps the query valid without
+      // crashing the caller when head anchoring is impossible.
+      this.cursor = MIN_START_LEDGER;
+    }
   }
 
   private encodeTopics(topics?: string[]): string[][] | undefined {
@@ -131,12 +139,16 @@ export class EventCursor {
     toLedger?: number;
     limit?: number;
   } = {}): Promise<rpc.Api.EventResponse[]> {
-    await this.anchorIfNeeded();
+    if (params.fromLedger !== undefined) {
+      this.cursor = Math.max(MIN_START_LEDGER, params.fromLedger);
+    } else {
+      await this.anchorIfNeeded();
+    }
 
     const limit = params.limit ?? this.defaultLimit;
     const toLedger = params.toLedger; // may be undefined -> will be treated as open
 
-    let startLedger = params.fromLedger ?? this.cursor!;
+    let startLedger = params.fromLedger !== undefined ? Math.max(MIN_START_LEDGER, params.fromLedger) : this.cursor!;
     const contractIds = params.contractIds ?? [];
     const topics = this.encodeTopics(params.topics);
 

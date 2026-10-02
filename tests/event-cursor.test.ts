@@ -41,6 +41,20 @@ describe("EventCursor", () => {
     expect(topicEntry).not.toBe("swap");
   });
 
+  it("uses an explicit fromLedger without calling getLatestLedger", async () => {
+    const server: any = {
+      getLatestLedger: jest.fn().mockRejectedValue(new Error("offline")),
+      getEvents: jest.fn().mockResolvedValue({ events: [], latestLedger: 5000 }),
+    };
+
+    const cursor = new EventCursor(server);
+    await cursor.scan({ fromLedger: 123, limit: 10 });
+
+    expect(server.getLatestLedger).not.toHaveBeenCalled();
+    const req = server.getEvents.mock.calls[0][0];
+    expect(req.startLedger).toBe(123);
+  });
+
   it("paginates when responses are full and aggregates results", async () => {
     const eventsPage1 = [
       { ledger: 1, txHash: 'a' },
