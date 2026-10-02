@@ -15,6 +15,7 @@ import { ledgerToApproxTime, LedgerHead } from "@/utils/ledger";
 import { TypedEventCursor, MIN_START_LEDGER, MAX_EVENT_LIMIT } from "@/utils/event-cursor";
 import { SwapEvent } from "@/types/events";
 import { decodeU32 } from "@/utils/scval";
+import { getTokenDecimals, FALLBACK_TOKEN_DECIMALS } from "@/utils/token-decimals";
 import { ValidationError } from "@/errors";
 
 /**
@@ -495,17 +496,23 @@ export class FeeModule {
     const cached = this.decimalsCache.get(tokenAddress);
     if (cached !== undefined) return cached;
 
+    let decimals: number | undefined;
     try {
-      const op = new Contract(tokenAddress).call("decimals");
-      const result = await this.simulateTokenRead(op);
-      const decimals = result ? decodeU32(result) : 7;
-      const safe = Number.isInteger(decimals) && decimals >= 0 && decimals <= 18 ? decimals : 7;
-      this.decimalsCache.set(tokenAddress, safe);
-      return safe;
+      const result = await this.simulateTokenRead(new Contract(tokenAddress).call("decimals"));
+      if (result) decimals = decodeU32(result);
     } catch {
-      this.decimalsCache.set(tokenAddress, 7);
-      return 7;
+      // Simulation unavailable: fall through to the token metadata read.
     }
+    if (decimals === undefined) {
+      decimals = await getTokenDecimals(this.client, tokenAddress);
+    }
+
+    const safe =
+      Number.isInteger(decimals) && decimals >= 0 && decimals <= 18
+        ? decimals
+        : FALLBACK_TOKEN_DECIMALS;
+    this.decimalsCache.set(tokenAddress, safe);
+    return safe;
   }
 
   /**
