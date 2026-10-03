@@ -1,28 +1,22 @@
-import {
-  Keypair,
-  rpc as SorobanRpc,
-  xdr,
-  Transaction,
-  TransactionBuilder,
-} from "@stellar/stellar-sdk";
-import { CoralSwapClient } from "../src/client";
-import { ConnectionPool } from "../src";
-import { Network, Signer } from "../src/types/common";
-import { SignerError } from "../src/errors";
-import { DEFAULTS } from "../src/config";
-import { resetCircuitBreakers, DeadlineError } from "../src/utils/retry";
+import { Keypair, rpc as SorobanRpc, xdr, Transaction, TransactionBuilder } from '@stellar/stellar-sdk';
+import { CoralSwapClient } from '../src/client';
+import { ConnectionPool } from '../src';
+import { Network, Signer } from '../src/types/common';
+import { SignerError } from '../src/errors';
+import { DEFAULTS } from '../src/config';
+import { resetCircuitBreakers, DeadlineError } from '../src/utils/retry';
 
 // Mock transaction for testing
 const mockTx = {
-  toXdr: jest.fn().mockReturnValue("mock-tx-xdr"),
-  toXDR: jest.fn().mockReturnValue("mock-tx-xdr"),
+  toXdr: jest.fn().mockReturnValue('mock-tx-xdr'),
+  toXDR: jest.fn().mockReturnValue('mock-tx-xdr'),
   sign: jest.fn(),
 } as unknown as Transaction;
 
 // Mock TransactionBuilder
-jest.mock("@stellar/stellar-sdk", () => {
-  const actual = jest.requireActual("@stellar/stellar-sdk");
-
+jest.mock('@stellar/stellar-sdk', () => {
+  const actual = jest.requireActual('@stellar/stellar-sdk');
+  
   const MockTransactionBuilder = jest.fn().mockImplementation(() => ({
     addOperation: jest.fn().mockReturnThis(),
     setTimeout: jest.fn().mockReturnThis(),
@@ -55,41 +49,34 @@ jest.mock("@stellar/stellar-sdk", () => {
  * Covers constructor, publicKey resolution, deadline calculation,
  * health checks, transaction submission, and polling logic.
  */
-describe("CoralSwapClient", () => {
-  const TEST_SECRET =
-    "SB6K2AINTGNYBFX4M7TRPGSKQ5RKNOXXWB7UZUHRYOVTM7REDUGECKZU";
+describe('CoralSwapClient', () => {
+  const TEST_SECRET = 'SB6K2AINTGNYBFX4M7TRPGSKQ5RKNOXXWB7UZUHRYOVTM7REDUGECKZU';
   const TEST_PUBLIC = Keypair.fromSecret(TEST_SECRET).publicKey();
 
-  describe("Constructor", () => {
-    it("creates client with valid testnet config", () => {
+  describe('Constructor', () => {
+    it('creates client with valid testnet config', () => {
       const client = new CoralSwapClient({
         network: Network.TESTNET,
         secretKey: TEST_SECRET,
       });
 
       expect(client.network).toBe(Network.TESTNET);
-      expect(client.networkConfig.networkPassphrase).toBe(
-        "Test SDF Network ; September 2015",
-      );
-      expect(client.networkConfig.rpcUrl).toBe(
-        "https://soroban-testnet.stellar.org",
-      );
+      expect(client.networkConfig.networkPassphrase).toBe('Test SDF Network ; September 2015');
+      expect(client.networkConfig.rpcUrl).toBe('https://soroban-testnet.stellar.org');
     });
 
-    it("creates client with valid mainnet config", () => {
+    it('creates client with valid mainnet config', () => {
       const client = new CoralSwapClient({
         network: Network.MAINNET,
         secretKey: TEST_SECRET,
       });
 
       expect(client.network).toBe(Network.MAINNET);
-      expect(client.networkConfig.networkPassphrase).toBe(
-        "Public Global Stellar Network ; September 2015",
-      );
-      expect(client.networkConfig.rpcUrl).toBe("https://soroban.stellar.org");
+      expect(client.networkConfig.networkPassphrase).toBe('Public Global Stellar Network ; September 2015');
+      expect(client.networkConfig.rpcUrl).toBe('https://soroban.stellar.org');
     });
 
-    it("sets correct defaults for optional config fields", () => {
+    it('sets correct defaults for optional config fields', () => {
       const client = new CoralSwapClient({
         network: Network.TESTNET,
         secretKey: TEST_SECRET,
@@ -101,8 +88,8 @@ describe("CoralSwapClient", () => {
       expect(client.config.retryDelayMs).toBe(DEFAULTS.retryDelayMs);
     });
 
-    it("allows custom RPC URL override", () => {
-      const customRpcUrl = "https://custom-rpc.example.com";
+    it('allows custom RPC URL override', () => {
+      const customRpcUrl = 'https://custom-rpc.example.com';
       const client = new CoralSwapClient({
         network: Network.TESTNET,
         secretKey: TEST_SECRET,
@@ -112,94 +99,88 @@ describe("CoralSwapClient", () => {
       expect(client.networkConfig.rpcUrl).toBe(customRpcUrl);
     });
 
-    it("rejects cleartext http RPC URL on mainnet", () => {
+    it('rejects cleartext http RPC URL on mainnet', () => {
       expect(
-        () =>
-          new CoralSwapClient({
-            network: Network.MAINNET,
-            secretKey: TEST_SECRET,
-            rpcUrl: "http://localhost:8000",
-          }),
+        () => new CoralSwapClient({
+          network: Network.MAINNET,
+          secretKey: TEST_SECRET,
+          rpcUrl: 'http://localhost:8000',
+        }),
       ).toThrow(/cleartext/i);
     });
 
-    it("rejects cleartext ws RPC URL on mainnet", () => {
+    it('rejects cleartext ws RPC URL on mainnet', () => {
       expect(
-        () =>
-          new CoralSwapClient({
-            network: Network.MAINNET,
-            secretKey: TEST_SECRET,
-            rpcUrl: "ws://localhost:8000",
-          }),
+        () => new CoralSwapClient({
+          network: Network.MAINNET,
+          secretKey: TEST_SECRET,
+          rpcUrl: 'ws://localhost:8000',
+        }),
       ).toThrow(/cleartext/i);
     });
 
-    it("rejects cleartext in any fallback URL on mainnet", () => {
+    it('rejects cleartext in any fallback URL on mainnet', () => {
       expect(
-        () =>
-          new CoralSwapClient({
-            network: Network.MAINNET,
-            secretKey: TEST_SECRET,
-            rpcUrl: ["https://rpc.example.com", "http://rpc.example.com"],
-          }),
+        () => new CoralSwapClient({
+          network: Network.MAINNET,
+          secretKey: TEST_SECRET,
+          rpcUrl: ['https://rpc.example.com', 'http://rpc.example.com'],
+        }),
       ).toThrow(/cleartext/i);
     });
 
-    it("rejects a malformed RPC URL", () => {
+    it('rejects a malformed RPC URL', () => {
       expect(
-        () =>
-          new CoralSwapClient({
-            network: Network.TESTNET,
-            secretKey: TEST_SECRET,
-            rpcUrl: "not-a-url",
-          }),
+        () => new CoralSwapClient({
+          network: Network.TESTNET,
+          secretKey: TEST_SECRET,
+          rpcUrl: 'not-a-url',
+        }),
       ).toThrow(/not a valid URL/);
     });
 
-    it("allows cleartext http RPC URL on testnet (dev/test network)", () => {
+    it('allows cleartext http RPC URL on testnet (dev/test network)', () => {
       const client = new CoralSwapClient({
         network: Network.TESTNET,
         secretKey: TEST_SECRET,
-        rpcUrl: "http://localhost:8000",
+        rpcUrl: 'http://localhost:8000',
       });
 
-      expect(client.networkConfig.rpcUrl).toBe("http://localhost:8000");
+      expect(client.networkConfig.rpcUrl).toBe('http://localhost:8000');
     });
 
-    it("allows cleartext http RPC URL on staging network", () => {
+    it('allows cleartext http RPC URL on staging network', () => {
       const client = new CoralSwapClient({
         network: Network.STAGING,
         secretKey: TEST_SECRET,
-        rpcUrl: "http://localhost:8000",
+        rpcUrl: 'http://localhost:8000',
       });
 
-      expect(client.networkConfig.rpcUrl).toBe("http://localhost:8000");
+      expect(client.networkConfig.rpcUrl).toBe('http://localhost:8000');
     });
 
-    it("allows https and wss RPC URLs on mainnet", () => {
+    it('allows https and wss RPC URLs on mainnet', () => {
       expect(
-        () =>
-          new CoralSwapClient({
-            network: Network.MAINNET,
-            secretKey: TEST_SECRET,
-            rpcUrl: "https://soroban.stellar.org",
-          }),
+        () => new CoralSwapClient({
+          network: Network.MAINNET,
+          secretKey: TEST_SECRET,
+          rpcUrl: 'https://soroban.stellar.org',
+        }),
       ).not.toThrow();
       expect(
-        () =>
-          new CoralSwapClient({
-            network: Network.MAINNET,
-            secretKey: TEST_SECRET,
-            rpcUrl: "wss://soroban.stellar.org",
-          }),
+        () => new CoralSwapClient({
+          network: Network.MAINNET,
+          secretKey: TEST_SECRET,
+          rpcUrl: 'wss://soroban.stellar.org',
+        }),
       ).not.toThrow();
     });
 
-    it("exports ConnectionPool from the package root", () => {
+    it('exports ConnectionPool from the package root', () => {
       expect(ConnectionPool).toBeDefined();
     });
 
-    it("allows custom config overrides", () => {
+    it('allows custom config overrides', () => {
       const client = new CoralSwapClient({
         network: Network.TESTNET,
         secretKey: TEST_SECRET,
@@ -218,8 +199,8 @@ describe("CoralSwapClient", () => {
     });
   });
 
-  describe("publicKey getter", () => {
-    it("returns key from secretKey when provided", () => {
+  describe('publicKey getter', () => {
+    it('returns key from secretKey when provided', () => {
       const client = new CoralSwapClient({
         network: Network.TESTNET,
         secretKey: TEST_SECRET,
@@ -228,7 +209,7 @@ describe("CoralSwapClient", () => {
       expect(client.publicKey).toBe(TEST_PUBLIC);
     });
 
-    it("returns publicKey from config when provided", () => {
+    it('returns publicKey from config when provided', () => {
       const client = new CoralSwapClient({
         network: Network.TESTNET,
         publicKey: TEST_PUBLIC,
@@ -237,7 +218,7 @@ describe("CoralSwapClient", () => {
       expect(client.publicKey).toBe(TEST_PUBLIC);
     });
 
-    it("throws when neither secretKey nor publicKey is configured", () => {
+    it('throws when neither secretKey nor publicKey is configured', () => {
       const client = new CoralSwapClient({
         network: Network.TESTNET,
       });
@@ -245,10 +226,10 @@ describe("CoralSwapClient", () => {
       expect(() => client.publicKey).toThrow(SignerError);
     });
 
-    it("returns cached key after resolvePublicKey is called", async () => {
+    it('returns cached key after resolvePublicKey is called', async () => {
       const mockSigner: Signer = {
         publicKey: jest.fn().mockResolvedValue(TEST_PUBLIC),
-        signTransaction: jest.fn().mockResolvedValue("signed-xdr"),
+        signTransaction: jest.fn().mockResolvedValue('signed-xdr'),
       };
 
       const client = new CoralSwapClient({
@@ -261,8 +242,8 @@ describe("CoralSwapClient", () => {
     });
   });
 
-  describe("getDeadline()", () => {
-    it("returns current timestamp + default offset", () => {
+  describe('getDeadline()', () => {
+    it('returns current timestamp + default offset', () => {
       const client = new CoralSwapClient({
         network: Network.TESTNET,
         secretKey: TEST_SECRET,
@@ -275,7 +256,7 @@ describe("CoralSwapClient", () => {
       expect(deadline).toBeLessThanOrEqual(now + DEFAULTS.deadlineSec + 2);
     });
 
-    it("returns current timestamp + custom offset", () => {
+    it('returns current timestamp + custom offset', () => {
       const client = new CoralSwapClient({
         network: Network.TESTNET,
         secretKey: TEST_SECRET,
@@ -289,7 +270,7 @@ describe("CoralSwapClient", () => {
       expect(deadline).toBeLessThanOrEqual(now + customOffset + 2);
     });
 
-    it("uses config defaultDeadlineSec when no offset provided", () => {
+    it('uses config defaultDeadlineSec when no offset provided', () => {
       const customDefault = 600;
       const client = new CoralSwapClient({
         network: Network.TESTNET,
@@ -305,14 +286,14 @@ describe("CoralSwapClient", () => {
     });
   });
 
-  describe("isHealthy()", () => {
-    it("returns true when server responds healthy", async () => {
+  describe('isHealthy()', () => {
+    it('returns true when server responds healthy', async () => {
       const client = new CoralSwapClient({
         network: Network.TESTNET,
         secretKey: TEST_SECRET,
       });
 
-      const mockGetHealth = jest.fn().mockResolvedValue({ status: "healthy" });
+      const mockGetHealth = jest.fn().mockResolvedValue({ status: 'healthy' });
       client.server.getHealth = mockGetHealth;
 
       const result = await client.isHealthy();
@@ -321,15 +302,13 @@ describe("CoralSwapClient", () => {
       expect(mockGetHealth).toHaveBeenCalledTimes(1);
     });
 
-    it("returns false when server throws", async () => {
+    it('returns false when server throws', async () => {
       const client = new CoralSwapClient({
         network: Network.TESTNET,
         secretKey: TEST_SECRET,
       });
 
-      const mockGetHealth = jest
-        .fn()
-        .mockRejectedValue(new Error("Connection failed"));
+      const mockGetHealth = jest.fn().mockRejectedValue(new Error('Connection failed'));
       client.server.getHealth = mockGetHealth;
 
       const result = await client.isHealthy();
@@ -338,15 +317,13 @@ describe("CoralSwapClient", () => {
       expect(mockGetHealth).toHaveBeenCalledTimes(1);
     });
 
-    it("returns false when server responds unhealthy", async () => {
+    it('returns false when server responds unhealthy', async () => {
       const client = new CoralSwapClient({
         network: Network.TESTNET,
         secretKey: TEST_SECRET,
       });
 
-      const mockGetHealth = jest
-        .fn()
-        .mockResolvedValue({ status: "unhealthy" });
+      const mockGetHealth = jest.fn().mockResolvedValue({ status: 'unhealthy' });
       client.server.getHealth = mockGetHealth;
 
       const result = await client.isHealthy();
@@ -355,17 +332,17 @@ describe("CoralSwapClient", () => {
     });
   });
 
-  describe("submitTransaction()", () => {
+  describe('submitTransaction()', () => {
     const mockAccount = {
       accountId: () => TEST_PUBLIC,
-      sequenceNumber: () => "1234567890",
+      sequenceNumber: () => '1234567890',
       incrementSequenceNumber: jest.fn(),
     };
 
     // Create a minimal mock operation - we don't need real XDR for unit tests
     const mockOperation = {} as xdr.Operation;
 
-    it("returns success result when simulation succeeds", async () => {
+    it('returns success result when simulation succeeds', async () => {
       const client = new CoralSwapClient({
         network: Network.TESTNET,
         secretKey: TEST_SECRET,
@@ -374,16 +351,16 @@ describe("CoralSwapClient", () => {
       const mockGetAccount = jest.fn().mockResolvedValue(mockAccount);
       const mockSimulate = jest.fn().mockResolvedValue({
         transactionData: {} as xdr.SorobanTransactionData,
-        minResourceFee: "100",
-        cost: { cpuInsns: "1000", memBytes: "1000" },
+        minResourceFee: '100',
+        cost: { cpuInsns: '1000', memBytes: '1000' },
         latestLedger: 12345,
       });
       const mockSendTransaction = jest.fn().mockResolvedValue({
-        status: "PENDING",
-        hash: "test-tx-hash",
+        status: 'PENDING',
+        hash: 'test-tx-hash',
       });
       const mockGetTransaction = jest.fn().mockResolvedValue({
-        status: "SUCCESS",
+        status: 'SUCCESS',
         ledger: 12346,
       });
 
@@ -395,14 +372,14 @@ describe("CoralSwapClient", () => {
       const result = await client.submitTransaction([mockOperation]);
 
       expect(result.success).toBe(true);
-      expect(result.data?.txHash).toBe("test-tx-hash");
+      expect(result.data?.txHash).toBe('test-tx-hash');
       expect(result.data?.ledger).toBe(12346);
       expect(mockGetAccount).toHaveBeenCalledWith(TEST_PUBLIC);
       expect(mockSimulate).toHaveBeenCalled();
       expect(mockSendTransaction).toHaveBeenCalled();
     });
 
-    it("returns SIMULATION_FAILED error for bad simulation", async () => {
+    it('returns SIMULATION_FAILED error for bad simulation', async () => {
       const client = new CoralSwapClient({
         network: Network.TESTNET,
         secretKey: TEST_SECRET,
@@ -410,7 +387,7 @@ describe("CoralSwapClient", () => {
 
       const mockGetAccount = jest.fn().mockResolvedValue(mockAccount);
       const mockSimulate = jest.fn().mockResolvedValue({
-        error: "Simulation failed",
+        error: 'Simulation failed',
       });
 
       client.server.getAccount = mockGetAccount;
@@ -419,11 +396,11 @@ describe("CoralSwapClient", () => {
       const result = await client.submitTransaction([mockOperation]);
 
       expect(result.success).toBe(false);
-      expect(result.error?.code).toBe("SIMULATION_FAILED");
-      expect(result.error?.message).toBe("Transaction simulation failed");
+      expect(result.error?.code).toBe('SIMULATION_FAILED');
+      expect(result.error?.message).toBe('Transaction simulation failed');
     });
 
-    it("returns NO_SIGNER error when no keypair configured", async () => {
+    it('returns NO_SIGNER error when no keypair configured', async () => {
       const client = new CoralSwapClient({
         network: Network.TESTNET,
         publicKey: TEST_PUBLIC,
@@ -432,8 +409,8 @@ describe("CoralSwapClient", () => {
       const mockGetAccount = jest.fn().mockResolvedValue(mockAccount);
       const mockSimulate = jest.fn().mockResolvedValue({
         transactionData: {} as xdr.SorobanTransactionData,
-        minResourceFee: "100",
-        cost: { cpuInsns: "1000", memBytes: "1000" },
+        minResourceFee: '100',
+        cost: { cpuInsns: '1000', memBytes: '1000' },
         latestLedger: 12345,
       });
 
@@ -443,11 +420,11 @@ describe("CoralSwapClient", () => {
       const result = await client.submitTransaction([mockOperation]);
 
       expect(result.success).toBe(false);
-      expect(result.error?.code).toBe("NO_SIGNER");
-      expect(result.error?.message).toContain("No signing key configured");
+      expect(result.error?.code).toBe('NO_SIGNER');
+      expect(result.error?.message).toContain('No signing key configured');
     });
 
-    it("returns SUBMIT_FAILED error on submission failure", async () => {
+    it('returns SUBMIT_FAILED error on submission failure', async () => {
       const client = new CoralSwapClient({
         network: Network.TESTNET,
         secretKey: TEST_SECRET,
@@ -456,13 +433,13 @@ describe("CoralSwapClient", () => {
       const mockGetAccount = jest.fn().mockResolvedValue(mockAccount);
       const mockSimulate = jest.fn().mockResolvedValue({
         transactionData: {} as xdr.SorobanTransactionData,
-        minResourceFee: "100",
-        cost: { cpuInsns: "1000", memBytes: "1000" },
+        minResourceFee: '100',
+        cost: { cpuInsns: '1000', memBytes: '1000' },
         latestLedger: 12345,
       });
       const mockSendTransaction = jest.fn().mockResolvedValue({
-        status: "ERROR",
-        errorResultXdr: "error-xdr",
+        status: 'ERROR',
+        errorResultXdr: 'error-xdr',
       });
 
       client.server.getAccount = mockGetAccount;
@@ -472,37 +449,35 @@ describe("CoralSwapClient", () => {
       const result = await client.submitTransaction([mockOperation]);
 
       expect(result.success).toBe(false);
-      expect(result.error?.code).toBe("SUBMIT_FAILED");
-      expect(result.error?.message).toBe("Transaction submission failed");
+      expect(result.error?.code).toBe('SUBMIT_FAILED');
+      expect(result.error?.message).toBe('Transaction submission failed');
     });
 
-    it("returns UNEXPECTED_ERROR on exception", async () => {
+    it('returns UNEXPECTED_ERROR on exception', async () => {
       const client = new CoralSwapClient({
         network: Network.TESTNET,
         secretKey: TEST_SECRET,
       });
 
-      const mockGetAccount = jest
-        .fn()
-        .mockRejectedValue(new Error("Network error"));
+      const mockGetAccount = jest.fn().mockRejectedValue(new Error('Network error'));
       client.server.getAccount = mockGetAccount;
 
       const result = await client.submitTransaction([mockOperation]);
 
       expect(result.success).toBe(false);
-      expect(result.error?.code).toBe("UNEXPECTED_ERROR");
-      expect(result.error?.message).toBe("Network error");
+      expect(result.error?.code).toBe('UNEXPECTED_ERROR');
+      expect(result.error?.message).toBe('Network error');
     });
   });
 
-  describe("getAccount()", () => {
+  describe('getAccount()', () => {
     const mockAccount = {
       accountId: () => TEST_PUBLIC,
-      sequenceNumber: () => "1234567890",
+      sequenceNumber: () => '1234567890',
       incrementSequenceNumber: jest.fn(),
     };
 
-    it("defaults to the client's own resolved public key", async () => {
+    it('defaults to the client\'s own resolved public key', async () => {
       const client = new CoralSwapClient({
         network: Network.TESTNET,
         secretKey: TEST_SECRET,
@@ -517,7 +492,7 @@ describe("CoralSwapClient", () => {
       expect(mockGetAccount).toHaveBeenCalledWith(TEST_PUBLIC);
     });
 
-    it("looks up an explicit public key when provided", async () => {
+    it('looks up an explicit public key when provided', async () => {
       const client = new CoralSwapClient({
         network: Network.TESTNET,
         secretKey: TEST_SECRET,
@@ -532,31 +507,29 @@ describe("CoralSwapClient", () => {
       expect(mockGetAccount).toHaveBeenCalledWith(otherPublicKey);
     });
 
-    it("propagates the RPC error when the account cannot be fetched", async () => {
+    it('propagates the RPC error when the account cannot be fetched', async () => {
       const client = new CoralSwapClient({
         network: Network.TESTNET,
         secretKey: TEST_SECRET,
       });
 
-      const mockGetAccount = jest
-        .fn()
-        .mockRejectedValue(new Error("account not found"));
+      const mockGetAccount = jest.fn().mockRejectedValue(new Error('account not found'));
       client.server.getAccount = mockGetAccount;
 
-      await expect(client.getAccount()).rejects.toThrow("account not found");
+      await expect(client.getAccount()).rejects.toThrow('account not found');
     });
   });
 
-  describe("pollTransaction()", () => {
+  describe('pollTransaction()', () => {
     const mockAccount = {
       accountId: () => TEST_PUBLIC,
-      sequenceNumber: () => "1234567890",
+      sequenceNumber: () => '1234567890',
       incrementSequenceNumber: jest.fn(),
     };
 
     const mockOperation = {} as xdr.Operation;
 
-    it("returns success for completed transaction", async () => {
+    it('returns success for completed transaction', async () => {
       const client = new CoralSwapClient({
         network: Network.TESTNET,
         secretKey: TEST_SECRET,
@@ -565,16 +538,16 @@ describe("CoralSwapClient", () => {
       const mockGetAccount = jest.fn().mockResolvedValue(mockAccount);
       const mockSimulate = jest.fn().mockResolvedValue({
         transactionData: {} as xdr.SorobanTransactionData,
-        minResourceFee: "100",
-        cost: { cpuInsns: "1000", memBytes: "1000" },
+        minResourceFee: '100',
+        cost: { cpuInsns: '1000', memBytes: '1000' },
         latestLedger: 12345,
       });
       const mockSendTransaction = jest.fn().mockResolvedValue({
-        status: "PENDING",
-        hash: "test-tx-hash",
+        status: 'PENDING',
+        hash: 'test-tx-hash',
       });
       const mockGetTransaction = jest.fn().mockResolvedValue({
-        status: "SUCCESS",
+        status: 'SUCCESS',
         ledger: 12346,
       });
 
@@ -586,11 +559,11 @@ describe("CoralSwapClient", () => {
       const result = await client.submitTransaction([mockOperation]);
 
       expect(result.success).toBe(true);
-      expect(result.txHash).toBe("test-tx-hash");
+      expect(result.txHash).toBe('test-tx-hash');
       expect(result.data?.ledger).toBe(12346);
     });
 
-    it("returns TX_FAILED for failed transaction", async () => {
+    it('returns TX_FAILED for failed transaction', async () => {
       const client = new CoralSwapClient({
         network: Network.TESTNET,
         secretKey: TEST_SECRET,
@@ -599,16 +572,16 @@ describe("CoralSwapClient", () => {
       const mockGetAccount = jest.fn().mockResolvedValue(mockAccount);
       const mockSimulate = jest.fn().mockResolvedValue({
         transactionData: {} as xdr.SorobanTransactionData,
-        minResourceFee: "100",
-        cost: { cpuInsns: "1000", memBytes: "1000" },
+        minResourceFee: '100',
+        cost: { cpuInsns: '1000', memBytes: '1000' },
         latestLedger: 12345,
       });
       const mockSendTransaction = jest.fn().mockResolvedValue({
-        status: "PENDING",
-        hash: "test-tx-hash",
+        status: 'PENDING',
+        hash: 'test-tx-hash',
       });
       const mockGetTransaction = jest.fn().mockResolvedValue({
-        status: "FAILED",
+        status: 'FAILED',
         ledger: 12346,
       });
 
@@ -620,12 +593,12 @@ describe("CoralSwapClient", () => {
       const result = await client.submitTransaction([mockOperation]);
 
       expect(result.success).toBe(false);
-      expect(result.error?.code).toBe("TX_FAILED");
-      expect(result.error?.message).toBe("Transaction failed on-chain");
-      expect(result.txHash).toBe("test-tx-hash");
+      expect(result.error?.code).toBe('TX_FAILED');
+      expect(result.error?.message).toBe('Transaction failed on-chain');
+      expect(result.txHash).toBe('test-tx-hash');
     });
 
-    it("returns TX_NOT_CONFIRMED when polling exhausts NOT_FOUND responses", async () => {
+    it('returns TX_NOT_CONFIRMED when polling exhausts NOT_FOUND responses', async () => {
       const client = new CoralSwapClient({
         network: Network.TESTNET,
         secretKey: TEST_SECRET,
@@ -638,16 +611,16 @@ describe("CoralSwapClient", () => {
       const mockGetAccount = jest.fn().mockResolvedValue(mockAccount);
       const mockSimulate = jest.fn().mockResolvedValue({
         transactionData: {} as xdr.SorobanTransactionData,
-        minResourceFee: "100",
-        cost: { cpuInsns: "1000", memBytes: "1000" },
+        minResourceFee: '100',
+        cost: { cpuInsns: '1000', memBytes: '1000' },
         latestLedger: 12345,
       });
       const mockSendTransaction = jest.fn().mockResolvedValue({
-        status: "PENDING",
-        hash: "test-tx-hash",
+        status: 'PENDING',
+        hash: 'test-tx-hash',
       });
       const mockGetTransaction = jest.fn().mockResolvedValue({
-        status: "NOT_FOUND",
+        status: 'NOT_FOUND',
       });
 
       client.server.getAccount = mockGetAccount;
@@ -658,9 +631,9 @@ describe("CoralSwapClient", () => {
       const result = await client.submitTransaction([mockOperation]);
 
       expect(result.success).toBe(false);
-      expect(result.error?.code).toBe("TX_NOT_CONFIRMED");
-      expect(result.error?.message).toContain("not confirmed");
-      expect(result.txHash).toBe("test-tx-hash");
+      expect(result.error?.code).toBe('TX_NOT_CONFIRMED');
+      expect(result.error?.message).toContain('not confirmed');
+      expect(result.txHash).toBe('test-tx-hash');
     });
   });
 });
@@ -672,9 +645,8 @@ describe("CoralSwapClient", () => {
  * is a thin single-call wrapper — the simplest public surface that exercises
  * the fallback loop without needing a full transaction stack.
  */
-describe("executeWithFallback", () => {
-  const TEST_SECRET =
-    "SB6K2AINTGNYBFX4M7TRPGSKQ5RKNOXXWB7UZUHRYOVTM7REDUGECKZU";
+describe('executeWithFallback', () => {
+  const TEST_SECRET = 'SB6K2AINTGNYBFX4M7TRPGSKQ5RKNOXXWB7UZUHRYOVTM7REDUGECKZU';
 
   beforeEach(() => {
     resetCircuitBreakers();
@@ -684,24 +656,22 @@ describe("executeWithFallback", () => {
     jest.useRealTimers();
   });
 
-  it("surfaces a non-retryable error immediately without cycling through fallback endpoints", async () => {
+  it('surfaces a non-retryable error immediately without cycling through fallback endpoints', async () => {
     // Three RPC URLs configured — only the first should ever be attempted.
     const client = new CoralSwapClient({
       network: Network.TESTNET,
       secretKey: TEST_SECRET,
       rpcUrl: [
-        "https://rpc1.example.com",
-        "https://rpc2.example.com",
-        "https://rpc3.example.com",
+        'https://rpc1.example.com',
+        'https://rpc2.example.com',
+        'https://rpc3.example.com',
       ],
       maxRetries: 0,
       retryDelayMs: 0,
     });
 
     // A non-retryable error: plain validation failure with no timeout/429/503 signal.
-    const nonRetryableError = new Error(
-      "ValidationError: bad simulation parameters",
-    );
+    const nonRetryableError = new Error('ValidationError: bad simulation parameters');
     const mockGetHealth = jest.fn().mockRejectedValue(nonRetryableError);
     client.server.getHealth = mockGetHealth;
 
@@ -711,25 +681,26 @@ describe("executeWithFallback", () => {
     expect(mockGetHealth).toHaveBeenCalledTimes(1);
   });
 
-  it("falls back across all endpoints for retryable errors (network/timeout/429/503)", async () => {
+  it('falls back across all endpoints for retryable errors (network/timeout/429/503)', async () => {
     const rpcUrls = [
-      "https://rpc1.example.com",
-      "https://rpc2.example.com",
-      "https://rpc3.example.com",
+      'https://rpc1.example.com',
+      'https://rpc2.example.com',
+      'https://rpc3.example.com',
     ];
 
     const client = new CoralSwapClient({
       network: Network.TESTNET,
       secretKey: TEST_SECRET,
       rpcUrl: rpcUrls,
-      maxRetries: 0, // one attempt per endpoint, no per-endpoint retries
+      maxRetries: 0,   // one attempt per endpoint, no per-endpoint retries
       retryDelayMs: 0,
     });
 
     // Retryable error: 503 Service Unavailable
-    const retryableError = Object.assign(new Error("503 Service Unavailable"), {
-      response: { status: 503 },
-    });
+    const retryableError = Object.assign(
+      new Error('503 Service Unavailable'),
+      { response: { status: 503 } },
+    );
 
     const mockGetHealth = jest.fn().mockRejectedValue(retryableError);
     const mockServer = { getHealth: mockGetHealth } as any;
@@ -741,7 +712,7 @@ describe("executeWithFallback", () => {
     // sometimes slow-to-fail) network calls against fake hostnames. Stub the
     // creation itself so every rotation reuses the same mocked server.
     const createRpcServerSpy = jest
-      .spyOn(client as any, "createRpcServer")
+      .spyOn(client as any, 'createRpcServer')
       .mockReturnValue(mockServer);
 
     // isHealthy() catches all errors and returns false — confirm it tried all endpoints.
@@ -753,8 +724,11 @@ describe("executeWithFallback", () => {
     createRpcServerSpy.mockRestore();
   });
 
-  it("rebuilds factory/router singletons after endpoint rotation and leaves networkConfig untouched", async () => {
-    const rpcUrls = ["https://rpc1.example.com", "https://rpc2.example.com"];
+  it('rebuilds factory/router singletons after endpoint rotation and leaves networkConfig untouched', async () => {
+    const rpcUrls = [
+      'https://rpc1.example.com',
+      'https://rpc2.example.com',
+    ];
 
     const client = new CoralSwapClient({
       network: Network.TESTNET,
@@ -769,32 +743,27 @@ describe("executeWithFallback", () => {
     const originalPassphrase = client.networkConfig.networkPassphrase;
 
     // Seed valid contract addresses so factory/router singletons can be created
-    (client as any).networkConfig.factoryAddress =
-      "CBLBMYODT37R3GJZLEFCGCYWOOVEUZ3MMTVR2QCOKOK2UPKSI3CXZBNB";
-    (client as any).networkConfig.routerAddress =
-      "CCDQYZKX5AUI7KSWXIFI7AFRQMWCZMOOUJXIDWEJ4IYX7XE7PHCMCBAF";
+    (client as any).networkConfig.factoryAddress = 'CBLBMYODT37R3GJZLEFCGCYWOOVEUZ3MMTVR2QCOKOK2UPKSI3CXZBNB';
+    (client as any).networkConfig.routerAddress = 'CCDQYZKX5AUI7KSWXIFI7AFRQMWCZMOOUJXIDWEJ4IYX7XE7PHCMCBAF';
 
     // Capture factory/router before rotation
     const factoryBefore = client.factory;
     const routerBefore = client.router;
 
     // Fake servers: first always fails (503), second always succeeds
-    const retryableError = Object.assign(new Error("503 Service Unavailable"), {
-      response: { status: 503 },
-    });
-    const mockServerFail = {
-      getHealth: jest.fn().mockRejectedValue(retryableError),
-    } as any;
-    const mockServerOk = {
-      getHealth: jest.fn().mockResolvedValue({ status: "healthy" }),
-    } as any;
+    const retryableError = Object.assign(
+      new Error('503 Service Unavailable'),
+      { response: { status: 503 } },
+    );
+    const mockServerFail = { getHealth: jest.fn().mockRejectedValue(retryableError) } as any;
+    const mockServerOk   = { getHealth: jest.fn().mockResolvedValue({ status: 'healthy' }) } as any;
 
     // Inject the failing server as the initial server (bypasses real network)
     client.server = mockServerFail;
 
     // When rotation happens, createRpcServer is called — return the healthy server
     const createRpcServerSpy = jest
-      .spyOn(client as any, "createRpcServer")
+      .spyOn(client as any, 'createRpcServer')
       .mockReturnValue(mockServerOk);
 
     const result = await client.isHealthy();
@@ -817,9 +786,9 @@ describe("executeWithFallback", () => {
     createRpcServerSpy.mockRestore();
   });
 
-  it("stops retrying once the configured deadlineMs is exceeded and throws DeadlineError", async () => {
+  it('stops retrying once the configured deadlineMs is exceeded and throws DeadlineError', async () => {
     jest.useFakeTimers();
-    jest.setSystemTime(new Date("2020-01-01T00:00:00.000Z"));
+    jest.setSystemTime(new Date('2020-01-01T00:00:00.000Z'));
 
     const client = new CoralSwapClient({
       network: Network.TESTNET,
@@ -831,9 +800,10 @@ describe("executeWithFallback", () => {
     });
 
     // Retryable error that keeps failing — the deadline must stop the retries.
-    const retryableError = Object.assign(new Error("503 Service Unavailable"), {
-      response: { status: 503 },
-    });
+    const retryableError = Object.assign(
+      new Error('503 Service Unavailable'),
+      { response: { status: 503 } },
+    );
     const mockGetLatestLedger = jest.fn().mockRejectedValue(retryableError);
     client.server.getLatestLedger = mockGetLatestLedger;
 
@@ -845,7 +815,7 @@ describe("executeWithFallback", () => {
 
     const err = await promise;
     expect(err).toBeInstanceOf(DeadlineError);
-    expect(err.message).not.toContain("503");
+    expect(err.message).not.toContain('503');
 
     // attempt 1 at t=0, attempt 2 at t=10, attempt 3 at t=30 — the
     // deadline check fires at t=70 before a 4th attempt can start.

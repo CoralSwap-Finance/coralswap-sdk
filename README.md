@@ -1,13 +1,14 @@
-@coralswap/sdk
+# @coralswap/sdk
+
 TypeScript SDK for the CoralSwap Protocol -- a V2 AMM on Stellar/Soroban with dynamic fees and flash loans.
 
-Upgrading from v1? See the Migration Guide for breaking changes, before/after examples, and step-by-step instructions.
+> **Upgrading from v1?** See the [Migration Guide](./MIGRATION.md) for breaking changes, before/after examples, and step-by-step instructions.
 
-Architecture
-Contract-first, API-optional. The SDK talks directly to Soroban RPC and CoralSwap contracts; there is no centralized gateway, no API key layer, and no hidden off-chain state. Module behavior is intentionally explicit: reads go to the chain or a configured oracle, and "unavailable" is represented as either a typed error or a nullable return, not as a silent fallback.
+## Architecture
 
-text
+**Contract-first, API-optional.** The SDK talks directly to Soroban RPC and CoralSwap contracts; there is no centralized gateway, no API key layer, and no hidden off-chain state. Module behavior is intentionally explicit: reads go to the chain or a configured oracle, and "unavailable" is represented as either a typed error or a nullable return, not as a silent fallback.
 
+```
 Application
     |
 @coralswap/sdk
@@ -18,54 +19,59 @@ Application
 Soroban RPC (direct)
     |
 CoralSwap contracts + RedStone feeds + network health probes
-Module data sources
-Module	Primary data source	Read/write model	Availability / failure contract
-SwapModule	Pair reserves, token balances, dynamic fee state via pair/router contracts	Reads live chain state for quotes and simulates writes for execution	Throws PairNotFoundError, InsufficientLiquidityError, SlippageError, DeadlineError, or transaction-level errors on submission
-LiquidityModule	Pair reserves, LP token state, factory pair resolution	Reads live pool state for quotes, then submits a Soroban transaction for writes	Throws typed validation or pair/liquidity errors; no silent "null quote" path
-FlashLoanModule	Pair flash-loan config, reserves, callback events, RPC transaction results	Read-only config checks plus write execution	isAvailable() returns false on read failure; execution throws FlashLoanError / FlashLoanFailedError
-FeeModule	Pair fee state and event history from on-chain storage/RPC events	Mostly read-only queries	getCurrentFee() and getFeeState() return live data; isStale() is a boolean result; no hidden null fallback
-OracleModule	Pair cumulative price accumulators	Read-only observations for TWAP	getTWAP() returns null when there are not enough observations or the window is too short; price-window validation throws ValidationError
-FactoryModule	Factory contract registry + TTL pair-cache	Read-only lookups, with optional cache	getPairAddress() returns `string
-HealthCheckModule	RPC getHealth() and contract existence/TTL checks	Read-only health probes	Returns structured results (healthy, deployed, ttlValid, etc.) rather than throwing unless arguments are invalid
-TreasuryModule / PortfolioModule	Factory pair set + reserve-derived spot prices	Derived read-only USD valuation	Missing stablecoin price feed can raise MissingPriceFeedError; some portfolio aggregates may use zero-value fallback depending on caller configuration
-StopLossModule	RedStone oracle feed + pair state	Price validation + on-chain stop-loss writes	Throws StaleOracleError when the oracle price is too old; validation errors remain typed rather than generic failures
-MonitoringModule	Pair metrics, treasury pricing, RPC event history	Read-only metrics/warnings	Returns structured health/metric objects; a price-fetch failure is treated as a metric-quality issue, not a fatal transport error
-AlertsModule	Oracle or pair-derived price data plus configured thresholds	Read-only evaluation + local in-memory alert rules	Some alert paths skip unavailable prices or fall back to spot-price checks; failures are surfaced via typed ValidationError / protocol errors
-Error and unavailability contract
+```
+
+### Module data sources
+
+| Module | Primary data source | Read/write model | Availability / failure contract |
+| --- | --- | --- | --- |
+| `SwapModule` | Pair reserves, token balances, dynamic fee state via pair/router contracts | Reads live chain state for quotes and simulates writes for execution | Throws `PairNotFoundError`, `InsufficientLiquidityError`, `SlippageError`, `DeadlineError`, or transaction-level errors on submission |
+| `LiquidityModule` | Pair reserves, LP token state, factory pair resolution | Reads live pool state for quotes, then submits a Soroban transaction for writes | Throws typed validation or pair/liquidity errors; no silent "null quote" path |
+| `FlashLoanModule` | Pair flash-loan config, reserves, callback events, RPC transaction results | Read-only config checks plus write execution | `isAvailable()` returns `false` on read failure; execution throws `FlashLoanError` / `FlashLoanFailedError` |
+| `FeeModule` | Pair fee state and event history from on-chain storage/RPC events | Mostly read-only queries | `getCurrentFee()` and `getFeeState()` return live data; `isStale()` is a boolean result; no hidden null fallback |
+| `OracleModule` | Pair cumulative price accumulators | Read-only observations for TWAP | `getTWAP()` returns `null` when there are not enough observations or the window is too short; price-window validation throws `ValidationError` |
+| `FactoryModule` | Factory contract registry + TTL pair-cache | Read-only lookups, with optional cache | `getPairAddress()` returns `string | null`; `getPairInfo()` throws `PairNotFoundError` when no pair exists |
+| `HealthCheckModule` | RPC `getHealth()` and contract existence/TTL checks | Read-only health probes | Returns structured results (`healthy`, `deployed`, `ttlValid`, etc.) rather than throwing unless arguments are invalid |
+| `TreasuryModule` / `PortfolioModule` | Factory pair set + reserve-derived spot prices | Derived read-only USD valuation | Missing stablecoin price feed can raise `MissingPriceFeedError`; some portfolio aggregates may use zero-value fallback depending on caller configuration |
+| `StopLossModule` | RedStone oracle feed + pair state | Price validation + on-chain stop-loss writes | Throws `StaleOracleError` when the oracle price is too old; validation errors remain typed rather than generic failures |
+| `MonitoringModule` | Pair metrics, treasury pricing, RPC event history | Read-only metrics/warnings | Returns structured health/metric objects; a price-fetch failure is treated as a metric-quality issue, not a fatal transport error |
+| `AlertsModule` | Oracle or pair-derived price data plus configured thresholds | Read-only evaluation + local in-memory alert rules | Some alert paths skip unavailable prices or fall back to spot-price checks; failures are surfaced via typed `ValidationError` / protocol errors |
+
+### Error and unavailability contract
+
 The SDK follows a consistent typed-error model instead of ad hoc string matching:
 
-All SDK exceptions extend CoralSwapSDKError.
-The error tree includes NetworkError, RpcError, SimulationError, TransactionError, ValidationError, DeadlineError, SlippageError, InsufficientLiquidityError, PairNotFoundError, MissingPriceFeedError, StaleOracleError, and module-specific subclasses such as FlashLoanFailedError.
-mapError() normalizes raw Soroban/RPC failures into those typed errors so callers can switch on code or instanceof without parsing messages.
-Explicit nullable/boolean semantics are used where the chain does not have a strict failure state:
-FactoryModule.getPairAddress() → string | null
-OracleModule.getTWAP() → TWAPResult | null
-FlashLoanModule.isAvailable() → boolean (false on failed read)
-HealthCheckModule probes → structured result objects with healthy / deployed / error fields
-This means a module either returns a concrete value, returns a sentinel like null/false for a known unavailable condition, or throws a typed SDK error for a real failure. There is no hidden "best-effort" API layer silently rewriting the protocol state.
+- All SDK exceptions extend `CoralSwapSDKError`.
+- The error tree includes `NetworkError`, `RpcError`, `SimulationError`, `TransactionError`, `ValidationError`, `DeadlineError`, `SlippageError`, `InsufficientLiquidityError`, `PairNotFoundError`, `MissingPriceFeedError`, `StaleOracleError`, and module-specific subclasses such as `FlashLoanFailedError`.
+- `mapError()` normalizes raw Soroban/RPC failures into those typed errors so callers can switch on `code` or `instanceof` without parsing messages.
+- Explicit nullable/boolean semantics are used where the chain does not have a strict failure state:
+  - `FactoryModule.getPairAddress()` → `string | null`
+  - `OracleModule.getTWAP()` → `TWAPResult | null`
+  - `FlashLoanModule.isAvailable()` → `boolean` (`false` on failed read)
+  - `HealthCheckModule` probes → structured result objects with `healthy` / `deployed` / `error` fields
 
-Transaction confirmation polling
-client.poller().poll(hash, options) checks Soroban RPC until a transaction is confirmed or the polling limit is reached. Pass an optional AbortSignal to cancel between attempts (including during the wait); an in-flight RPC call is not cancelled.
+This means a module either returns a concrete value, returns a sentinel like `null`/`false` for a known unavailable condition, or throws a typed SDK error for a real failure. There is no hidden "best-effort" API layer silently rewriting the protocol state.
 
-TypeScript
+## Transaction confirmation polling
 
-const controller = new AbortController();
-const result = await client.poller().poll(txHash, { signal: controller.signal });
-// Call controller.abort() from another task to stop polling.
-A confirmed transaction returns success: true. Otherwise result.error.code distinguishes TX_FAILED (on-chain failure), TX_NOT_CONFIRMED (the last RPC response was NOT_FOUND after all attempts), TX_TIMEOUT (the last attempt failed at the RPC/network level, or three consecutive RPC errors occurred), and ABORTED (cancelled). Transient RPC failures are retried; a responding endpoint resets the consecutive-failure count.
+`client.poller().poll(hash, options)` checks Soroban RPC until a transaction is confirmed or the polling limit is reached. A confirmed transaction returns `success: true`. Otherwise `result.error.code` distinguishes `TX_FAILED` (on-chain failure), `TX_NOT_CONFIRMED` (the last RPC response was `NOT_FOUND` after all attempts), and `TX_TIMEOUT` (the last attempt failed at the RPC/network level, or three consecutive RPC errors occurred). Transient RPC failures are retried; a responding endpoint resets the consecutive-failure count. Existing `AbortSignal` cancellation between attempts is unchanged.
 
-Installation
-Bash
+## Installation
 
+```bash
 npm install @coralswap/sdk
-Quick Start
-Installation
-Bash
+```
 
+## Quick Start
+
+### Installation
+
+```bash
 npm install @coralswap/sdk
-Basic Setup
-TypeScript
+```
 
+### Basic Setup
+```typescript
 import { CoralSwapClient, Network } from "@coralswap/sdk";
 
 // Initialize the client
@@ -78,23 +84,29 @@ const client = new CoralSwapClient({
 // Check health
 const healthy = await client.isHealthy();
 console.log("RPC healthy:", healthy);
-Network & Passphrase Configuration
-The network enum selects a built-in preset that supplies the RPC URL, Stellar network passphrase, and deployed contract addresses.
+```
 
-Preset	Enum value	Passphrase	Contract addresses	RPC URL
-Testnet	Network.TESTNET	Test SDF Network ; September 2015	✅ Populated	soroban-testnet.stellar.org
-Mainnet	Network.MAINNET	Public Global Stellar Network ; September 2015	⚠️ Empty (not yet deployed)	soroban.stellar.org
-Staging	Network.STAGING	Test SDF Future Network ; October 2022	⚠️ Empty (not yet deployed)	rpc-futurenet.stellar.org
-Staging is isolated from Testnet
-STAGING uses Stellar Futurenet's RPC endpoint and network passphrase, not Testnet's. CoralSwap has no confirmed Staging deployment addresses, so contract operations that require a factory or router fail with NotConfiguredError until those addresses are configured. Do not treat Staging as a deployed CoralSwap environment.
+## Network & Passphrase Configuration
 
-Mainnet likewise has no confirmed CoralSwap factory or router deployment. Operations that require either address fail with NotConfiguredError instead of attempting a call against an empty address.
+The `network` enum selects a built-in **preset** that supplies the RPC URL, Stellar network passphrase, and deployed contract addresses.
 
-Passphrase and signer pairing
-The Stellar network passphrase is baked into every transaction envelope. A signer must receive the correct passphrase so that the signed XDR is valid on the target network.
+| Preset | Enum value | Passphrase | Contract addresses | RPC URL |
+|--------|-----------|-----------|-------------------|---------|
+| Testnet | `Network.TESTNET` | `Test SDF Network ; September 2015` | ✅ Populated | `soroban-testnet.stellar.org` |
+| Mainnet | `Network.MAINNET` | `Public Global Stellar Network ; September 2015` | ⚠️ Empty (not yet deployed) | `soroban.stellar.org` |
+| Staging | `Network.STAGING` | `Test SDF Future Network ; October 2022` | ⚠️ Empty (not yet deployed) | `rpc-futurenet.stellar.org` |
 
-TypeScript
+### Staging is isolated from Testnet
 
+`STAGING` uses Stellar Futurenet's RPC endpoint and network passphrase, not Testnet's. CoralSwap has no confirmed Staging deployment addresses, so contract operations that require a factory or router fail with `NotConfiguredError` until those addresses are configured. Do not treat Staging as a deployed CoralSwap environment.
+
+Mainnet likewise has no confirmed CoralSwap factory or router deployment. Operations that require either address fail with `NotConfiguredError` instead of attempting a call against an empty address.
+
+### Passphrase and signer pairing
+
+The Stellar **network passphrase** is baked into every transaction envelope. A signer must receive the correct passphrase so that the signed XDR is valid on the target network.
+
+```typescript
 import { CoralSwapClient, Network } from "@coralswap/sdk";
 
 // KeypairSigner (built-in) — passphrase is set automatically from the preset
@@ -109,27 +121,34 @@ const clientWithWallet = new CoralSwapClient({
   network: Network.TESTNET,
   signer: freighterSigner, // implements the Signer interface
 });
-If you call setNetwork() at runtime, the passphrase used for signing updates automatically:
+```
 
-TypeScript
+If you call `setNetwork()` at runtime, the passphrase used for signing updates automatically:
 
+```typescript
 client.setNetwork(Network.MAINNET); // passphrase now = "Public Global Stellar Network ; September 2015"
-Custom RPC URL(s)
+```
+
+### Custom RPC URL(s)
+
 Override the built-in RPC endpoint with a single URL or a list of fallback URLs:
 
-TypeScript
-
+```typescript
 const client = new CoralSwapClient({
   network: Network.TESTNET,
   rpcUrl: ["https://my-rpc.example.com", "https://soroban-testnet.stellar.org"],
 });
-Mainnet caveats
-Contract addresses are empty. The factoryAddress and routerAddress for Network.MAINNET are placeholders until CoralSwap contracts are deployed to public Stellar. Operations that depend on them (client.factory, client.router) will throw.
-Use real funds carefully. Mainnet transactions are irreversible. Always test on testnet first.
-RPC rate limits. The public soroban.stellar.org endpoint enforces rate limits. Consider supplying a dedicated RPC URL via rpcUrl and/or a RateLimiter for production traffic.
-Swap Tokens
-TypeScript
+```
 
+### Mainnet caveats
+
+- **Contract addresses are empty.** The `factoryAddress` and `routerAddress` for `Network.MAINNET` are placeholders until CoralSwap contracts are deployed to public Stellar. Operations that depend on them (`client.factory`, `client.router`) will throw.
+- **Use real funds carefully.** Mainnet transactions are irreversible. Always test on testnet first.
+- **RPC rate limits.** The public `soroban.stellar.org` endpoint enforces rate limits. Consider supplying a dedicated RPC URL via `rpcUrl` and/or a `RateLimiter` for production traffic.
+
+### Swap Tokens
+
+```typescript
 import { SwapModule, TradeType, toSorobanAmount } from "@coralswap/sdk";
 
 const swap = new SwapModule(client);
@@ -158,9 +177,11 @@ const result = await swap.execute({
 });
 
 console.log("Transaction hash:", result.hash);
-Add Liquidity
-TypeScript
+```
 
+### Add Liquidity
+
+```typescript
 import { LiquidityModule, toSorobanAmount } from "@coralswap/sdk";
 
 const liquidity = new LiquidityModule(client);
@@ -190,9 +211,11 @@ const result = await liquidity.addLiquidity({
 });
 
 console.log("Transaction hash:", result.hash);
-Remove Liquidity
-TypeScript
+```
 
+### Remove Liquidity
+
+```typescript
 // Get a quote for removing liquidity
 const quote = await liquidity.getRemoveLiquidityQuote(
   "CDLZ...", // TokenA contract address
@@ -215,10 +238,13 @@ const result = await liquidity.removeLiquidity({
 });
 
 console.log("Transaction hash:", result.hash);
-Modules
-Swap
-TypeScript
+```
 
+## Modules
+
+### Swap
+
+```typescript
 import { SwapModule, TradeType } from "@coralswap/sdk";
 
 const swap = new SwapModule(client);
@@ -243,9 +269,11 @@ const result = await swap.execute({
   amount: 1000000n,
   tradeType: TradeType.EXACT_IN,
 });
-Liquidity
-TypeScript
+```
 
+### Liquidity
+
+```typescript
 import { LiquidityModule, toSorobanAmount } from "@coralswap/sdk";
 
 const liquidity = new LiquidityModule(client);
@@ -267,9 +295,11 @@ const result = await liquidity.addLiquidity({
   amountBMin: (quote.amountB * 99n) / 100n,
   to: client.publicKey,
 });
-Flash Loans
-TypeScript
+```
 
+### Flash Loans
+
+```typescript
 import { FlashLoanModule } from "@coralswap/sdk";
 
 const flash = new FlashLoanModule(client);
@@ -286,9 +316,11 @@ const result = await flash.execute({
   receiverAddress: "CXYZ...", // Your flash receiver contract
   callbackData: Buffer.from("{}"),
 });
-Dynamic Fees
-TypeScript
+```
 
+### Dynamic Fees
+
+```typescript
 import { FeeModule } from "@coralswap/sdk";
 
 const fees = new FeeModule(client);
@@ -300,9 +332,11 @@ console.log("Stale?", estimate.isStale);
 
 // Compare fees across pairs
 const comparison = await fees.compareFees([pair1, pair2, pair3]);
-TWAP Oracle
-TypeScript
+```
 
+### TWAP Oracle
+
+```typescript
 import { OracleModule } from "@coralswap/sdk";
 
 const oracle = new OracleModule(client);
@@ -318,9 +352,11 @@ if (twap) {
   console.log("TWAP price0:", twap.price0TWAP);
   console.log("Time window:", twap.timeWindow, "seconds");
 }
-Webhook Endpoints
-TypeScript
+```
 
+### Webhook Endpoints
+
+```typescript
 import { WebhookModule } from "@coralswap/sdk";
 
 const webhooks = new WebhookModule();
@@ -348,17 +384,19 @@ console.log(webhook.id, webhook.url, webhook.verified, webhook.failCount);
 // Events filter deliveries: a webhook only fires for what it subscribed to.
 // `filtered: true` means nothing was sent and no attempt was recorded.
 const result = await webhooks.sendWebhook(id, { pair, amount }, { event: "swap" });
-Webhooks that fail 5 consecutive deliveries are auto-disabled — sendWebhook()
-then throws WebhookDisabledError until the endpoint recovers and you call
-enableWebhook(). A verification handshake that does not return 2xx marks the
-webhook verified: false, so isWebhookVerified()/listWebhooks() always show
+```
+
+Webhooks that fail `5` consecutive deliveries are auto-disabled — `sendWebhook()`
+then throws `WebhookDisabledError` until the endpoint recovers and you call
+`enableWebhook()`. A verification handshake that does not return `2xx` marks the
+webhook `verified: false`, so `isWebhookVerified()`/`listWebhooks()` always show
 the state of the last handshake.
 
-Native XLM
-The SDK supports the native Stellar asset (XLM) via the Stellar Asset Contract (SAC). You can pass "XLM" or "native" as a token identifier in swap and multi-hop methods; it is resolved to the network’s XLM SAC address automatically.
+## Native XLM
 
-TypeScript
+The SDK supports the native Stellar asset (XLM) via the Stellar Asset Contract (SAC). You can pass `"XLM"` or `"native"` as a token identifier in swap and multi-hop methods; it is resolved to the network’s XLM SAC address automatically.
 
+```typescript
 import { getNativeAssetContractAddress, resolveTokenIdentifier, isNativeToken } from "@coralswap/sdk";
 
 // Resolve "XLM" to the SAC contract address for the current network
@@ -372,11 +410,13 @@ const resolved = resolveTokenIdentifier("XLM", passphrase);
 if (isNativeToken("XLM")) {
   // use resolved address for contract calls
 }
-Swap and multi-hop methods accept "XLM" as tokenIn/tokenOut or as an element in path; no need to look up the SAC address when using the high-level API.
+```
 
-Utilities
-TypeScript
+Swap and multi-hop methods accept `"XLM"` as `tokenIn`/`tokenOut` or as an element in `path`; no need to look up the SAC address when using the high-level API.
 
+## Utilities
+
+```typescript
 import {
   toSorobanAmount,
   fromSorobanAmount,
@@ -424,23 +464,26 @@ try {
     console.log("RPC retries exceeded the 5s deadline");
   }
 }
-Signer Authoring
-CoralSwapClient never touches a private key directly -- it delegates signing
-to anything implementing the Signer interface:
+```
 
-TypeScript
+## Signer Authoring
 
+`CoralSwapClient` never touches a private key directly -- it delegates signing
+to anything implementing the `Signer` interface:
+
+```typescript
 interface Signer {
   publicKey(): Promise<string>;
   signTransaction(xdr: string): Promise<string>;
 }
-Passing secretKey to the constructor is a convenience: internally it just
-builds the SDK's own reference implementation, KeypairSigner. To integrate a
+```
+
+Passing `secretKey` to the constructor is a convenience: internally it just
+builds the SDK's own reference implementation, `KeypairSigner`. To integrate a
 browser wallet (Freighter, Albedo, xBull, a hardware signer, etc.), implement
-Signer yourself and pass it as config.signer instead:
+`Signer` yourself and pass it as `config.signer` instead:
 
-TypeScript
-
+```typescript
 import { CoralSwapClient, Network, Signer } from "@coralswap/sdk";
 
 class FreighterSigner implements Signer {
@@ -464,30 +507,34 @@ const client = new CoralSwapClient({
 
 // client.submitTransaction(...) now calls FreighterSigner.signTransaction()
 // instead of signing with a locally-held secret key.
-Matching the network config
+```
+
+### Matching the network config
+
 A signer must sign against the exact network the client talks to. Read it
-from client.networkConfig rather than hardcoding it, so a single signer
+from `client.networkConfig` rather than hardcoding it, so a single signer
 implementation works across testnet/mainnet/staging:
 
-TypeScript
-
+```typescript
 const { networkPassphrase, rpcUrl } = client.networkConfig;
-TESTNET_NETWORK, MAINNET_NETWORK, and STAGING_NETWORK (also exported
+```
+
+`TESTNET_NETWORK`, `MAINNET_NETWORK`, and `STAGING_NETWORK` (also exported
 from the package root) expose the same shape if you need it before a client
 instance exists.
 
-Building a transaction envelope by hand
-Most callers should use client.submitTransaction(operations) or
-client.simulateTransaction(operations, options), which already handle
-fetching the account, building, simulating, and (for submitTransaction)
+### Building a transaction envelope by hand
+
+Most callers should use `client.submitTransaction(operations)` or
+`client.simulateTransaction(operations, options)`, which already handle
+fetching the account, building, simulating, and (for `submitTransaction`)
 signing and sending. If you're authoring a signer that needs to construct
 and sign a raw envelope itself -- for example to show a wallet a human-
-readable preview before submission -- combine client.getAccount() (which
+readable preview before submission -- combine `client.getAccount()` (which
 returns the account's current sequence number, using the same RPC
 retry/fallback as the rest of the client) with the address utilities above:
 
-TypeScript
-
+```typescript
 import { TransactionBuilder } from "@stellar/stellar-sdk";
 import { isValidAddress, toScAddress } from "@coralswap/sdk";
 
@@ -502,9 +549,11 @@ const tx = new TransactionBuilder(account, {
   .build();
 
 const signedXdr = await mySigner.signTransaction(tx.toXDR());
-Error Handling
-TypeScript
+```
 
+## Error Handling
+
+```typescript
 import {
   CoralSwapSDKError,
   SlippageError,
@@ -532,14 +581,17 @@ try {
       console.error("Unexpected:", sdkError.message);
   }
 }
-Performance
-High-throughput integrations (trading bots, aggregators, dashboards) should tune caching, RPC failover, and connection pooling. See docs/PERFORMANCE.md for use-case profiles, TTL guidance, benchmark numbers, and copy-paste configuration examples.
+```
 
-Bundle-size Budget
-The public surface of the SDK (src/index.ts) is guarded by a bundle-size regression budget. Its public exports are bundled with esbuild in tree-shaking mode and minified, and the result is checked against a fixed cap. Because tree-shaking drops anything unreachable from the used bindings, a reintroduced dead export only inflates the bundle when it drags genuinely-new, unused code back in — exactly the regression this guard catches.
+## Performance
 
-Bash
+High-throughput integrations (trading bots, aggregators, dashboards) should tune caching, RPC failover, and connection pooling. See **[docs/PERFORMANCE.md](docs/PERFORMANCE.md)** for use-case profiles, TTL guidance, benchmark numbers, and copy-paste configuration examples.
 
+## Bundle-size Budget
+
+The public surface of the SDK (`src/index.ts`) is guarded by a bundle-size regression budget. Its public exports are bundled with **esbuild in tree-shaking mode** and minified, and the result is checked against a fixed cap. Because tree-shaking drops anything unreachable from the used bindings, a reintroduced dead export only inflates the bundle when it drags genuinely-new, unused code back in — exactly the regression this guard catches.
+
+```bash
 npm run check:bundle-size
 ```
 
@@ -564,39 +616,51 @@ The budget is enforced in CI by `.github/workflows/bundle-size.yml`. The measure
 
 The integration suite runs the full add-liquidity → swap → remove-liquidity lifecycle against real testnet contracts.
 
-Running locally
-Fund a testnet account at https://friendbot.stellar.org.
-Deploy (or note the addresses of) two SEP-41 tokens on testnet.
-Export the required environment variables:
-Bash
+### Running locally
 
+1. Fund a testnet account at [https://friendbot.stellar.org](https://friendbot.stellar.org).
+2. Deploy (or note the addresses of) two SEP-41 tokens on testnet.
+3. Export the required environment variables:
+
+```bash
 export STELLAR_TESTNET=true
 export TEST_KEYPAIR=S...          # funded testnet secret key
 export TEST_TOKEN_A=C...          # contract address of token A
 export TEST_TOKEN_B=C...          # contract address of token B
 # optional — defaults to https://soroban-testnet.stellar.org
 export TEST_RPC_URL=https://...
-Run:
-Bash
+```
 
+4. Run:
+
+```bash
 npm run test:integration
+```
+
 The tests are idempotent — if the pair already exists it is reused, so you can run the suite multiple times without conflicts.
 
-CI
-Integration tests run automatically on a nightly schedule via .github/workflows/integration.yml. They can also be triggered manually using workflow_dispatch. The job is marked continue-on-error for fork PRs (if run manually), so they will not block merges from external contributors.
+### CI
+
+Integration tests run automatically on a nightly schedule via `.github/workflows/integration.yml`. They can also be triggered manually using `workflow_dispatch`. The job is marked `continue-on-error` for fork PRs (if run manually), so they will not block merges from external contributors.
 
 Add the following secrets to your repository (Settings → Secrets → Actions):
 
-Secret	Description
-TEST_KEYPAIR	Funded testnet secret key
-TEST_TOKEN_A	Testnet token A contract address
-TEST_TOKEN_B	Testnet token B contract address
-Architecture Decision Records
-ADR-001 Module Boundary Decisions
-ADR-002 Error Handling Strategy
-ADR-003 Caching Approach
-| TEST_RWA_POOL | Deployed RWA pool contract address on testnet |
-| TEST_NAV_FEED_ID | RedStone NAV feed id for the pool's underlying asset |
+| Secret | Description |
+|---|---|
+| `TEST_KEYPAIR` | Funded testnet secret key |
+| `TEST_TOKEN_A` | Testnet token A contract address |
+| `TEST_TOKEN_B` | Testnet token B contract address |
 
-License
+## Architecture Decision Records
+
+- [ADR-001 Module Boundary Decisions](docs/adr/ADR-001-module-boundaries.md)
+- [ADR-002 Error Handling Strategy](docs/adr/ADR-002-error-handling.md)
+- [ADR-003 Caching Approach](docs/adr/ADR-003-caching-approach.md)
+
+
+| `TEST_RWA_POOL`    | Deployed RWA pool contract address on testnet |
+| `TEST_NAV_FEED_ID` | RedStone NAV feed id for the pool's underlying asset |
+
+## License
+
 MIT
