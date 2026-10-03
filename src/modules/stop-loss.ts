@@ -15,8 +15,7 @@ import {
   StaleOracleError,
   DecodeError,
 } from '@/errors';
-import { isValidAddress } from '@/utils/addresses';
-import { validateAddress } from '@/utils/validation';
+import { validateAddress, validateDistinctTokens, validatePositiveAmount } from '@/utils/validation';
 import { estimateGas } from '@/utils/gas';
 import type { SwapModule } from '@/modules/swap';
 import {
@@ -45,28 +44,83 @@ interface TriggerEvaluationOptions {
   staleAfterMs?: number;
 }
 
-const StopLossParamsSchema = z.object({
-  tokenIn: z
-    .string()
-    .min(1, 'tokenIn must not be empty')
-    .refine((v) => isValidAddress(v), 'tokenIn is not a valid Stellar address'),
-  tokenOut: z
-    .string()
-    .min(1, 'tokenOut must not be empty')
-    .refine((v) => isValidAddress(v), 'tokenOut is not a valid Stellar address'),
-  amount: z.bigint().positive('amount must be greater than 0'),
-  triggerPrice: z.bigint().positive('triggerPrice must be greater than 0'),
-  pairAddress: z
-    .string()
-    .min(1, 'pairAddress must not be empty')
-    .refine((v) => isValidAddress(v), 'pairAddress is not a valid Stellar address'),
-  oracleAsset: z
-    .string()
-    .refine((v) => v.trim().length > 0, 'oracleAsset must not be empty'),
-}).refine(
-  (data) => data.tokenIn !== data.tokenOut,
-  { message: 'tokenIn and tokenOut must be different addresses', path: ['tokenIn'] },
-);
+const StopLossParamsSchema = z
+  .object({
+    tokenIn: z.string({ error: 'tokenIn must not be empty' }).superRefine((value, ctx) => {
+      try {
+        validateAddress(value, 'tokenIn');
+      } catch (err) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            err instanceof Error ? err.message : `tokenIn is not a valid Stellar address: ${value}`,
+        });
+      }
+    }),
+    tokenOut: z.string({ error: 'tokenOut must not be empty' }).superRefine((value, ctx) => {
+      try {
+        validateAddress(value, 'tokenOut');
+      } catch (err) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            err instanceof Error ? err.message : `tokenOut is not a valid Stellar address: ${value}`,
+        });
+      }
+    }),
+    amount: z.bigint({ error: 'amount must be greater than 0' }).superRefine((value, ctx) => {
+      try {
+        validatePositiveAmount(value, 'amount');
+      } catch (err) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: err instanceof Error ? err.message : `amount must be greater than 0, got ${value}`,
+        });
+      }
+    }),
+    triggerPrice: z.bigint({ error: 'triggerPrice must be greater than 0' }).superRefine((value, ctx) => {
+      try {
+        validatePositiveAmount(value, 'triggerPrice');
+      } catch (err) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            err instanceof Error ? err.message : `triggerPrice must be greater than 0, got ${value}`,
+        });
+      }
+    }),
+    pairAddress: z.string({ error: 'pairAddress must not be empty' }).superRefine((value, ctx) => {
+      try {
+        validateAddress(value, 'pairAddress');
+      } catch (err) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            err instanceof Error ? err.message : `pairAddress is not a valid Stellar address: ${value}`,
+        });
+      }
+    }),
+    oracleAsset: z.string({ error: 'oracleAsset must not be empty' }).superRefine((value, ctx) => {
+      if (value.trim().length === 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'oracleAsset must not be empty',
+        });
+      }
+    }),
+  })
+  .superRefine((data, ctx) => {
+    try {
+      validateDistinctTokens(data.tokenIn, data.tokenOut);
+    } catch (err) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['tokenOut'],
+        message:
+          err instanceof Error ? err.message : 'tokenIn and tokenOut must be different addresses',
+      });
+    }
+  });
 
 /**
  * Stop-Loss module — automated stop-loss orders with RedStone trigger detection.
@@ -445,11 +499,9 @@ export class StopLossModule {
   private validateStopLossParams(params: StopLossParams): void {
     const result = StopLossParamsSchema.safeParse(params);
     if (!result.success) {
-      const issues = result.error.issues
-        .map((i: z.ZodIssue) => `${i.path.join('.')}: ${i.message}`)
-        .join('; ');
-      throw new ValidationError(`Invalid stop-loss params: ${issues}`, {
-        zodErrors: result.error.issues,
+      const { issues } = result.error;
+      throw new ValidationError(issues[0]?.message ?? 'Validation failed', {
+        zodErrors: issues,
       });
     }
   }

@@ -27,7 +27,6 @@ import {
   validateNonNegativeAmount,
   validateDistinctTokens,
 } from "@/utils/validation";
-import { isValidAddress } from "@/utils/addresses";
 import { decodeI128 } from "@/utils/numeric";
 import { z } from "zod";
 
@@ -56,37 +55,43 @@ import { z } from "zod";
 
 const StakeOperationSchema = z.object({
   lpTokenAddress: z
-    .string()
-    .min(1, "lpTokenAddress must not be empty")
-    .superRefine(
-      (val, ctx) => {
-        if (!isValidAddress(val)) {
-          ctx.addIssue({ code: z.ZodIssueCode.custom, message: `lpTokenAddress is not a valid Stellar address: ${val}` });
-        }
-      },
-    ),
-  amount: z.bigint().superRefine(
-    (val, ctx) => {
-      if (val <= 0n) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, message: `amount must be greater than 0, got ${val}` });
+    .string({ error: "lpTokenAddress must not be empty" })
+    .superRefine((value, ctx) => {
+      try {
+        validateAddress(value, "lpTokenAddress");
+      } catch (err) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: err instanceof Error ? err.message : `lpTokenAddress is not a valid Stellar address: ${value}`,
+        });
       }
-    },
-  ),
+    }),
+  amount: z.bigint({ error: "amount must be greater than 0" }).superRefine((value, ctx) => {
+    try {
+      validatePositiveAmount(value, "amount");
+    } catch (err) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: err instanceof Error ? err.message : `amount must be greater than 0, got ${value}`,
+      });
+    }
+  }),
 });
 
 /**
  * Validate stake/unstake parameters against the Zod schema.
+ *
+ * The first schema issue's message is rethrown verbatim to preserve the legacy
+ * error text while the full issue list remains attached as zodErrors.
  *
  * @throws {ValidationError} If any parameter fails validation.
  */
 function validateStakeParams(lpTokenAddress: string, amount: bigint): void {
   const result = StakeOperationSchema.safeParse({ lpTokenAddress, amount });
   if (!result.success) {
-    const issues = result.error.issues
-      .map((i: z.ZodIssue) => `${i.path.join(".")}: ${i.message}`)
-      .join("; ");
-    throw new ValidationError(`Invalid stake parameters: ${issues}`, {
-      zodErrors: result.error.issues,
+    const { issues } = result.error;
+    throw new ValidationError(issues[0]?.message ?? "Validation failed", {
+      zodErrors: issues,
     });
   }
 }
@@ -119,8 +124,7 @@ export class StakingModule {
     amount: bigint,
     publicKey: string,
   ): xdr.Operation {
-    validateAddress(lpTokenAddress, "lpTokenAddress");
-    validatePositiveAmount(amount, "amount");
+    validateStakeParams(lpTokenAddress, amount);
 
     const contract = new Contract(lpTokenAddress);
 

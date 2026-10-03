@@ -247,6 +247,21 @@ describe("StakingModule", () => {
       ).rejects.toThrow(ValidationError);
     });
 
+    it("preserves the first legacy validation message and includes all zod issues", async () => {
+      const client = createMockClient();
+      const module = new StakingModule(client);
+      const signer = createMockSigner();
+
+      const err = await module.stake("", 0n, signer).catch((e) => e);
+
+      expect(err).toBeInstanceOf(ValidationError);
+      expect(err.message).toBe("lpTokenAddress must not be empty");
+      expect(err.details?.zodErrors.map((issue: { message: string }) => issue.message)).toEqual([
+        "lpTokenAddress must not be empty",
+        "amount must be greater than 0, got 0",
+      ]);
+    });
+
     it("should throw TransactionError on failed submission", async () => {
       const client = createMockClient({
         submitSuccess: false,
