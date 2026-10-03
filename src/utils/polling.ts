@@ -50,7 +50,9 @@ export class TransactionPoller {
      *
      * @param txHash - Hash of the transaction to poll.
      * @param options - Polling configuration.
-     * @returns A Result object with transaction data or error.
+     * @returns A Result with transaction data or an error. Exhausted
+     *   NOT_FOUND responses return TX_NOT_CONFIRMED; RPC failures return
+     *   TX_TIMEOUT after at most three consecutive errors.
      */
     async poll(
         txHash: string,
@@ -64,6 +66,13 @@ export class TransactionPoller {
         const signal = options.signal;
 
         let currentInterval = initialInterval;
+        let attempts = 0;
+        let lastOutcome: 'NOT_FOUND' | 'RPC_ERROR' | undefined;
+        let lastRpcError: string | undefined;
+        let consecutiveRpcErrors = 0;
+        // Allow a transient RPC failure, but do not exhaust the entire polling
+        // window when the endpoint is persistently unavailable.
+        const maxConsecutiveRpcErrors = 3;
 
         for (let attempt = 1; attempt <= maxAttempts; attempt++) {
             if (signal?.aborted) {
@@ -77,8 +86,10 @@ export class TransactionPoller {
                 nextInterval: currentInterval,
             });
 
+            attempts = attempt;
             try {
                 const status = await this.server.getTransaction(txHash);
+                consecutiveRpcErrors = 0;
 
                 if (status.status === 'SUCCESS') {
                     this.logger?.info('TransactionPoller: confirmed', {
@@ -122,14 +133,26 @@ export class TransactionPoller {
                     };
                 }
 
-                // status.status === 'NOT_FOUND' means still pending/unseen
+                // NOT_FOUND is a successful RPC read, but not a confirmation.
+                if (status.status === 'NOT_FOUND') {
+                    lastOutcome = 'NOT_FOUND';
+                }
             } catch (err) {
+                lastOutcome = 'RPC_ERROR';
+                lastRpcError = err instanceof Error ? err.message : String(err);
+                consecutiveRpcErrors++;
                 this.logger?.debug('TransactionPoller: RPC error during polling', {
                     txHash,
                     attempt,
-                    error: err instanceof Error ? err.message : String(err),
+                    error: lastRpcError,
                 });
-                // Continue polling on RPC errors (e.g. transient network issue)
+                // Retry transient errors, but fail early on a dead endpoint.
+                if (consecutiveRpcErrors >= maxConsecutiveRpcErrors) {
+                    if (signal?.aborted) {
+                        return this.abortedResult(txHash, attempt);
+                    }
+                    break;
+                }
             }
 
             if (attempt < maxAttempts) {
@@ -145,17 +168,23 @@ export class TransactionPoller {
             }
         }
 
-        this.logger?.error('TransactionPoller: timed out', {
-            txHash,
-            attempts: maxAttempts,
-        });
+        // The last observed outcome determines what the caller can infer:
+        // NOT_FOUND means no confirmation was observed at the last check;
+        // an RPC failure means the current confirmation status is unknown.
+        const notConfirmed = lastOutcome === 'NOT_FOUND';
+        this.logger?.error(
+            notConfirmed ? 'TransactionPoller: not confirmed' : 'TransactionPoller: RPC timed out',
+            { txHash, attempts, lastRpcError },
+        );
 
         return {
             success: false,
             error: {
-                code: 'TX_TIMEOUT',
-                message: `Transaction confirmation timed out after ${maxAttempts} attempts`,
-                details: { txHash, maxAttempts, strategy },
+                code: notConfirmed ? 'TX_NOT_CONFIRMED' : 'TX_TIMEOUT',
+                message: notConfirmed
+                    ? `Transaction not confirmed after ${attempts} attempts`
+                    : `Transaction confirmation timed out after ${attempts} attempts due to RPC errors`,
+                details: { txHash, maxAttempts, attempts, strategy, ...(notConfirmed ? {} : { lastRpcError }) },
             },
             txHash,
         };
