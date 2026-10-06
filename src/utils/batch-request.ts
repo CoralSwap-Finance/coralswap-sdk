@@ -9,8 +9,8 @@
 
 export interface BatchRequestOptions {
   /**
-   * Maximum number of tasks that may run simultaneously.
-   * Defaults to the length of the task array (i.e. all at once).
+   * Maximum number of tasks that may run simultaneously. Must be an
+   * integer >= 1. Defaults to {@link DEFAULT_BATCH_CONCURRENCY}.
    */
   concurrency?: number;
 
@@ -25,6 +25,17 @@ export interface BatchRequestOptions {
 export type BatchResult<T> =
   | { status: 'fulfilled'; value: T }
   | { status: 'rejected'; reason: unknown };
+
+/** Default concurrency cap for {@link batchRequest} and {@link batchCall}. */
+export const DEFAULT_BATCH_CONCURRENCY = 5;
+
+function resolveConcurrency(concurrency: number | undefined): number {
+  if (concurrency === undefined) return DEFAULT_BATCH_CONCURRENCY;
+  if (!Number.isInteger(concurrency) || concurrency < 1) {
+    throw new RangeError(`concurrency must be an integer >= 1, got ${concurrency}`);
+  }
+  return concurrency;
+}
 
 /**
  * Run `tasks` with at most `options.concurrency` running in parallel.
@@ -47,7 +58,7 @@ export async function batchRequest<T>(
   tasks: Array<() => Promise<T>>,
   options: BatchRequestOptions = {},
 ): Promise<BatchResult<T>[]> {
-  const concurrency = Math.max(1, options.concurrency ?? (tasks.length || 1));
+  const concurrency = resolveConcurrency(options.concurrency);
   const results: BatchResult<T>[] = new Array(tasks.length);
 
   let nextIndex = 0;
@@ -111,9 +122,6 @@ export async function batchRequestOrThrow<T>(
 
   return results.map((r) => (r as Extract<BatchResult<T>, { status: 'fulfilled' }>).value);
 }
-
-/** Default concurrency for {@link batchCall}. */
-export const DEFAULT_BATCH_CONCURRENCY = 5;
 
 /**
  * Execute `calls` in parallel with a default concurrency of 5.

@@ -60,6 +60,23 @@ export interface RetryDecision {
 }
 
 /**
+ * How {@link shouldRetrySubmission} treats an `ERROR` (indeterminate) status.
+ *
+ * - `'block'` (default) -- conservative: never resubmit while the outcome is
+ *   unknown. Re-check the hash (or confirm via an independent status source)
+ *   before retrying.
+ * - `'retry'` -- favour availability: allow resubmission even though the
+ *   original transaction may already have landed. Only use this for
+ *   operations that are safe to execute twice.
+ */
+export type SubmissionErrorPolicy = 'retry' | 'block';
+
+export interface ShouldRetryOptions {
+  /** Policy for indeterminate (`ERROR`) statuses. Defaults to `'block'`. */
+  onError?: SubmissionErrorPolicy;
+}
+
+/**
  * Decide whether a transaction is safe to resubmit given its real status.
  *
  * - `SUCCESS` / `FAILED` -- the transaction already has a final on-chain
@@ -73,9 +90,16 @@ export interface RetryDecision {
  *   callers race on the same hash -- both see the same block signal, so
  *   neither proceeds to a second submission. Callers that can consult an
  *   independent status source may override this once they positively confirm
- *   the transaction never landed.
+ *   the transaction never landed, or opt into `onError: 'retry'`.
  */
-export function shouldRetrySubmission(status: TransactionStatus): RetryDecision {
+export function shouldRetrySubmission(
+  status: TransactionStatus,
+  options: ShouldRetryOptions = {},
+): RetryDecision {
+  const onError = options.onError ?? 'block';
+  if (onError !== 'block' && onError !== 'retry') {
+    throw new Error(`Invalid onError policy: ${String(onError)}; expected 'retry' or 'block'`);
+  }
   switch (status.status) {
     case 'SUCCESS':
       return { shouldRetry: false, reason: 'Transaction already succeeded' };
@@ -84,9 +108,15 @@ export function shouldRetrySubmission(status: TransactionStatus): RetryDecision 
     case 'NOT_FOUND':
       return { shouldRetry: true };
     case 'ERROR':
+      if (onError === 'retry') {
+        return {
+          shouldRetry: true,
+          reason: `Status indeterminate (${status.message}); retrying because onError is 'retry'`,
+        };
+      }
       return {
         shouldRetry: false,
-        reason: 'Status indeterminate; blocking resubmission to avoid double execution',
+        reason: 'Status indeterminate; blocking resubmission to avoid double execution. Re-check the transaction hash before retrying',
       };
   }
 }
