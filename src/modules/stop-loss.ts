@@ -5,21 +5,21 @@ import {
   StopLossOrder,
   StopLossOrderQuery,
   StopLossStatus,
-} from "@/types/stop-loss";
-import { Signer } from "@/types/common";
-import { SwapRequest } from "@/types/swap";
-import { GasEstimate } from "@/types/gas";
+} from '@/types/stop-loss';
+import { Signer } from '@/types/common';
+import { SwapRequest } from '@/types/swap';
+import { GasEstimate } from '@/types/gas';
 import {
   ValidationError,
   TransactionError,
   StaleOracleError,
   DecodeError,
-} from "@/errors";
-import { isValidAddress } from "@/utils/addresses";
-import { validateAddress } from "@/utils/validation";
-import { estimateGas } from "@/utils/gas";
-import { validateWithSchema } from "@/schemas";
-import type { SwapModule } from "@/modules/swap";
+} from '@/errors';
+import { isValidAddress } from '@/utils/addresses';
+import { validateAddress } from '@/utils/validation';
+import { estimateGas } from '@/utils/gas';
+import { validateWithSchema } from '@/schemas';
+import type { SwapModule } from '@/modules/swap';
 import {
   Contract,
   nativeToScVal,
@@ -366,20 +366,13 @@ export class StopLossModule {
       nativeArr = Array.isArray(native) ? native : [];
     } catch (e) {
       // Couldn't decode the top-level return value: surface a DecodeError with context
-      throw new DecodeError(
-        "orders_for_user",
-        "Failed to decode orders_for_user return value",
-        {
-          error: e instanceof Error ? e.message : String(e),
-        },
-      );
+      throw new DecodeError('orders_for_user', 'Failed to decode orders_for_user return value', {
+        error: e instanceof Error ? e.message : String(e),
+      });
     }
 
     // Decode each slot: empty slots -> order: null; decode failures -> DecodeError(slot)
-    const decodedSlots: Array<{
-      slot: number;
-      order: DecodedStopLossOrder | null;
-    }> = [];
+    const decodedSlots: Array<{ slot: number; order: DecodedStopLossOrder | null }> = [];
 
     for (const [idx, item] of nativeArr.entries()) {
       const slot = idx;
@@ -391,12 +384,12 @@ export class StopLossModule {
       try {
         let scval: xdr.ScVal;
 
-        if (typeof item === "string") {
+        if (typeof item === 'string') {
           // Legacy: base64-encoded XDR for the slot
           try {
-            scval = xdr.ScVal.fromXDR(item, "base64");
+            scval = xdr.ScVal.fromXDR(item, 'base64');
           } catch (err) {
-            throw new DecodeError(slot, "Failed to parse base64 XDR for slot", {
+            throw new DecodeError(slot, 'Failed to parse base64 XDR for slot', {
               xdr: item,
               error: err instanceof Error ? err.message : String(err),
             });
@@ -406,14 +399,10 @@ export class StopLossModule {
           try {
             scval = nativeToScVal(item);
           } catch (err) {
-            throw new DecodeError(
-              slot,
-              "Failed to convert native value to ScVal",
-              {
-                item,
-                error: err instanceof Error ? err.message : String(err),
-              },
-            );
+            throw new DecodeError(slot, 'Failed to convert native value to ScVal', {
+              item,
+              error: err instanceof Error ? err.message : String(err),
+            });
           }
         }
 
@@ -421,7 +410,7 @@ export class StopLossModule {
         decodedSlots.push({ slot, order: decoded });
       } catch (err) {
         if (err instanceof DecodeError) throw err;
-        throw new DecodeError(slot, "Failed to decode order slot", {
+        throw new DecodeError(slot, 'Failed to decode order slot', {
           error: err instanceof Error ? err.message : String(err),
         });
       }
@@ -429,9 +418,7 @@ export class StopLossModule {
 
     // Enrich only the non-empty decoded orders, preserving successful decoding semantics
     const enriched = await Promise.all(
-      decodedSlots.map(async (s) =>
-        s.order ? await this.enrichOrder(s.order, options) : null,
-      ),
+      decodedSlots.map(async (s) => (s.order ? await this.enrichOrder(s.order, options) : null)),
     );
 
     const filtered = enriched.filter((o): o is StopLossOrder => o !== null);
