@@ -9,7 +9,7 @@ import {
 } from "@/types/fee";
 import { FeeState } from "@/types/pool";
 import { FeeEstimates } from "@/types/fee-estimates";
-import { estimateGas } from "@/utils/gas";
+import { estimateGas, formatStroopsAsXLM } from "@/utils/gas";
 import { validateAddress, validatePositiveAmount } from "@/utils/validation";
 import { ledgerToApproxTime, LedgerHead } from "@/utils/ledger";
 import { TypedEventCursor, MIN_START_LEDGER, MAX_EVENT_LIMIT } from "@/utils/event-cursor";
@@ -422,22 +422,22 @@ export class FeeModule {
     const ledger = await this.client.getCurrentLedger();
 
     let protocolFeeBps = 0;
-    let protocolFeeStroops = 0;
+    let protocolFeeStroops = 0n;
 
     try {
       const pairAddress = this.extractPairAddress(operations);
       if (pairAddress) {
         const feeState = await this.getFeeState(pairAddress);
         protocolFeeBps = feeState.feeCurrent || 0;
-        protocolFeeStroops = Math.floor(gasEstimate.fee * (protocolFeeBps / 10000));
+        protocolFeeStroops = (gasEstimate.fee * BigInt(Math.trunc(protocolFeeBps))) / 10000n;
       }
     } catch {
       protocolFeeBps = 0;
-      protocolFeeStroops = 0;
+      protocolFeeStroops = 0n;
     }
 
     const totalStroops = gasEstimate.fee + protocolFeeStroops;
-    const totalXLM = `${(totalStroops / 10000000).toFixed(5)} XLM`;
+    const totalXLM = formatStroopsAsXLM(totalStroops);
 
     const breakdown = {
       gas: {
@@ -447,7 +447,7 @@ export class FeeModule {
       protocol: {
         bps: protocolFeeBps,
         stroops: protocolFeeStroops,
-        xlm: `${(protocolFeeStroops / 10000000).toFixed(5)} XLM`,
+        xlm: formatStroopsAsXLM(protocolFeeStroops),
       },
     };
 

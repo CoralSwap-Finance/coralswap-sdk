@@ -103,7 +103,7 @@ describe('TransactionPoller', () => {
         expect(mockServer.getTransaction).toHaveBeenCalledTimes(1);
     });
 
-    it('times out after maxAttempts', async () => {
+    it('returns TX_NOT_CONFIRMED after exhausting NOT_FOUND responses', async () => {
         mockServer.getTransaction.mockResolvedValue({ status: 'NOT_FOUND' } as any);
 
         const result = await poller.poll('TX_HASH', {
@@ -112,8 +112,87 @@ describe('TransactionPoller', () => {
         });
 
         expect(result.success).toBe(false);
-        expect(result.error?.code).toBe('TX_TIMEOUT');
+        expect(result.error?.code).toBe('TX_NOT_CONFIRMED');
+        expect(result.error?.details).toMatchObject({ txHash: 'TX_HASH', attempts: 3 });
         expect(mockServer.getTransaction).toHaveBeenCalledTimes(3);
+    });
+
+    it('stops early with TX_TIMEOUT when the RPC endpoint stays down', async () => {
+        mockServer.getTransaction.mockRejectedValue(new Error('connection refused'));
+
+        const result = await poller.poll('TX_HASH', { interval: 0, maxAttempts: 30 });
+
+        expect(result.success).toBe(false);
+        expect(result.error?.code).toBe('TX_TIMEOUT');
+        expect(result.error?.details).toMatchObject({
+            txHash: 'TX_HASH', attempts: 3, lastRpcError: 'connection refused',
+        });
+        expect(mockServer.getTransaction).toHaveBeenCalledTimes(3);
+    });
+
+    it('preserves cancellation when the third consecutive RPC failure ends polling', async () => {
+        jest.useFakeTimers();
+        try {
+            const controller = new AbortController();
+            let rejectThird!: (reason: Error) => void;
+            mockServer.getTransaction
+                .mockRejectedValueOnce(new Error('network down'))
+                .mockRejectedValueOnce(new Error('network down'))
+                .mockReturnValueOnce(new Promise((_resolve, reject) => {
+                    rejectThird = reject;
+                }) as any);
+
+            const pollPromise = poller.poll('TX_HASH', {
+                interval: 0, maxAttempts: 30, signal: controller.signal,
+            });
+            await jest.advanceTimersByTimeAsync(5);
+            expect(mockServer.getTransaction).toHaveBeenCalledTimes(3);
+            controller.abort();
+            rejectThird(new Error('network down'));
+
+            const result = await pollPromise;
+            expect(result.error?.code).toBe('ABORTED');
+        } finally {
+            jest.useRealTimers();
+        }
+    });
+
+    it('classifies a NOT_FOUND after a transient network error as not confirmed', async () => {
+        mockServer.getTransaction
+            .mockRejectedValueOnce(new Error('network dropped'))
+            .mockResolvedValue({ status: 'NOT_FOUND' } as any);
+
+        const result = await poller.poll('TX_HASH', { interval: 0, maxAttempts: 3 });
+
+        expect(result.error?.code).toBe('TX_NOT_CONFIRMED');
+        expect(mockServer.getTransaction).toHaveBeenCalledTimes(3);
+    });
+
+    it('classifies an RPC failure after NOT_FOUND as a network timeout', async () => {
+        mockServer.getTransaction
+            .mockResolvedValueOnce({ status: 'NOT_FOUND' } as any)
+            .mockRejectedValueOnce(new Error('endpoint unavailable'));
+
+        const result = await poller.poll('TX_HASH', { interval: 0, maxAttempts: 2 });
+
+        expect(result.error?.code).toBe('TX_TIMEOUT');
+        expect(result.error?.details).toMatchObject({ lastRpcError: 'endpoint unavailable' });
+    });
+
+    it('resets the RPC failure streak when the endpoint responds', async () => {
+        mockServer.getTransaction
+            .mockRejectedValueOnce(new Error('temporary outage'))
+            .mockRejectedValueOnce(new Error('temporary outage'))
+            .mockResolvedValueOnce({ status: 'NOT_FOUND' } as any)
+            .mockRejectedValueOnce(new Error('temporary outage'))
+            .mockRejectedValueOnce(new Error('temporary outage'))
+            .mockResolvedValueOnce({ status: 'SUCCESS', ledger: 104 } as any);
+
+        const result = await poller.poll('TX_HASH', { interval: 0, maxAttempts: 6 });
+
+        expect(result.success).toBe(true);
+        expect(result.data?.ledger).toBe(104);
+        expect(mockServer.getTransaction).toHaveBeenCalledTimes(6);
     });
 
     it('continues polling on RPC errors', async () => {
