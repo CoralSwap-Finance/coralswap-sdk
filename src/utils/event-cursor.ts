@@ -201,7 +201,9 @@ export class EventCursor {
     };
     truncated?: boolean;
   }> {
-    await this.anchorIfNeeded();
+    // The anchor only supplies a default start; an explicit fromLedger needs no
+    // round-trip to the network tip.
+    if (params.fromLedger === undefined) await this.anchorIfNeeded();
 
     const limit = params.limit ?? this.defaultLimit;
     if (!Number.isInteger(limit) || limit < 1 || limit > MAX_EVENT_LIMIT) {
