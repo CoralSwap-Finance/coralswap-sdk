@@ -29,7 +29,6 @@ import { ValidationError, WebhookDisabledError, WebhookError } from '@/errors';
 import type { Logger } from '@/types/common';
 import type { rpc } from '@stellar/stellar-sdk';
 import { EventCursor } from '@/utils/event-cursor';
-import { EventParser } from '@/utils/events';
 import type { CoralSwapEvent } from '@/types/events';
 
 const MAX_ENDPOINTS = 20;
@@ -811,7 +810,6 @@ export class WebhookModule {
       (options.endLedger === undefined || ledger <= options.endLedger);
 
     // Parse raw events into strongly-typed CoralSwapEvent objects
-    const parser = new EventParser(options.contractIds ?? []);
     const parsedEvents: CoralSwapEvent[] = [];
 
     for (const rawEvent of rawEvents) {
