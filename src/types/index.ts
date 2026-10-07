@@ -18,3 +18,4 @@ export * from './portfolio';
 export * from './governance';
 export * from './dca';
 export * from './limit-orders';
+export * from './squid';
