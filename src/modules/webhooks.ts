@@ -6,6 +6,7 @@ import {
   WebhookDeliveryStatus,
   WebhookEndpointHealth,
   StoredWebhook,
+  Webhook,
   WebhookDeliveryResult,
   WebhookEnvelope,
   WebhookEventName,
@@ -14,6 +15,7 @@ import {
   WebhookHistoryQuery,
   WebhookOptions,
   WebhookPayload,
+  WebhookUpdate,
   WebhookVerifyOptions,
   WebhookVerifyResult,
   WEBHOOK_DEFAULTS,
@@ -25,7 +27,7 @@ import {
 } from '@/types/webhooks';
 import { ValidationError, WebhookDisabledError, WebhookError } from '@/errors';
 import type { Logger } from '@/types/common';
-import type { SorobanRpc } from '@stellar/stellar-sdk';
+import type { rpc } from '@stellar/stellar-sdk';
 import { EventCursor } from '@/utils/event-cursor';
 import { EventParser } from '@/utils/events';
 import type { CoralSwapEvent } from '@/types/events';
@@ -38,7 +40,7 @@ interface LoggerProvider {
 }
 
 interface SorobanRpcProvider {
-  server?: SorobanRpc.Server;
+  server?: rpc.Server;
 }
 
 export type WebhookModuleDeps = (LoggerProvider & SorobanRpcProvider) | undefined;
@@ -48,6 +50,9 @@ interface WebhookState {
   consecutiveFailures: number;
   disabled: boolean;
   disabledAt?: number;
+  /** Why the webhook is disabled: explicitly by the caller, or automatically. */
+  disabledReason?: 'manual' | 'auto';
+  lastDelivery?: number;
 }
 
 export class WebhookModule {
@@ -56,8 +61,9 @@ export class WebhookModule {
   private readonly healthCache: Map<string, WebhookEndpointHealth> = new Map();
   private readonly webhooks: Map<string, StoredWebhook> = new Map();
   private readonly webhookState: Map<string, WebhookState> = new Map();
+  private readonly payloads: Map<string, string> = new Map();
   private readonly logger?: Logger;
-  private readonly server?: SorobanRpc.Server;
+  private readonly server?: rpc.Server;
 
   constructor(deps: WebhookModuleDeps = undefined) {
     this.logger = deps?.logger;
@@ -118,6 +124,7 @@ export class WebhookModule {
     const deliveryId = `del_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const delivery: WebhookDelivery = { id: deliveryId, webhookId, alertId: (payload['alertId'] as string) ?? 'unknown', status: 'pending', sentAt: Math.floor(Date.now() / 1000), retryCount: 0 };
     this.deliveries.set(deliveryId, delivery);
+    this.payloads.set(deliveryId, body);
     this.recordDeliveryAttempt(webhookId, delivery);
     await this.sendHttpRequest(endpoint, body, delivery);
     return this.deliveries.get(deliveryId)!;
@@ -129,7 +136,7 @@ export class WebhookModule {
     if (delivery.status === 'success' || delivery.status === 'exhausted') throw new ValidationError(`Cannot retry delivery in status ${delivery.status}`);
     const endpoint = this.endpoints.get(delivery.webhookId);
     if (!endpoint) throw new ValidationError(`Webhook endpoint ${delivery.webhookId} not found`);
-    const body = JSON.stringify(this.loadPayload(deliveryId));
+    const body = this.loadPayload(deliveryId);
     await this.sendHttpRequest(endpoint, body, delivery);
     return this.deliveries.get(deliveryId)!;
   }
@@ -153,6 +160,24 @@ export class WebhookModule {
     return health;
   }
 
+  /**
+   * Register an HTTPS endpoint to receive CoralSwap event deliveries.
+   *
+   * Registration is local and synchronous with respect to the network: no
+   * request is made to `url`, so the returned webhook starts `verified: false`.
+   * Call {@link verifyWebhook} to run the handshake.
+   *
+   * @param url - Absolute `https://` endpoint. `http://` and every other
+   *   scheme are rejected with a {@link ValidationError}.
+   * @param events - Non-empty list of event names this endpoint subscribes
+   *   to. Used to filter deliveries (see {@link sendWebhook}) and to pick the
+   *   `X-Webhook-Event` header.
+   * @param secret - Optional shared secret; when present every delivery is
+   *   signed with HMAC-SHA256 in the {@link WEBHOOK_SIGNATURE_HEADER} header.
+   * @returns The generated webhook id.
+   * @throws {ValidationError} If the url is not a valid HTTPS URL, `events`
+   *   is empty or holds non-string/empty entries, or `secret` is empty.
+   */
   async registerWebhook(
     url: string,
     events: WebhookEventName[],
@@ -178,7 +203,7 @@ export class WebhookModule {
     }
 
     for (const event of events) {
-      if (typeof event !== 'string' || event.length === 0) {
+      if (typeof event !== 'string' || event.trim().length === 0) {
         throw new ValidationError(
           'webhook event names must be non-empty strings',
           { event },
@@ -197,9 +222,10 @@ export class WebhookModule {
     const stored: StoredWebhook = {
       id,
       url: parsed.toString(),
-      events: [...events],
+      events: normalizeEvents(events),
       ...(secret !== undefined ? { secret } : {}),
       createdAt: Date.now(),
+      verified: false,
     };
     this.webhooks.set(id, stored);
     this.webhookState.set(id, createInitialState());
@@ -209,11 +235,123 @@ export class WebhookModule {
       url: stored.url,
       events: stored.events,
       signed: secret !== undefined,
+      verified: false,
     });
 
     return id;
   }
 
+  /**
+   * Update the mutable parts of a registered webhook.
+   *
+   * Accepts `url`, `events` and/or `secret`; omitted fields are preserved, as
+   * are `id`, `createdAt` and the delivery counters. Validation mirrors
+   * {@link registerWebhook}, so an invalid update throws a
+   * {@link ValidationError} and leaves the stored webhook untouched.
+   *
+   * Changing the `url` points the webhook at a different endpoint, so:
+   * - `verified` is reset to `false` — the previous handshake proves nothing
+   *   about the new target — and the endpoint must be re-verified; and
+   * - the consecutive-failure counter is cleared and the webhook is
+   *   re-enabled, so a webhook auto-disabled because the old URL was dead
+   *   resumes delivering once the endpoint is fixed.
+   *
+   * @throws {WebhookError} If no webhook with `webhookId` exists.
+   * @throws {ValidationError} If any provided field is invalid.
+   */
+  async updateWebhook(webhookId: string, updates: WebhookUpdate): Promise<void> {
+    const existing = this.webhooks.get(webhookId);
+    if (!existing) {
+      throw new WebhookError(`webhook not found: ${webhookId}`, { webhookId });
+    }
+    if (updates === null || typeof updates !== 'object') {
+      throw new ValidationError('webhook updates must be an object', { webhookId });
+    }
+
+    const next: StoredWebhook = { ...existing, events: [...existing.events] };
+    const changed: string[] = [];
+
+    if (updates.url !== undefined) {
+      if (typeof updates.url !== 'string' || updates.url.trim().length === 0) {
+        throw new ValidationError('webhook url must not be empty', { url: updates.url });
+      }
+      const parsed = parseHttpsUrl(updates.url);
+      if (!parsed) {
+        throw new ValidationError(
+          'webhook url must be a valid HTTPS URL',
+          { url: updates.url },
+        );
+      }
+      next.url = parsed.toString();
+      changed.push('url');
+    }
+
+    if (updates.events !== undefined) {
+      if (!Array.isArray(updates.events) || updates.events.length === 0) {
+        throw new ValidationError(
+          'webhook events must be a non-empty array of strings',
+          { events: updates.events },
+        );
+      }
+      for (const event of updates.events) {
+        if (typeof event !== 'string' || event.trim().length === 0) {
+          throw new ValidationError(
+            'webhook event names must be non-empty strings',
+            { event },
+          );
+        }
+      }
+      next.events = normalizeEvents(updates.events);
+      changed.push('events');
+    }
+
+    if (updates.secret !== undefined) {
+      if (typeof updates.secret !== 'string' || updates.secret.length === 0) {
+        throw new ValidationError(
+          'webhook secret must be a non-empty string when provided',
+          { webhookId },
+        );
+      }
+      next.secret = updates.secret;
+      changed.push('secret');
+    }
+
+    const urlChanged = next.url !== existing.url;
+    if (urlChanged) {
+      next.verified = false;
+      this.resetFailureState(webhookId);
+      changed.push('verified');
+    }
+    next.updatedAt = Date.now();
+
+    this.webhooks.set(webhookId, next);
+
+    this.logger?.info('webhooks.updateWebhook: updated', {
+      webhookId,
+      changed,
+      verified: next.verified,
+    });
+  }
+
+  /**
+   * Deliver a payload to a registered webhook.
+   *
+   * The webhook only fires for events it subscribed to: pass the event type
+   * via `options.event` and the delivery is skipped — no HTTP request, no
+   * history entry — when that type is not in the webhook's `events`, returning
+   * a result with `filtered: true`. When `options.event` is omitted the first
+   * subscribed event is used, preserving the original behaviour for callers
+   * that never subscribed to more than one event type.
+   *
+   * Delivery is attempted up to 1 + `maxRetries` times with exponential
+   * backoff; auto-disable is applied by {@link recordOutcome} once
+   * {@link WEBHOOK_DISABLE_FAILURE_THRESHOLD} consecutive failures pile up.
+   *
+   * @throws {WebhookError} If the webhook id is unknown.
+   * @throws {WebhookDisabledError} If the webhook was disabled manually or
+   *   auto-disabled after too many consecutive failures.
+   * @throws {ValidationError} If `options.event` is not a non-empty string.
+   */
   async sendWebhook<T extends WebhookPayload = WebhookPayload>(
     webhookId: string,
     payload: T,
@@ -231,6 +369,27 @@ export class WebhookModule {
       });
     }
 
+    const requestedEvent = options.event;
+    let event = pickEvent(stored.events);
+    if (requestedEvent !== undefined) {
+      if (typeof requestedEvent !== 'string' || requestedEvent.trim().length === 0) {
+        throw new ValidationError('webhook event must be a non-empty string', {
+          webhookId,
+          event: requestedEvent,
+        });
+      }
+      const normalizedEvent = requestedEvent.trim();
+      if (!stored.events.includes(normalizedEvent)) {
+        this.logger?.debug('webhooks.sendWebhook: event filtered out', {
+          webhookId,
+          event: normalizedEvent,
+          subscribed: stored.events,
+        });
+        return { statusCode: 0, delivered: false, retryCount: 0, filtered: true };
+      }
+      event = normalizedEvent;
+    }
+
     const config = resolveOptions(options);
     const fetchImpl = options.fetchImpl ?? globalThis.fetch?.bind(globalThis);
     if (typeof fetchImpl !== 'function') {
@@ -239,7 +398,6 @@ export class WebhookModule {
       });
     }
 
-    const event = pickEvent(stored.events);
     const envelope: WebhookEnvelope<T> = {
       id: generateUUID(),
       timestamp: Date.now(),
@@ -339,6 +497,26 @@ export class WebhookModule {
     );
   }
 
+  /**
+   * Run the verification handshake against a registered webhook.
+   *
+   * Posts a small signed challenge payload
+   * (`{ type: 'webhook.verify', challenge, webhookId, timestamp }`) to the
+   * endpoint's URL and records the outcome on the webhook:
+   * - a 2xx response (200 by convention) marks it `verified: true`;
+   * - any other status — or a network error/timeout — marks it
+   *   `verified: false`, so a stale or misconfigured endpoint is never left
+   *   looking healthy.
+   *
+   * Handshake failures are reported through the returned result rather than
+   * thrown: `result.verified` is the boolean answer for "is this endpoint
+   * reachable?", while `statusCode`, `latencyMs`, `challenge` and `error`
+   * explain what happened. Only a missing webhook or a missing fetch
+   * implementation throws.
+   *
+   * @throws {WebhookError} If the webhook id is unknown or the runtime has no
+   *   `fetch` implementation (and no `fetchImpl` override was supplied).
+   */
   async verifyWebhook(
     webhookId: string,
     options: WebhookVerifyOptions = {},
@@ -382,6 +560,7 @@ export class WebhookModule {
       }, timeoutMs);
       const latencyMs = Date.now() - start;
       const verified = response.status >= 200 && response.status < 300;
+      this.setVerified(stored, verified);
       this.logger?.debug('webhooks.verifyWebhook: handshake completed', {
         webhookId,
         statusCode: response.status,
@@ -398,6 +577,7 @@ export class WebhookModule {
     } catch (err) {
       const latencyMs = Date.now() - start;
       const message = err instanceof Error ? err.message : String(err);
+      this.setVerified(stored, false);
       this.logger?.warn?.('webhooks.verifyWebhook: handshake failed', {
         webhookId,
         latencyMs,
@@ -448,22 +628,35 @@ export class WebhookModule {
     };
   }
 
+  /** Whether the endpoint passed its most recent verification handshake. */
+  isWebhookVerified(webhookId: string): boolean {
+    return this.webhooks.get(webhookId)?.verified === true;
+  }
+
   isWebhookDisabled(webhookId: string): boolean {
     const state = this.webhookState.get(webhookId);
     return state?.disabled === true;
   }
 
+  /**
+   * Disable a webhook so {@link sendWebhook} throws
+   * {@link WebhookDisabledError} instead of delivering. The disable is marked
+   * `manual`, which means a later {@link updateWebhook} that changes the url
+   * will not silently re-enable it (only auto-disables are reversed that way).
+   */
   disableWebhook(webhookId: string): boolean {
     const state = this.webhookState.get(webhookId);
     if (!state) return false;
     if (!state.disabled) {
       state.disabled = true;
+      state.disabledReason = 'manual';
       state.disabledAt = Date.now();
       this.logger?.info('webhooks.disableWebhook: webhook disabled', { webhookId });
     }
     return true;
   }
 
+  /** Re-enable a disabled webhook and clear its consecutive-failure counter. */
   enableWebhook(webhookId: string): boolean {
     const state = this.webhookState.get(webhookId);
     if (!state) return false;
@@ -471,6 +664,7 @@ export class WebhookModule {
       state.disabled = false;
       state.consecutiveFailures = 0;
       delete state.disabledAt;
+      delete state.disabledReason;
       this.logger?.info('webhooks.enableWebhook: webhook re-enabled', { webhookId });
     }
     return true;
@@ -489,21 +683,44 @@ export class WebhookModule {
     return existed;
   }
 
-  listWebhooks(): StoredWebhook[] {
-    return Array.from(this.webhooks.values()).map((w) => ({
-      ...w,
-      events: [...w.events],
-      ...(w.secret ? { secret: w.secret } : {}),
-    }));
+  /**
+   * List every registered webhook.
+   *
+   * Returns `Webhook` views — configuration plus `verified`, `failCount` and
+   * `lastDelivery` — so callers can build a dashboard from one call. The
+   * returned objects are defensive copies: mutating them does not affect the
+   * module's state. (`await` on the sync return value is a no-op, so the
+   * method reads naturally from async call sites.)
+   */
+  listWebhooks(): Webhook[] {
+    return Array.from(this.webhooks.values()).map((w) => this.toWebhook(w));
   }
 
-  getWebhook(webhookId: string): StoredWebhook | undefined {
-    return this.webhooks.get(webhookId);
+  /**
+   * List the webhooks subscribed to `event`, i.e. the endpoints a delivery of
+   * that event type would actually be attempted for
+   * (see {@link sendWebhook}). Webhooks disabled by consecutive failures are
+   * excluded, since a real dispatch would throw for them.
+   */
+  listWebhooksForEvent(event: WebhookEventName): Webhook[] {
+    if (typeof event !== 'string' || event.trim().length === 0) {
+      throw new ValidationError('webhook event must be a non-empty string', { event });
+    }
+    return this.listWebhooks().filter(
+      (w) => w.events.includes(event) && !this.isWebhookDisabled(w.id),
+    );
+  }
+
+  /** Read a single webhook as a `Webhook` view, or `undefined` if unknown. */
+  getWebhook(webhookId: string): Webhook | undefined {
+    const stored = this.webhooks.get(webhookId);
+    return stored ? this.toWebhook(stored) : undefined;
   }
 
   clear(): void {
     this.webhooks.clear();
     this.webhookState.clear();
+    this.payloads.clear();
     this.logger?.info('webhooks.clear: cleared all webhooks');
   }
 
@@ -548,7 +765,7 @@ export class WebhookModule {
     limit?: number;
   }): Promise<Array<{ event: CoralSwapEvent; webhookId: string; result: WebhookDeliveryResult }>> {
     if (!this.server) {
-      throw new WebhookError('pollEvents requires a SorobanRpc.Server instance (pass { server } to constructor)', {});
+      throw new WebhookError('pollEvents requires a rpc.Server instance (pass { server } to constructor)', {});
     }
 
     // Collect all unique event types subscribed by registered webhooks
@@ -564,29 +781,42 @@ export class WebhookModule {
       return [];
     }
 
-    // Build the EventCursor with properly-encoded topics
-    const cursor = new EventCursor({
-      topics: Array.from(subscribedEvents),
-      contractIds: options.contractIds,
-      startLedger: options.startLedger,
-      endLedger: options.endLedger,
-      pageLimit: options.limit ?? 200,
-    });
-
-    const request = cursor.buildRequest();
-    const response = await this.server.getEvents(request);
-
-    if (!response || !Array.isArray(response.events)) {
-      return [];
+    // One scan per subscribed event type: the shared EventCursor encodes the
+    // topics it is given as a single filter position, so passing several at
+    // once would only match events carrying all of them.
+    const cursor = new EventCursor(this.server);
+    const rawEvents: rpc.Api.EventResponse[] = [];
+    const seenIds = new Set<string>();
+    for (const topic of subscribedEvents) {
+      cursor.reset();
+      const page = await cursor.scan({
+        contractIds: options.contractIds,
+        topics: [topic],
+        fromLedger: options.startLedger,
+        toLedger: options.endLedger,
+        limit: options.limit ?? 200,
+      });
+      // Keep only this topic's events, once each: a scan per topic must not
+      // deliver the same event twice when the RPC returns overlapping pages.
+      for (const event of page) {
+        const id = `${event.ledger}:${event.id ?? event.txHash ?? ''}`;
+        if (this.extractEventType(event) !== topic || seenIds.has(id)) continue;
+        seenIds.add(id);
+        rawEvents.push(event);
+      }
     }
+    rawEvents.sort((a, b) => a.ledger - b.ledger);
+    const isWithinRange = (ledger: number) =>
+      ledger >= options.startLedger &&
+      (options.endLedger === undefined || ledger <= options.endLedger);
 
     // Parse raw events into strongly-typed CoralSwapEvent objects
     const parser = new EventParser(options.contractIds ?? []);
     const parsedEvents: CoralSwapEvent[] = [];
 
-    for (const rawEvent of response.events) {
-      // Enforce ledger range via EventCursor
-      if (!cursor.isWithinRange(rawEvent.ledger)) {
+    for (const rawEvent of rawEvents) {
+      // The cursor stops paging past toLedger but can return its last page whole.
+      if (!isWithinRange(rawEvent.ledger)) {
         continue;
       }
 
@@ -661,7 +891,7 @@ export class WebhookModule {
    * The event topic is typically the first element in the `topic` array,
    * which comes as an encoded ScVal. We decode it to get the event name.
    */
-  private extractEventType(rawEvent: SorobanRpc.Api.EventResponse): string | null {
+  private extractEventType(rawEvent: rpc.Api.EventResponse): string | null {
     if (!rawEvent.topic || rawEvent.topic.length === 0) {
       return null;
     }
@@ -731,10 +961,16 @@ export class WebhookModule {
         status: isSuccess ? 'success' : 'failed',
       });
 
-      if (!isSuccess && delivery.retryCount < 3) {
+      if (isSuccess) {
+        this.payloads.delete(delivery.id);
+        return;
+      }
+
+      if (delivery.retryCount < 3) {
         await this.scheduleRetry(delivery.id, delivery.retryCount + 1);
-      } else if (!isSuccess) {
+      } else {
         this.updateDeliveryStatus(delivery.id, 'exhausted');
+        this.payloads.delete(delivery.id);
       }
     } catch (err) {
       this.updateDeliveryStatus(delivery.id, 'failed', {
@@ -751,15 +987,19 @@ export class WebhookModule {
         await this.scheduleRetry(delivery.id, delivery.retryCount + 1);
       } else {
         this.updateDeliveryStatus(delivery.id, 'exhausted');
+        this.payloads.delete(delivery.id);
       }
     }
   }
 
   private async scheduleRetry(
-    _deliveryId: string,
-    _attempt: number,
+    deliveryId: string,
+    attempt: number,
   ): Promise<void> {
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    const backoffMs = Math.min(30_000, 1_000 * Math.pow(2, Math.max(0, attempt - 1)));
+    await sleep(backoffMs);
+    if (!this.deliveries.has(deliveryId)) return;
+    await this.retryDelivery(deliveryId);
   }
 
   private updateDeliveryStatus(
@@ -804,8 +1044,12 @@ export class WebhookModule {
     this.healthCache.set(webhookId, health);
   }
 
-  private loadPayload(_deliveryId: string): Record<string, unknown> {
-    return {};
+  private loadPayload(deliveryId: string): string {
+    const body = this.payloads.get(deliveryId);
+    if (body === undefined) {
+      throw new ValidationError(`Payload for delivery not found: ${deliveryId}`);
+    }
+    return body;
   }
 
   private requireState(webhookId: string): WebhookState {
@@ -814,6 +1058,50 @@ export class WebhookModule {
       throw new WebhookError(`webhook state missing: ${webhookId}`, { webhookId });
     }
     return state;
+  }
+
+  /** Build the public `Webhook` view (a copy) for a stored record. */
+  private toWebhook(stored: StoredWebhook): Webhook {
+    const state = this.webhookState.get(stored.id);
+    return {
+      ...stored,
+      events: [...stored.events],
+      failCount: state?.consecutiveFailures ?? 0,
+      ...(state?.lastDelivery !== undefined ? { lastDelivery: state.lastDelivery } : {}),
+    };
+  }
+
+  /**
+   * Persist the outcome of a verification handshake on the stored webhook.
+   * `stored` is the live record held by the module, so the flag is visible to
+   * {@link listWebhooks}/{@link getWebhook} without a re-read.
+   */
+  private setVerified(stored: StoredWebhook, verified: boolean): void {
+    if (stored.verified === verified) return;
+    stored.verified = verified;
+    this.logger?.info('webhooks.setVerified: verification state changed', {
+      webhookId: stored.id,
+      verified,
+    });
+  }
+
+  /**
+   * Clear the consecutive-failure counter after the webhook's target changed.
+   * Only auto-disables are reversed here: a manual {@link disableWebhook} is an
+   * explicit operator decision and must be undone explicitly too.
+   */
+  private resetFailureState(webhookId: string): void {
+    const state = this.webhookState.get(webhookId);
+    if (!state) return;
+    state.consecutiveFailures = 0;
+    if (state.disabled && state.disabledReason === 'auto') {
+      state.disabled = false;
+      delete state.disabledAt;
+      delete state.disabledReason;
+      this.logger?.info('webhooks.resetFailureState: re-enabled after endpoint change', {
+        webhookId,
+      });
+    }
   }
 
   private recordTerminal(state: WebhookState, entry: WebhookHistoryEntry): void {
@@ -825,6 +1113,7 @@ export class WebhookModule {
 
   private recordOutcome(state: WebhookState, entry: WebhookHistoryEntry): void {
     this.recordTerminal(state, entry);
+    state.lastDelivery = entry.timestamp;
     if (entry.outcome === 'success') {
       if (state.consecutiveFailures !== 0) {
         state.consecutiveFailures = 0;
@@ -843,6 +1132,7 @@ export class WebhookModule {
       !state.disabled
     ) {
       state.disabled = true;
+      state.disabledReason = 'auto';
       state.disabledAt = Date.now();
       this.logger?.warn?.('webhooks.sendWebhook: auto-disabled after consecutive failures', {
         consecutiveFailures: state.consecutiveFailures,
@@ -941,12 +1231,12 @@ function classifyOutcome(outcome: DeliveryOutcome): OutcomeClassification {
   return { outcome: 'client', errorMessage: `client returned ${code}` };
 }
 
-function computeBackoff(attempt: number, config: Required<Omit<WebhookOptions, 'fetchImpl'>>): number {
+function computeBackoff(attempt: number, config: Required<Omit<WebhookOptions, 'fetchImpl' | 'event'>>): number {
   const raw = config.baseDelayMs * Math.pow(config.backoffMultiplier, attempt);
   return Math.min(config.maxDelayMs, raw);
 }
 
-interface ResolvedOptions extends Required<Omit<WebhookOptions, 'fetchImpl'>> {
+interface ResolvedOptions extends Required<Omit<WebhookOptions, 'fetchImpl' | 'event'>> {
   fetchImpl?: typeof fetch;
 }
 
@@ -974,6 +1264,23 @@ function parseHttpsUrl(url: string): URL | null {
 
 function pickEvent(events: WebhookEventName[]): WebhookEventName | undefined {
   return events.length > 0 ? events[0] : undefined;
+}
+
+/**
+ * Trim event names and drop duplicates while preserving subscription order:
+ * `[' il ', 'price', 'il']` becomes `['il', 'price']`. Called only after every
+ * entry has been validated as a non-empty string.
+ */
+function normalizeEvents(events: WebhookEventName[]): WebhookEventName[] {
+  const seen = new Set<string>();
+  const normalized: WebhookEventName[] = [];
+  for (const event of events) {
+    const name = event.trim();
+    if (seen.has(name)) continue;
+    seen.add(name);
+    normalized.push(name);
+  }
+  return normalized;
 }
 
 function buildSignature(secret: string, body: string): string {

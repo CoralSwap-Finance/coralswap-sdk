@@ -38,6 +38,19 @@ export {
 export type { SimulationResult, SimulationResourceEstimate } from './simulation';
 
 export {
+  decodeI128,
+  decodeI32,
+  decodeI64,
+  decodeU32,
+  decodeU64,
+  decodeBool,
+  decodeAddress,
+  decodeString,
+  getMapValue,
+  mapValue,
+} from "./scval";
+
+export {
   withRetry,
   isRetryable,
   sleep,
@@ -57,8 +70,21 @@ export {
   validateNonNegativeAmount,
   validateSlippage,
   validateDistinctTokens,
+  validateDateRange,
+  validateLimit,
+  MAX_LIMIT,
   isValidPath,
 } from './validation';
+
+export {
+  getRpcUrlScheme,
+  isSecureRpcUrl,
+  isCleartextRpcAllowed,
+  validateRpcUrls,
+  SECURE_RPC_SCHEMES,
+  ALLOWED_RPC_SCHEMES,
+} from './rpc-url';
+export type { RpcUrlScheme } from './rpc-url';
 
 export {
   batchRequest,
@@ -70,13 +96,13 @@ export {
 export type { BatchRequestOptions, BatchResult } from './batch-request';
 
 export { parseChangelog } from './changelog';
-export { RateLimiter } from './rate-limiter';
+export { RateLimiter, RateLimiterDestroyedError } from './rate-limiter';
 export type { RateLimiterOptions } from './rate-limiter';
-export { estimateGas } from './gas';
+export { estimateGas, parseStroops, formatStroopsAsXLM } from './gas';
 export type { SimulateFn } from './gas';
 
-export { waitNextLedger } from './ledger';
-export type { WaitNextLedgerOptions } from './ledger';
+export { waitNextLedger, ledgerToApproxTime, LEDGER_CLOSE_INTERVAL_SECONDS } from './ledger';
+export type { WaitNextLedgerOptions, LedgerHead } from './ledger';
 
 export {
   EventParser,
@@ -86,10 +112,10 @@ export {
 } from './events';
 export type { DecodeEventsOptions } from './events';
 
-export {
-  EventCursor,
-} from './event-cursor';
-export type { EventPage, EventCursorOptions } from './event-cursor';
+export { EventCursor, TypedEventCursor, decodeEventTopic, MIN_START_LEDGER, MAX_EVENT_LIMIT } from './event-cursor';
+export type { EventCursorOptions, TypedEventScanParams, PageInfo, ScanResult } from './event-cursor';
+export { ConnectionPool } from './connection-pool';
+
 
 export {
   getVotingPower,
@@ -101,3 +127,52 @@ export type { VotingPower, VotingPowerQueryProvider, VotingPowerQueryResult } fr
 export { checkCompatibility } from './migration';
 export type { BreakingChange, CompatibilityReport } from './migration';
 export { suppressDeprecationWarnings, deprecated } from './deprecation-warnings';
+
+export { decodeI128 as decodeI128Strict } from './numeric';
+
+export {
+  TOKEN_DECIMALS,
+  PRICE_SCALE,
+  BPS_DENOMINATOR,
+  CONVERSION_SCALE,
+  SCALE,
+} from './scale-constants';
+
+export {
+  DecimalsResolver,
+  DEFAULT_DECIMALS_CACHE_CAPACITY,
+  TTL_DISABLED,
+} from './decimals-resolver';
+export type { DecimalsResolverOptions } from './decimals-resolver';
+
+/**
+ * Idempotent-resubmission helpers for state-changing on-chain calls.
+ *
+ * `submitTransaction()` (and similar) can fail with a retryable error
+ * (timeout, connection reset, RPC 503) that says nothing about whether the
+ * transaction actually landed. Before rebuilding and resubmitting on such a
+ * failure, use `getTransactionStatus()` to check the real on-chain outcome
+ * and `shouldRetrySubmission()` to decide whether it's safe to retry.
+ *
+ * @example
+ * const result = await client.submitTransaction([op]);
+ * if (!result.success && result.txHash) {
+ *   const status = await getTransactionStatus(client.server, result.txHash);
+ *   const { shouldRetry } = shouldRetrySubmission(status);
+ *   if (!shouldRetry && status.status === 'SUCCESS') {
+ *     // Already landed -- use status.ledger / status.result, don't resubmit.
+ *   }
+ * }
+ */
+export {
+  getTransactionStatus,
+  shouldRetrySubmission,
+} from './idempotent-resubmission';
+export type { TransactionStatus, RetryDecision } from './idempotent-resubmission';
+
+/**
+ * On-chain token decimals (`decimals()` via SEP-41 metadata), cached per
+ * address. Any math that converts stroops into human units must divide by
+ * `10 ** decimals` from here rather than by a hardcoded `1e7`.
+ */
+export { getTokenDecimals, clearTokenDecimalsCache, FALLBACK_TOKEN_DECIMALS } from './token-decimals';

@@ -1,237 +1,192 @@
-import { EventCursor } from '../src/utils/event-cursor';
-import type { SorobanRpc } from '@stellar/stellar-sdk';
+import { xdr } from "@stellar/stellar-sdk";
+import EventCursor, {
+  decodeEventTopic,
+  MIN_START_LEDGER,
+  MAX_EVENT_LIMIT,
+} from "../src/utils/event-cursor";
+import { ValidationError } from "../src/errors";
 
-describe('EventCursor', () => {
-  describe('constructor validation', () => {
-    it('throws when topics array is empty', () => {
-      expect(() => new EventCursor({ topics: [] })).toThrow(TypeError);
-      expect(() => new EventCursor({ topics: [] })).toThrow('topics must be a non-empty array');
-    });
+describe("EventCursor", () => {
+  it("anchors initial cursor via getLatestLedger and uses defaultWindow", async () => {
+    const server: any = {
+      getLatestLedger: jest.fn().mockResolvedValue({ sequence: 2000 }),
+      getEvents: jest.fn().mockResolvedValue({ events: [], latestLedger: 2000 }),
+    };
 
-    it('throws when topics contains empty strings', () => {
-      expect(() => new EventCursor({ topics: ['swap', ''] })).toThrow(TypeError);
-      expect(() => new EventCursor({ topics: ['swap', ''] })).toThrow('non-empty string');
-    });
+    const cursor = new EventCursor(server);
+    await cursor.scan();
 
-    it('throws when topics contains non-strings', () => {
-      expect(() => new EventCursor({ topics: ['swap', null as any] })).toThrow(TypeError);
-    });
-
-    it('throws when endLedger < startLedger', () => {
-      expect(() =>
-        new EventCursor({ topics: ['swap'], startLedger: 1000, endLedger: 500 }),
-      ).toThrow(TypeError);
-      expect(() =>
-        new EventCursor({ topics: ['swap'], startLedger: 1000, endLedger: 500 }),
-      ).toThrow('endLedger (500) must be >= startLedger (1000)');
-    });
-
-    it('accepts valid configuration with defaults', () => {
-      const cursor = new EventCursor({ topics: ['swap'] });
-      expect(cursor.start).toBe(0);
-      expect(cursor.end).toBeUndefined();
-      expect(cursor.limit).toBe(200);
-    });
-
-    it('accepts valid configuration with explicit options', () => {
-      const cursor = new EventCursor({
-        topics: ['swap', 'add_liquidity'],
-        contractIds: ['CDLZFC...'],
-        startLedger: 1000,
-        endLedger: 2000,
-        pageLimit: 100,
-      });
-      expect(cursor.start).toBe(1000);
-      expect(cursor.end).toBe(2000);
-      expect(cursor.limit).toBe(100);
-    });
+    // anchored to 2000 - 1000
+    expect(server.getLatestLedger).toHaveBeenCalled();
+    expect(server.getEvents).toHaveBeenCalled();
+    const req = server.getEvents.mock.calls[0][0];
+    expect(req.startLedger).toBe(1000);
   });
 
-  describe('buildRequest()', () => {
-    it('builds a GetEventsRequest with correct structure', () => {
-      const cursor = new EventCursor({
-        topics: ['swap'],
-        contractIds: ['PAIR_A', 'PAIR_B'],
-        startLedger: 1000,
-        pageLimit: 50,
-      });
+  it("encodes topic filters as base64 XDR ScVal, not raw strings", async () => {
+    let captured: any = null;
+    const server: any = {
+      getLatestLedger: jest.fn().mockResolvedValue({ sequence: 2000 }),
+      getEvents: jest.fn().mockImplementation(async (req: any) => {
+        captured = req;
+        return { events: [], latestLedger: 2000 };
+      }),
+    };
 
-      const request = cursor.buildRequest();
+    const cursor = new EventCursor(server);
+    await cursor.scan({ topics: ["swap"] });
 
-      expect(request).toMatchObject<SorobanRpc.Server.GetEventsRequest>({
-        startLedger: 1000,
-        filters: [
-          {
-            type: 'contract',
-            contractIds: ['PAIR_A', 'PAIR_B'],
-            topics: [['swap']],
-          },
-        ],
-        limit: 50,
-      });
-    });
-
-    it('builds request with multiple topics', () => {
-      const cursor = new EventCursor({
-        topics: ['swap', 'add_liquidity', 'remove_liquidity'],
-        startLedger: 500,
-      });
-
-      const request = cursor.buildRequest();
-
-      expect(request.filters[0].topics).toEqual([['swap', 'add_liquidity', 'remove_liquidity']]);
-    });
-
-    it('allows startLedger override', () => {
-      const cursor = new EventCursor({
-        topics: ['swap'],
-        startLedger: 1000,
-      });
-
-      const request = cursor.buildRequest(1500);
-      expect(request.startLedger).toBe(1500);
-    });
-
-    it('uses empty contractIds when not provided', () => {
-      const cursor = new EventCursor({ topics: ['swap'] });
-      const request = cursor.buildRequest();
-      expect(request.filters[0].contractIds).toEqual([]);
-    });
+    expect(captured).not.toBeNull();
+    const topicEntry = captured.filters[0].topics[0][0];
+    const expected = xdr.ScVal.scvSymbol("swap").toXdr("base64");
+    expect(topicEntry).toBe(expected);
+    expect(topicEntry).not.toBe("swap");
   });
 
-  describe('isWithinRange()', () => {
-    it('returns true for ledger >= startLedger when no endLedger', () => {
-      const cursor = new EventCursor({ topics: ['swap'], startLedger: 1000 });
-      expect(cursor.isWithinRange(1000)).toBe(true);
-      expect(cursor.isWithinRange(1001)).toBe(true);
-      expect(cursor.isWithinRange(10000)).toBe(true);
-    });
+  it("paginates when responses are full and aggregates results", async () => {
+    const eventsPage1 = [
+      { ledger: 1, txHash: 'a' },
+      { ledger: 2, txHash: 'b' },
+      { ledger: 3, txHash: 'c' },
+    ];
+    const eventsPage2 = [
+      { ledger: 4, txHash: 'd' },
+      { ledger: 5, txHash: 'e' },
+    ];
 
-    it('returns false for ledger < startLedger', () => {
-      const cursor = new EventCursor({ topics: ['swap'], startLedger: 1000 });
-      expect(cursor.isWithinRange(999)).toBe(false);
-      expect(cursor.isWithinRange(0)).toBe(false);
-    });
+    let call = 0;
+    const server: any = {
+      getLatestLedger: jest.fn().mockResolvedValue({ sequence: 500 }),
+      getEvents: jest.fn().mockImplementation(async (req: any) => {
+        call += 1;
+        if (call === 1) return { events: eventsPage1, latestLedger: 5 };
+        return { events: eventsPage2, latestLedger: 5 };
+      }),
+    };
 
-    it('returns true for ledger within [startLedger, endLedger]', () => {
-      const cursor = new EventCursor({
-        topics: ['swap'],
-        startLedger: 1000,
-        endLedger: 2000,
-      });
-      expect(cursor.isWithinRange(1000)).toBe(true);
-      expect(cursor.isWithinRange(1500)).toBe(true);
-      expect(cursor.isWithinRange(2000)).toBe(true);
-    });
+    const cursor = new EventCursor(server);
+    const all = await cursor.scan({ fromLedger: 1, limit: 3 });
 
-    it('returns false for ledger > endLedger', () => {
-      const cursor = new EventCursor({
-        topics: ['swap'],
-        startLedger: 1000,
-        endLedger: 2000,
-      });
-      expect(cursor.isWithinRange(2001)).toBe(false);
-      expect(cursor.isWithinRange(10000)).toBe(false);
-    });
-
-    it('returns false for ledger < startLedger when endLedger is set', () => {
-      const cursor = new EventCursor({
-        topics: ['swap'],
-        startLedger: 1000,
-        endLedger: 2000,
-      });
-      expect(cursor.isWithinRange(999)).toBe(false);
-    });
+    expect(server.getEvents).toHaveBeenCalledTimes(2);
+    expect(all.map((e: any) => e.txHash)).toEqual(['a','b','c','d','e']);
   });
 
-  describe('isPastEnd()', () => {
-    it('returns false when no endLedger is configured', () => {
-      const cursor = new EventCursor({ topics: ['swap'], startLedger: 1000 });
-      expect(cursor.isPastEnd(1000)).toBe(false);
-      expect(cursor.isPastEnd(10000)).toBe(false);
-    });
+  it("exposes pageInfo metadata and a truncated flag when a page hits the cap", async () => {
+    const eventsPage1 = [
+      { ledger: 1, txHash: 'a' },
+      { ledger: 2, txHash: 'b' },
+      { ledger: 3, txHash: 'c' },
+    ];
 
-    it('returns false for ledger <= endLedger', () => {
-      const cursor = new EventCursor({
-        topics: ['swap'],
-        startLedger: 1000,
-        endLedger: 2000,
-      });
-      expect(cursor.isPastEnd(1000)).toBe(false);
-      expect(cursor.isPastEnd(1999)).toBe(false);
-      expect(cursor.isPastEnd(2000)).toBe(false);
-    });
-
-    it('returns true for ledger > endLedger', () => {
-      const cursor = new EventCursor({
-        topics: ['swap'],
-        startLedger: 1000,
-        endLedger: 2000,
-      });
-      expect(cursor.isPastEnd(2001)).toBe(true);
-      expect(cursor.isPastEnd(10000)).toBe(true);
-    });
-  });
-
-  describe('accessors', () => {
-    it('exposes start, end, and limit via getters', () => {
-      const cursor = new EventCursor({
-        topics: ['swap'],
-        startLedger: 1000,
-        endLedger: 2000,
-        pageLimit: 150,
-      });
-
-      expect(cursor.start).toBe(1000);
-      expect(cursor.end).toBe(2000);
-      expect(cursor.limit).toBe(150);
-    });
-
-    it('returns undefined for end when not configured', () => {
-      const cursor = new EventCursor({ topics: ['swap'], startLedger: 1000 });
-      expect(cursor.end).toBeUndefined();
-    });
-  });
-
-  describe('usage example', () => {
-    it('demonstrates typical event-scanning loop pattern', () => {
-      const cursor = new EventCursor({
-        topics: ['swap'],
-        contractIds: ['PAIR_ADDRESS'],
-        startLedger: 1000,
-        endLedger: 2000,
-        pageLimit: 100,
-      });
-
-      // Build the request
-      const request = cursor.buildRequest();
-      expect(request.startLedger).toBe(1000);
-      expect(request.limit).toBe(100);
-
-      // Simulate filtering events returned by the RPC
-      const mockEvents = [
-        { ledger: 999 },   // before range
-        { ledger: 1000 },  // in range
-        { ledger: 1500 },  // in range
-        { ledger: 2000 },  // in range
-        { ledger: 2001 },  // past end
-      ];
-
-      const filtered = mockEvents.filter((ev) => cursor.isWithinRange(ev.ledger));
-      expect(filtered).toHaveLength(3);
-      expect(filtered.map((ev) => ev.ledger)).toEqual([1000, 1500, 2000]);
-
-      // Demonstrate early-exit optimization
-      const inRange: number[] = [];
-      for (const ev of mockEvents) {
-        if (cursor.isPastEnd(ev.ledger)) {
-          break; // stop scanning once we're past the end
+    const server: any = {
+      getLatestLedger: jest.fn().mockResolvedValue({ sequence: 500 }),
+      getEvents: jest.fn().mockImplementation(async (req: any) => {
+        if (req.startLedger === 1) {
+          return {
+            events: eventsPage1,
+            latestLedger: 3,
+            cursor: 'next-page',
+          };
         }
-        if (cursor.isWithinRange(ev.ledger)) {
-          inRange.push(ev.ledger);
-        }
-      }
-      expect(inRange).toEqual([1000, 1500, 2000]);
+        return { events: [], latestLedger: 3, cursor: 'final-page' };
+      }),
+    };
+
+    const cursor = new EventCursor(server);
+    const all = await cursor.scan({ fromLedger: 1, limit: 3 });
+
+    expect(all.truncated).toBe(true);
+    expect(all.pageInfo).toMatchObject({
+      startLedger: 1,
+      endLedger: 3,
+      limit: 3,
+      hasMore: true,
+      nextCursor: 'next-page',
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // limit validation
+  // ---------------------------------------------------------------------------
+  describe("limit validation", () => {
+    let server: any;
+    beforeEach(() => {
+      server = {
+        getLatestLedger: jest.fn().mockResolvedValue({ sequence: 2000 }),
+        getEvents: jest.fn().mockResolvedValue({ events: [], latestLedger: 2000 }),
+      };
+    });
+
+    it.each([0, -1, -100])("rejects limit=%i (non-positive)", async (bad) => {
+      const cursor = new EventCursor(server);
+      await expect(cursor.scan({ limit: bad })).rejects.toThrow(ValidationError);
+    });
+
+    it("rejects a decimal limit", async () => {
+      const cursor = new EventCursor(server);
+      await expect(cursor.scan({ limit: 1.5 })).rejects.toThrow(ValidationError);
+    });
+
+    it("rejects a limit above MAX_EVENT_LIMIT", async () => {
+      const cursor = new EventCursor(server);
+      await expect(cursor.scan({ limit: MAX_EVENT_LIMIT + 1 })).rejects.toThrow(ValidationError);
+    });
+
+    it("accepts limit=1 and limit=MAX_EVENT_LIMIT without throwing", async () => {
+      const cursor = new EventCursor(server);
+      await expect(cursor.scan({ limit: 1 })).resolves.not.toThrow();
+      cursor.reset();
+      await expect(cursor.scan({ limit: MAX_EVENT_LIMIT })).resolves.not.toThrow();
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Ledger anchoring floor (#437)
+  // ---------------------------------------------------------------------------
+  it("clamps the anchored cursor to ledger 1, never 0", async () => {
+    const server: any = {
+      // Chain head is younger than the default 1000-ledger window, so
+      // `sequence - defaultWindow` is negative.
+      getLatestLedger: jest.fn().mockResolvedValue({ sequence: 400 }),
+      getEvents: jest.fn().mockResolvedValue({ events: [], latestLedger: 400 }),
+    };
+
+    const cursor = new EventCursor(server);
+    await cursor.scan();
+
+    const req = server.getEvents.mock.calls[0][0];
+    expect(req.startLedger).toBe(MIN_START_LEDGER);
+    expect(req.startLedger).toBeGreaterThan(0);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Response topic decoding (#437)
+  // ---------------------------------------------------------------------------
+  describe("decodeEventTopic", () => {
+    it("decodes a parsed ScVal symbol topic", () => {
+      expect(decodeEventTopic(xdr.ScVal.scvSymbol("swap"))).toBe("swap");
+    });
+
+    it("decodes a base64 XDR topic as returned over raw JSON-RPC", () => {
+      const encoded = xdr.ScVal.scvSymbol("add_liquidity").toXdr("base64");
+      expect(decodeEventTopic(encoded)).toBe("add_liquidity");
+    });
+
+    it("decodes scvString topics as well as symbols", () => {
+      expect(decodeEventTopic(xdr.ScVal.scvString("transfer"))).toBe("transfer");
+    });
+
+    // The whole point of the audit: a fixture that hands back a bare string
+    // must not compare equal to the symbol it is imitating, otherwise mocks
+    // silently hide the raw-string topic bug in the module under test.
+    it("refuses a bare unencoded string", () => {
+      expect(decodeEventTopic("swap")).toBe("");
+    });
+
+    it("returns an empty string for missing or non-topic values", () => {
+      expect(decodeEventTopic(undefined)).toBe("");
+      expect(decodeEventTopic(null)).toBe("");
+      expect(decodeEventTopic(xdr.ScVal.scvU32(7))).toBe("");
     });
   });
 });

@@ -5,29 +5,40 @@
 
 import { WebhookModule } from '../src/modules/webhooks';
 import { WebhookError } from '../src/errors';
-import type { SorobanRpc } from '@stellar/stellar-sdk';
+import { xdr, type rpc } from '@stellar/stellar-sdk';
 
 const VALID_URL = 'https://hooks.example.com/coral';
 const OTHER_URL = 'https://other.example.com/hook';
 
-// Minimal mock of SorobanRpc.Server for event polling tests
+// Minimal mock of rpc.Server for event polling tests
 function makeServer(
-  events: Partial<SorobanRpc.Api.EventResponse>[],
-): SorobanRpc.Server {
+  events: Partial<rpc.Api.EventResponse>[],
+): rpc.Server {
   return {
     getEvents: jest.fn().mockResolvedValue({
       events,
       latestLedger: 2000,
     }),
-  } as unknown as SorobanRpc.Server;
+    // EventCursor anchors on the network tip before its first page.
+    getLatestLedger: jest.fn().mockResolvedValue({ sequence: 2000 }),
+  } as unknown as rpc.Server;
 }
+
+/** Topics sent across every getEvents call, as base64 XDR symbols. */
+function requestedTopics(server: rpc.Server): string[] {
+  return (server.getEvents as jest.Mock).mock.calls.flatMap(
+    ([request]) => (request.filters[0].topics?.[0] ?? []) as string[],
+  );
+}
+
+const sym = (name: string) => xdr.ScVal.scvSymbol(name).toXDR('base64');
 
 function makeEvent(opts: {
   topicString?: string;
   ledger?: number;
   contractId?: string;
   id?: string;
-}): Partial<SorobanRpc.Api.EventResponse> {
+}): Partial<rpc.Api.EventResponse> {
   return {
     topic: [opts.topicString ?? 'swap'] as any,
     contractId: opts.contractId ?? 'PAIR_ABC' as any,
@@ -107,10 +118,9 @@ describe('WebhookModule.pollEvents()', () => {
       await webhooks.registerWebhook(VALID_URL, ['swap', 'add_liquidity']);
       await webhooks.pollEvents({ startLedger: 1000 });
 
-      const request = (server.getEvents as jest.Mock).mock.calls[0][0];
-      const topics = request.filters[0].topics[0] as string[];
-      expect(topics).toContain('swap');
-      expect(topics).toContain('add_liquidity');
+      const topics = requestedTopics(server);
+      expect(topics).toContain(sym('swap'));
+      expect(topics).toContain(sym('add_liquidity'));
     });
 
     it('unions event types across multiple registered webhooks into topics', async () => {
@@ -120,11 +130,10 @@ describe('WebhookModule.pollEvents()', () => {
       await webhooks.registerWebhook(OTHER_URL, ['add_liquidity', 'remove_liquidity']);
       await webhooks.pollEvents({ startLedger: 1000 });
 
-      const request = (server.getEvents as jest.Mock).mock.calls[0][0];
-      const topics = request.filters[0].topics[0] as string[];
-      expect(topics).toContain('swap');
-      expect(topics).toContain('add_liquidity');
-      expect(topics).toContain('remove_liquidity');
+      const topics = requestedTopics(server);
+      expect(topics).toContain(sym('swap'));
+      expect(topics).toContain(sym('add_liquidity'));
+      expect(topics).toContain(sym('remove_liquidity'));
     });
 
     it('uses the configured limit via options.limit', async () => {
@@ -384,7 +393,8 @@ describe('WebhookModule.pollEvents()', () => {
     it('returns empty array when server returns null/undefined events', async () => {
       const server = {
         getEvents: jest.fn().mockResolvedValue(null),
-      } as unknown as SorobanRpc.Server;
+        getLatestLedger: jest.fn().mockResolvedValue({ sequence: 2000 }),
+      } as unknown as rpc.Server;
       const webhooks = new WebhookModule({ server });
       await webhooks.registerWebhook(VALID_URL, ['swap']);
       const results = await webhooks.pollEvents({ startLedger: 1000 });

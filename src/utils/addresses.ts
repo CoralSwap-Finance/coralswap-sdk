@@ -278,5 +278,5 @@ export function getPairAddress(
     }),
   );
 
-  return StrKey.encodeContract(hash(preimage.toXDR()));
+  return StrKey.encodeContract(hash(preimage.toXdr()));
 }

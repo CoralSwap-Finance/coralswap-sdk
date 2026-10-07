@@ -5,7 +5,7 @@
  * assertions stay deterministic and fast.
  */
 
-import { RateLimiter } from '../src/utils/rate-limiter';
+import { RateLimiter, RateLimiterDestroyedError } from '../src/utils/rate-limiter';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -153,6 +153,62 @@ describe('RateLimiter', () => {
       expect(limiter.getRemainingCapacity()).toBe(3);
       limiter.destroy();
     });
+
+    it('accrues sub-interval elapsed time and pays it out on the next boundary (no token loss)', async () => {
+      // 10 rps → one token per 100ms. Drain, then advance 150ms: only one
+      // full interval has elapsed, so exactly 1 token is minted and 50ms of
+      // credit is carried over via lastRefillTime.
+      const limiter = new RateLimiter({ maxRequestsPerSecond: 10, maxBurst: 5 });
+      for (let i = 0; i < 5; i++) limiter.tryAcquire();
+      expect(limiter.getRemainingCapacity()).toBe(0);
+
+      await tick(150);
+      expect(limiter.getRemainingCapacity()).toBe(1);
+
+      // Next boundary only needs the remaining 50ms of carried-over credit.
+      await tick(50);
+      expect(limiter.getRemainingCapacity()).toBe(2);
+
+      limiter.destroy();
+    });
+
+    it('rounds refill down: sub-threshold elapsed time mints no token and no credit is lost', async () => {
+      // 5 rps → one token per 200ms. 199ms is just under the boundary.
+      const limiter = new RateLimiter({ maxRequestsPerSecond: 5, maxBurst: 2 });
+      limiter.tryAcquire();
+      limiter.tryAcquire();
+      expect(limiter.getRemainingCapacity()).toBe(0);
+
+      await tick(199);
+      expect(limiter.getRemainingCapacity()).toBe(0);
+
+      // The 199ms of credit was preserved — a further 1ms crosses the boundary.
+      await tick(1);
+      expect(limiter.getRemainingCapacity()).toBe(1);
+
+      limiter.destroy();
+    });
+
+    it('caps refill at maxBurst without distorting the refill clock', async () => {
+      // 10 rps, burst 3. Waiting 1s earns 10 tokens but only 3 fit; the refill
+      // clock must still advance by the full token-earning time so the next
+      // interval starts from a consistent boundary.
+      const limiter = new RateLimiter({ maxRequestsPerSecond: 10, maxBurst: 3 });
+      for (let i = 0; i < 3; i++) limiter.tryAcquire();
+
+      await tick(1000);
+      expect(limiter.getRemainingCapacity()).toBe(3); // capped, not 10
+
+      // Immediately after the cap, draining and waiting one interval yields
+      // exactly one more token — the clock did not double-count the cap.
+      for (let i = 0; i < 3; i++) limiter.tryAcquire();
+      expect(limiter.getRemainingCapacity()).toBe(0);
+
+      await tick(100);
+      expect(limiter.getRemainingCapacity()).toBe(1);
+
+      limiter.destroy();
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -204,13 +260,19 @@ describe('RateLimiter', () => {
       limiter.tryAcquire();
 
       const resolved = jest.fn();
-      limiter.acquire().then(resolved);
+      const rejected = jest.fn();
+      limiter.acquire().then(resolved, rejected);
       await Promise.resolve();
 
       expect(resolved).not.toHaveBeenCalled();
       expect(limiter.queueLength).toBe(1);
 
       limiter.destroy();
+      await Promise.resolve();
+
+      // Destroy rejects the queued waiter instead of granting it a token.
+      expect(resolved).not.toHaveBeenCalled();
+      expect(rejected).toHaveBeenCalledTimes(1);
     });
 
     it('resolves queued requests in FIFO order after refill', async () => {
@@ -275,20 +337,55 @@ describe('RateLimiter', () => {
   // -------------------------------------------------------------------------
 
   describe('destroy()', () => {
-    it('resolves pending requests when destroyed', async () => {
+    it('rejects pending requests with RateLimiterDestroyedError when destroyed', async () => {
       const limiter = new RateLimiter({ maxRequestsPerSecond: 10, maxBurst: 1 });
       limiter.tryAcquire();
 
       const resolved = jest.fn();
-      limiter.acquire().then(resolved);
+      const rejected = jest.fn();
+      limiter.acquire().then(resolved, rejected);
       await Promise.resolve();
 
       expect(resolved).not.toHaveBeenCalled();
+      expect(limiter.queueLength).toBe(1);
 
       limiter.destroy();
       await Promise.resolve();
 
-      expect(resolved).toHaveBeenCalledTimes(1);
+      // Teardown must NOT gift tokens: the waiter is rejected, not resolved.
+      expect(resolved).not.toHaveBeenCalled();
+      expect(rejected).toHaveBeenCalledTimes(1);
+      expect(rejected.mock.calls[0][0]).toBeInstanceOf(RateLimiterDestroyedError);
+    });
+
+    it('rejects every queued waiter in FIFO order when destroyed', async () => {
+      const limiter = new RateLimiter({ maxRequestsPerSecond: 10, maxBurst: 1 });
+      limiter.tryAcquire();
+
+      const order: string[] = [];
+      const settled: Promise<void>[] = [
+        limiter.acquire().then(
+          () => order.push('a-resolved'),
+          () => order.push('a-rejected'),
+        ),
+        limiter.acquire().then(
+          () => order.push('b-resolved'),
+          () => order.push('b-rejected'),
+        ),
+        limiter.acquire().then(
+          () => order.push('c-resolved'),
+          () => order.push('c-rejected'),
+        ),
+      ];
+      await Promise.resolve();
+      expect(limiter.queueLength).toBe(3);
+
+      limiter.destroy();
+      await Promise.all(settled);
+
+      // All rejected (no burst), and no waiter was silently granted a token.
+      expect(order).toEqual(['a-rejected', 'b-rejected', 'c-rejected']);
+      expect(limiter.getRemainingCapacity()).toBe(0);
     });
 
     it('stops the timer so no more tokens are generated', async () => {
