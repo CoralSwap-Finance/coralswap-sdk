@@ -516,7 +516,7 @@ async function main(): Promise<void> {
     } else {
       console.log('  ⚠  Pair not found on-chain — using synthetic pair address for the demo.');
     }
-  } catch (err) {
+  } catch {
     console.log('  ⚠  RPC unavailable — running the demo entirely against synthetic data.');
   }
 

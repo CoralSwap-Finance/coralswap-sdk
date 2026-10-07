@@ -1,5 +1,7 @@
-import { SorobanRpc } from "@stellar/stellar-sdk";
 import { CoralSwapClient } from "@/client";
+import { ValidationError } from "@/errors";
+import { EventCursor, decodeEventTopic, MIN_START_LEDGER } from "@/utils/event-cursor";
+import { Contract, TransactionBuilder, scValToNative, rpc } from "@stellar/stellar-sdk";
 import {
   TreasuryBalance,
   TokenBalance,
@@ -12,8 +14,11 @@ import {
 
 const LEDGERS_PER_30_DAYS = 518_400; // 30 days × 86 400 s/day ÷ 5 s/ledger
 
+/** Upper bound on swap events aggregated per pool in getFeeRevenue(). */
+const MAX_REVENUE_EVENTS = 10_000;
+
 /**
- * Options for constructing a TreasuryModule.
+ * Options for constructing a TreasuryModule (and its subclass LeaderboardModule).
  */
 export interface TreasuryModuleOptions {
   /**
@@ -22,6 +27,24 @@ export interface TreasuryModuleOptions {
    * Without at least one stable address, all valueUSD fields default to 0.
    */
   stableAddresses?: string[];
+
+  /**
+   * Maximum number of token addresses to keep in the LRU decimals cache
+   * used by {@link LeaderboardModule}.
+   *
+   * Defaults to `512`. Lower values reduce peak memory usage at the cost of
+   * more on-chain metadata fetches on very large scans.
+   */
+  decimalsCacheCapacity?: number;
+
+  /**
+   * Per-entry TTL (milliseconds) for the LRU decimals cache.
+   *
+   * When set, a cached decimal count is considered stale after this duration
+   * and the next call triggers a fresh on-chain fetch.  Defaults to `0`
+   * (TTL disabled — entries live until evicted by LRU capacity pressure).
+   */
+  decimalsCacheTtlMs?: number;
 }
 
 /**
@@ -34,6 +57,7 @@ export interface TreasuryModuleOptions {
 export class TreasuryModule {
   private readonly client: CoralSwapClient;
   private readonly stableSet: Set<string>;
+  private readonly tokenDecimalsCache = new Map<string, number>();
 
   constructor(client: CoralSwapClient, options: TreasuryModuleOptions = {}) {
     this.client = client;
@@ -137,9 +161,33 @@ export class TreasuryModule {
    * console.log(revenue.trend); // 'rising' | 'falling' | 'stable'
    */
   async getFeeRevenue(period?: RevenuePeriod): Promise<RevenueData> {
+    if (period?.fromLedger !== undefined && period.fromLedger < 0) {
+      throw new ValidationError('period.fromLedger must be non-negative', {
+        fromLedger: period.fromLedger,
+      });
+    }
+    if (period?.toLedger !== undefined && period.toLedger < 0) {
+      throw new ValidationError('period.toLedger must be non-negative', {
+        toLedger: period.toLedger,
+      });
+    }
+    if (period?.fromLedger !== undefined && period?.toLedger !== undefined && period.fromLedger > period.toLedger) {
+      throw new ValidationError('period.fromLedger must not exceed period.toLedger', {
+        fromLedger: period.fromLedger,
+        toLedger: period.toLedger,
+      });
+    }
+    // Anchor the window once against the chain head and reuse it for every
+    // pool cursor, so all pools scan an identical, valid ledger range.
     const currentLedger = await this.client.getCurrentLedger();
-    const fromLedger = period?.fromLedger ?? Math.max(0, currentLedger - this.ledgersPer30Days);
     const toLedger = period?.toLedger ?? currentLedger;
+    // Clamp to MIN_START_LEDGER rather than 0: on a chain younger than the
+    // window, `currentLedger - ledgersPer30Days` goes negative and RPC rejects
+    // a startLedger below 1.
+    const fromLedger = Math.max(
+      MIN_START_LEDGER,
+      period?.fromLedger ?? currentLedger - this.ledgersPer30Days,
+    );
     const midLedger = Math.floor((fromLedger + toLedger) / 2);
 
     const allPairs = await this.client.factory.getAllPairs();
@@ -151,7 +199,13 @@ export class TreasuryModule {
 
     for (const pairAddress of allPairs) {
       const { revenueUSD, volumeUSD, firstHalf, secondHalf } =
-        await this.fetchPoolRevenue(pairAddress, fromLedger, toLedger, midLedger, priceMap);
+        await this.fetchPoolRevenue(
+          pairAddress,
+          fromLedger,
+          toLedger,
+          midLedger,
+          priceMap,
+        );
       firstHalfRevenue += firstHalf;
       secondHalfRevenue += secondHalf;
       byPool.push({ pairAddress, revenueUSD, volumeUSD });
@@ -177,46 +231,50 @@ export class TreasuryModule {
     midLedger: number,
     priceMap: Map<string, number>,
   ): Promise<{ revenueUSD: number; volumeUSD: number; firstHalf: number; secondHalf: number }> {
-    try {
-      const request: SorobanRpc.Server.GetEventsRequest = {
-        startLedger: fromLedger,
-        filters: [{ type: 'contract', contractIds: [pairAddress], topics: [['swap']] }],
-        limit: 10000,
-      };
-      const response = await this.client.server.getEvents(request);
+    // Delegated to the shared EventCursor: it encodes the "swap" topic as a
+    // base64 XDR ScVal and paginates — no hand-rolled request building here.
+    // The window is passed explicitly, so the cursor never has to fall back
+    // to its own anchoring.
+    const cursor = new EventCursor(this.client.server);
+    const events = await cursor.scan({
+      contractIds: [pairAddress],
+      topics: ["swap"],
+      fromLedger,
+      toLedger,
+      limit: MAX_REVENUE_EVENTS,
+    });
 
-      if (!Array.isArray(response?.events) || response.events.length === 0) {
-        return { revenueUSD: 0, volumeUSD: 0, firstHalf: 0, secondHalf: 0 };
-      }
-
-      let revenueUSD = 0;
-      let volumeUSD = 0;
-      let firstHalf = 0;
-      let secondHalf = 0;
-
-      for (const event of response.events) {
-        if (event.ledger > toLedger) continue;
-        const parsed = this.parseSwapEventForRevenue(event);
-        if (!parsed) continue;
-
-        const priceUSD = priceMap.get(parsed.tokenIn) ?? 0;
-        const feeUSD = (Number(parsed.feeAmount) / 1e7) * priceUSD;
-        const volUSD = (Number(parsed.amountIn) / 1e7) * priceUSD;
-
-        revenueUSD += feeUSD;
-        volumeUSD += volUSD;
-
-        if (event.ledger <= midLedger) {
-          firstHalf += feeUSD;
-        } else {
-          secondHalf += feeUSD;
-        }
-      }
-
-      return { revenueUSD, volumeUSD, firstHalf, secondHalf };
-    } catch {
+    if (events.length === 0) {
       return { revenueUSD: 0, volumeUSD: 0, firstHalf: 0, secondHalf: 0 };
     }
+
+    let revenueUSD = 0;
+    let volumeUSD = 0;
+    let firstHalf = 0;
+    let secondHalf = 0;
+
+    for (const event of events) {
+      if (event.ledger > toLedger) continue;
+      const parsed = this.parseSwapEventForRevenue(event);
+      if (!parsed) continue;
+
+      const priceUSD = priceMap.get(parsed.tokenIn) ?? 0;
+      const decimals = await this.getTokenDecimals(parsed.tokenIn);
+      const divider = 10 ** decimals;
+      const feeUSD = (Number(parsed.feeAmount) / divider) * priceUSD;
+      const volUSD = (Number(parsed.amountIn) / divider) * priceUSD;
+
+      revenueUSD += feeUSD;
+      volumeUSD += volUSD;
+
+      if (event.ledger <= midLedger) {
+        firstHalf += feeUSD;
+      } else {
+        secondHalf += feeUSD;
+      }
+    }
+
+    return { revenueUSD, volumeUSD, firstHalf, secondHalf };
   }
 
   private parseSwapEventForRevenue(rawEvent: unknown): {
@@ -227,17 +285,31 @@ export class TreasuryModule {
     try {
       if (!rawEvent || typeof rawEvent !== 'object') return null;
       const eventObj = rawEvent as Record<string, unknown>;
-      const topics = (eventObj.topic as string[]) ?? [];
-      if (!topics.length || topics[0] !== 'swap') return null;
+      // Topics come back as XDR ScVals (or base64 XDR on raw responses) —
+      // decode before comparing rather than matching a bare string.
+      const topics = (eventObj.topic as unknown[]) ?? [];
+      if (!topics.length || decodeEventTopic(topics[0]) !== 'swap') return null;
 
       const value = eventObj.value;
       if (!value || typeof value !== 'object') return null;
       const valueObj = value as Record<string, unknown>;
 
-      const map = typeof valueObj.map === 'function' 
-        ? (valueObj.map as () => unknown[])() 
-        : (valueObj._value as unknown[]);
+      const map = Array.isArray(valueObj.map)
+        ? valueObj.map
+        : typeof valueObj.map === 'function'
+          ? (valueObj.map as () => unknown[])()
+          : (valueObj._value as unknown[]);
       if (!Array.isArray(map)) return null;
+
+      const decodeKey = (kObj: Record<string, unknown>): string | undefined => {
+        try {
+          if (typeof kObj.sym === 'function') return (kObj.sym as () => { toString(): string })().toString();
+          if (typeof (kObj.sym as { toString?: () => string } | undefined)?.toString === 'function') return (kObj.sym as { toString(): string }).toString();
+          if (typeof kObj.str === 'function') return (kObj.str as () => { toString(): string })().toString();
+          if (typeof (kObj.str as { toString?: () => string } | undefined)?.toString === 'function') return (kObj.str as { toString(): string }).toString();
+        } catch { /* skip */ }
+        return undefined;
+      };
 
       const get = (key: string): unknown => {
         for (const entry of map) {
@@ -245,20 +317,16 @@ export class TreasuryModule {
           const entryObj = entry as { key: unknown; val: unknown };
           const k = entryObj.key;
           if (!k || typeof k !== 'object') continue;
-          const kObj = k as Record<string, unknown>;
-          let keyStr: string | undefined;
-          try {
-            if (typeof kObj.sym === 'function') keyStr = (kObj.sym as () => { toString(): string })().toString();
-            else if (typeof kObj.str === 'function') keyStr = (kObj.str as () => { toString(): string })().toString();
-          } catch { /* skip */ }
-          if (keyStr === key) return entryObj.val;
+          if (decodeKey(k as Record<string, unknown>) === key) return entryObj.val;
         }
         return undefined;
       };
 
       const decodeI128 = (val: unknown): bigint => {
+        if (typeof val === 'bigint') return val;
         if (val && typeof val === 'object') {
-          const valObj = val as Record<string, unknown>;
+          const valObj = val as { i128?: unknown };
+          if (typeof valObj.i128 === 'bigint') return valObj.i128;
           if (typeof valObj.i128 === 'function') {
             const parts = (valObj.i128 as () => { hi(): { toString(): string }; lo(): { toString(): string } })();
             return (BigInt(parts.hi().toString()) << 64n) + BigInt(parts.lo().toString());
@@ -268,8 +336,10 @@ export class TreasuryModule {
       };
 
       const decodeU32 = (val: unknown): number => {
+        if (typeof val === 'number') return val;
         if (val && typeof val === 'object') {
-          const valObj = val as Record<string, unknown>;
+          const valObj = val as { u32?: unknown };
+          if (typeof valObj.u32 === 'number') return valObj.u32;
           if (typeof valObj.u32 === 'function') return (valObj.u32 as () => number)();
         }
         throw new Error('cannot decode u32');
@@ -277,9 +347,20 @@ export class TreasuryModule {
 
       const decodeAddr = (val: unknown): string => {
         if (val && typeof val === 'object') {
-          const valObj = val as Record<string, unknown>;
+          const valObj = val as { address?: unknown; _value?: unknown };
           if (typeof valObj.address === 'function') return (valObj.address as () => { toString(): string })().toString();
-          if (typeof valObj._value?.toString === 'function') return (valObj._value as { toString(): string }).toString();
+          if (
+            valObj.address &&
+            typeof (valObj.address as { toString?: () => string }).toString === 'function'
+          ) {
+            return (valObj.address as { toString(): string }).toString();
+          }
+          if (
+            valObj._value &&
+            typeof (valObj._value as { toString?: () => string }).toString === 'function'
+          ) {
+            return (valObj._value as { toString(): string }).toString();
+          }
         }
         throw new Error('cannot decode address');
       };
@@ -293,6 +374,43 @@ export class TreasuryModule {
     } catch {
       return null;
     }
+  }
+
+  private async getTokenDecimals(tokenAddress: string): Promise<number> {
+    const cached = this.tokenDecimalsCache.get(tokenAddress);
+    if (cached !== undefined) return cached;
+
+    try {
+      const op = new Contract(tokenAddress).call('decimals');
+      const account = await this.client.server.getAccount(
+        'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF',
+      );
+      const tx = new TransactionBuilder(account, {
+        fee: '100',
+        networkPassphrase: this.client.networkConfig.networkPassphrase,
+      })
+        .addOperation(op)
+        .setTimeout(30)
+        .build();
+
+      const sim = await this.client.server.simulateTransaction(tx);
+      if (rpc.Api.isSimulationSuccess(sim) && sim.result?.retval) {
+        const decoded = scValToNative(sim.result.retval) as { u32?: number } | number | null;
+        const decimals = typeof decoded === 'object' && decoded !== null && 'u32' in decoded
+          ? Number(decoded.u32 ?? 7)
+          : typeof decoded === 'number'
+            ? decoded
+            : 7;
+        const safe = Number.isInteger(decimals) && decimals >= 0 && decimals <= 18 ? decimals : 7;
+        this.tokenDecimalsCache.set(tokenAddress, safe);
+        return safe;
+      }
+    } catch {
+      // Fall back to the Stellar-standard precision instead of hiding the error.
+    }
+
+    this.tokenDecimalsCache.set(tokenAddress, 7);
+    return 7;
   }
 
   private computeTrend(first: number, second: number): 'rising' | 'falling' | 'stable' {
@@ -359,6 +477,15 @@ export class TreasuryModule {
     }
 
     return holdings;
+  }
+
+  /**
+   * Public wrapper around {@link buildPriceMap} for callers outside this
+   * module hierarchy (e.g. MonitoringModule) that need the same
+   * stablecoin-anchored spot pricing used for treasury/portfolio valuations.
+   */
+  async getSpotPriceMap(allPairs: string[]): Promise<Map<string, number>> {
+    return this.buildPriceMap(allPairs);
   }
 
   /**
