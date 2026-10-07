@@ -298,7 +298,7 @@ describe('subscription memory / cleanup', () => {
         pollCount += 1;
         return { latestLedger: pollCount, events: [] };
       });
-      const { module } = makeFactoryModule(getEvents);
+      const { module, getLatestLedger } = makeFactoryModule(getEvents);
 
       await forceGc();
       const before = process.memoryUsage().heapUsed;
@@ -313,6 +313,10 @@ describe('subscription memory / cleanup', () => {
       expect(pollCount).toBeGreaterThanOrEqual(CYCLES);
       unsub();
 
+      // jest.fn() keeps every call's arguments; drop that history so only
+      // memory retained by watchPool itself is measured.
+      getEvents.mockClear();
+      getLatestLedger.mockClear();
       await forceGc();
       const after = process.memoryUsage().heapUsed;
       expect(after - before).toBeLessThan(MAX_HEAP_GROWTH_BYTES);
