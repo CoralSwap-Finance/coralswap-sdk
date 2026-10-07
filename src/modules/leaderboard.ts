@@ -1,7 +1,8 @@
 import { CoralSwapClient } from "@/client";
 import { validateAddress } from "@/utils/validation";
 import { ValidationError } from "@/errors";
-import { SorobanRpc } from "@stellar/stellar-sdk";
+import { EventCursor, decodeEventTopic, MIN_START_LEDGER } from "@/utils/event-cursor";
+import { DecimalsResolver } from "@/utils/decimals-resolver";
 import { TreasuryModule, TreasuryModuleOptions } from "./treasury";
 import { SwapModule } from "./swap";
 
@@ -55,20 +56,17 @@ export interface GetTopTradersOptions {
   toLedger?: number;
 }
 
-const decimalsCache = new Map<string, number>();
+/** Upper bound on events aggregated per leaderboard query. */
+const MAX_LEADERBOARD_EVENTS = 1000;
 
-async function getTokenDecimals(client: CoralSwapClient, address: string): Promise<number> {
-  if (decimalsCache.has(address)) {
-    return decimalsCache.get(address)!;
-  }
-  try {
-    const meta = await client.lpToken(address).metadata();
-    decimalsCache.set(address, meta.decimals);
-    return meta.decimals;
-  } catch {
-    return 7; // standard fallback for Soroban
-  }
-}
+/**
+ * Default capacity for the per-instance LRU decimals cache.
+ *
+ * 512 entries covers any realistic multi-pair scan without unbounded growth.
+ * This can be overridden via {@link TreasuryModuleOptions.decimalsCacheCapacity}
+ * and {@link TreasuryModuleOptions.decimalsCacheTtlMs}.
+ */
+const DEFAULT_DECIMALS_CACHE_CAPACITY = 512;
 
 /**
  * Leaderboard module — ranks top LPs and traders by yield/volume.
@@ -76,11 +74,17 @@ async function getTokenDecimals(client: CoralSwapClient, address: string): Promi
 export class LeaderboardModule extends TreasuryModule {
   private readonly leaderboardClient: CoralSwapClient;
   private readonly leaderboardStableSet: Set<string>;
+  /** LRU-bounded cache for token decimal counts. */
+  private readonly decimalsResolver: DecimalsResolver;
 
   constructor(client: CoralSwapClient, options: TreasuryModuleOptions = {}) {
     super(client, options);
     this.leaderboardClient = client;
     this.leaderboardStableSet = new Set(options.stableAddresses ?? []);
+    this.decimalsResolver = new DecimalsResolver({
+      capacity: options.decimalsCacheCapacity ?? DEFAULT_DECIMALS_CACHE_CAPACITY,
+      ttlMs: options.decimalsCacheTtlMs ?? 0,
+    });
   }
 
   /**
@@ -114,36 +118,55 @@ export class LeaderboardModule extends TreasuryModule {
     else if (period === "30d") periodLedgers = ledgersPerDay * 30;
 
     const currentLedger = await this.leaderboardClient.getCurrentLedger();
-    const startLedger = Math.max(0, currentLedger - periodLedgers - ledgersPerDay);
+    // Anchored against the chain head: the window covers the reporting period
+    // plus one extra day so the 24h comparison baseline is in range. Clamped to
+    // MIN_START_LEDGER because ledger 0 does not exist and RPC rejects it.
+    const startLedger = Math.max(
+      MIN_START_LEDGER,
+      currentLedger - (periodLedgers + ledgersPerDay),
+    );
     const endLedger = currentLedger;
 
     const topic = type === "trader" ? "swap" : "add_liquidity";
 
-    const request: SorobanRpc.Server.GetEventsRequest = {
-      startLedger,
-      filters: [
-        {
-          type: "contract",
-          contractIds: options.pairAddress ? [options.pairAddress] : [],
-          topics: [[topic]],
-        },
-      ],
-      limit: 1000,
-    };
+    // The shared cursor encodes the topic as a base64 XDR ScVal symbol; a raw
+    // string filter is silently ignored by a real RPC node.
+    const cursor = new EventCursor(this.leaderboardClient.server);
+    const events = await cursor.scan({
+      contractIds: options.pairAddress ? [options.pairAddress] : [],
+      topics: [topic],
+      fromLedger: startLedger,
+      toLedger: endLedger,
+      limit: MAX_LEADERBOARD_EVENTS,
+    });
 
-    const response = await this.leaderboardClient.server.getEvents(request);
-    if (!response || !Array.isArray(response.events)) return [];
+    // Warn when the page hit the cap so callers can narrow their window or
+    // use pageInfo.nextCursor to continue from the exact resume point.
+    if (events.pageInfo?.hasMore) {
+      const logger = (this.leaderboardClient as any).logger;
+      if (logger && typeof logger.warn === 'function') {
+        logger.warn(
+          'LeaderboardModule.getLeaderboard: result set was capped at ' +
+          `${MAX_LEADERBOARD_EVENTS} events — rankings may be incomplete`,
+          { nextCursor: events.pageInfo.nextCursor, type, period },
+        );
+      }
+    }
+
+    if (events.length === 0) return [];
+
 
     const currentMap = new Map<string, bigint>();
     const previousMap = new Map<string, bigint>();
 
-    const currentStartBound = Math.max(0, currentLedger - periodLedgers);
-    const previousStartBound = Math.max(0, currentLedger - periodLedgers - ledgersPerDay);
-    const previousEndBound = Math.max(0, currentLedger - ledgersPerDay);
+    const currentStartBound = Math.max(startLedger, currentLedger - periodLedgers);
+    const previousStartBound = startLedger;
+    const previousEndBound = Math.max(startLedger, currentLedger - ledgersPerDay);
 
-    for (const ev of response.events) {
+    for (const ev of events) {
       if (options.pairAddress && ev.contractId?.toString() !== options.pairAddress) continue;
-      const topicName = ev.topic?.[0] ? decodeScValString(ev.topic[0]) : "";
+      // Topics arrive as XDR ScVals — decode before comparing.
+      const topicName = ev.topic?.[0] ? decodeEventTopic(ev.topic[0]) : "";
       if (topicName !== topic) continue;
       if (!ev.value) continue;
 
@@ -246,7 +269,7 @@ export class LeaderboardModule extends TreasuryModule {
     const decimalsMap = new Map<string, number>();
     await Promise.all(
       Array.from(uniqueTokens).map(async (token) => {
-        const dec = await getTokenDecimals(this.leaderboardClient, token);
+        const dec = await this.decimalsResolver.resolve(this.leaderboardClient, token);
         decimalsMap.set(token, dec);
       })
     );
@@ -422,13 +445,4 @@ function readI128(map: Map<string, any>, key: string): bigint | undefined {
     }
   } catch { /* skip */ }
   return undefined;
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function decodeScValString(val: any): string {
-  if (!val) return "";
-  if (typeof val === "string") return val;
-  if (typeof val.sym === "function") return val.sym().toString();
-  if (typeof val.str === "function") return val.str().toString();
-  return val.toString();
 }

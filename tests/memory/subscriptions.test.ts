@@ -121,14 +121,12 @@ function makeFactoryModule(
   getEvents: jest.Mock,
   latestLedgerSequence = 2_500_000,
 ): { module: FactoryModule; client: CoralSwapClient; getLatestLedger: jest.Mock } {
-  const getLatestLedger = jest.fn().mockResolvedValue({
-    id: `mock-ledger-${latestLedgerSequence}`,
-    sequence: latestLedgerSequence,
-    protocolVersion: '21',
-  });
+  // watchPool reads the tip through CoralSwapClient.getCurrentLedger().
+  const getLatestLedger = jest.fn().mockResolvedValue(latestLedgerSequence);
   const client = {
     config: {},
-    server: { getEvents, getLatestLedger },
+    server: { getEvents },
+    getCurrentLedger: getLatestLedger,
   } as unknown as CoralSwapClient;
   return { module: new FactoryModule(client), client, getLatestLedger };
 }
@@ -279,8 +277,9 @@ describe('subscription memory / cleanup', () => {
 
       expect(getLatestLedger).toHaveBeenCalled();
       expect(getEvents).toHaveBeenCalled();
+      // watchPool starts a bounded window behind the tip (WATCH_LEDGER_WINDOW = 100).
       expect(getEvents.mock.calls[0][0]).toEqual(
-        expect.objectContaining({ startLedger: LATEST + 1 }),
+        expect.objectContaining({ startLedger: LATEST - 100 }),
       );
       // Must not request startLedger: 1 (outside RPC retention on real networks).
       expect(getEvents.mock.calls[0][0].startLedger).not.toBe(1);

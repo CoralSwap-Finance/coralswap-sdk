@@ -15,6 +15,13 @@ import { validateAddress } from '@/utils/validation';
  * impermanent loss risk, and liquidity depth concerns. Returns a scored
  * assessment with actionable risk factor breakdowns.
  *
+ * **Not a price oracle.** All risk scores, USD values, and volatility
+ * estimates in this module are derived from on-chain reserves, position
+ * balances, and caller-supplied stablecoin anchor prices. They are
+ * **not** attested by an oracle and should not be used as the sole basis
+ * for settlement, liquidation, or trading decisions. For manipulation-
+ * resistant pricing, use the TWAP Oracle (`src/modules/oracle.ts`).
+ *
  * @example
  * const riskMetrics = new RiskMetricsModule(client);
  * const risk = await riskMetrics.getPortfolioRisk('G...');
@@ -146,30 +153,25 @@ export class RiskMetricsModule {
     portfolio: Portfolio,
     windowDays: number
   ): Promise<RiskFactor> {
-    // Volatility assessment is based on position diversification and count
-    // In a real implementation, this would query price history from oracle or price feeds
+    const totalValue = Math.max(1, portfolio.totalValueUSD);
     const positionCount = portfolio.positions.length;
+    const weightedExposure = portfolio.positions.reduce((sum, position) => {
+      const share = totalValue > 0 ? position.valueUSD / totalValue : 0;
+      return sum + share * Math.min(1, position.valueUSD / 100_000);
+    }, 0);
 
-    let volatilityScore = 0;
-    let description = '';
+    const normalizedWindow = Math.min(Math.max(windowDays, 1), 180);
+    const windowModifier = 1 + (normalizedWindow / 180) * 0.9;
+    const positionModifier = positionCount > 0 ? Math.min(1, positionCount / 6) : 0;
+    const volatilityScore = Math.min(
+      100,
+      Math.round(weightedExposure * 55 + positionModifier * 30 + windowModifier * 15),
+    );
 
-    if (positionCount === 1) {
-      volatilityScore = 60;
-      description =
-        'Single pair exposure increases volatility impact. Multiple assets provide natural hedging.';
-    } else if (positionCount === 2) {
-      volatilityScore = 45;
-      description =
-        'Limited token diversity. Adding more token pairs can reduce volatility exposure.';
-    } else if (positionCount <= 4) {
-      volatilityScore = 30;
-      description =
-        'Reasonable volatility exposure across multiple token pairs.';
-    } else {
-      volatilityScore = 15;
-      description =
-        'Strong diversification across many token pairs reduces volatility impact.';
-    }
+    const description =
+      windowDays >= 90
+        ? 'Longer volatility windows increase the measured regime risk for the portfolio, reflecting more sustained exposure to price swings.'
+        : 'Shorter volatility windows reduce the measured regime risk, reflecting more recent market conditions and less historical drift.';
 
     const severity = this.scoreSeverity(volatilityScore);
 

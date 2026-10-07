@@ -1,3 +1,12 @@
+import { xdr } from "@stellar/stellar-sdk";
+
+/**
+ * Status indicating whether an event was completely decoded without fabrication,
+ * partially decoded via fallback, or unknown.
+ */
+export type EventDecodeStatus = "complete" | "partial" | "unknown";
+export type DecodeStatus = EventDecodeStatus;
+
 /**
  * Base contract event from Soroban.
  */
@@ -12,6 +21,8 @@ export interface ContractEvent {
   timestamp: number;
   /** Transaction hash containing this event */
   txHash: string;
+  /** Status indicating whether the event was completely decoded, partially decoded, or unknown */
+  decodeStatus: EventDecodeStatus;
 }
 
 /**
@@ -145,9 +156,25 @@ export interface ProposalEvent extends ContractEvent {
 }
 
 /**
- * Pool lifecycle events delivered by {@link FactoryModule.watchPool}.
+ * Unknown event emitted by a contract with an unrecognized topic.
  */
-export type PoolEvent = SwapEvent | MintEvent | BurnEvent;
+export interface UnknownContractEvent extends ContractEvent {
+  type: "unknown";
+  decodeStatus: "unknown";
+  rawTopic?: string;
+  rawData?: xdr.ScVal;
+}
+
+/**
+ * Partially decoded contract event when full parsing could not complete without fabrication.
+ */
+export interface PartialContractEvent extends ContractEvent {
+  type: string;
+  decodeStatus: "partial";
+  error?: string;
+  rawTopic?: string;
+  partialFields?: Record<string, unknown>;
+}
 
 /**
  * Union of all CoralSwap contract events.
@@ -160,4 +187,6 @@ export type CoralSwapEvent =
   | ProposalEvent
   | MintEvent
   | BurnEvent
-  | SyncEvent;
+  | SyncEvent
+  | UnknownContractEvent
+  | PartialContractEvent;
