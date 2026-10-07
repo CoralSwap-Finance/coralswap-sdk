@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+
 - `GovernanceModule.cancelProposal()` and `executeProposal()`, and `decodeProposal` now returns the proposal's `actions` instead of an empty array (#655)
 - Test matrices for governance (propose, decode actions, cancel, execute) and staking cooldown boundaries (#655), an events-timeline continuity suite over multi-page ledgers (#657), and a tax-reporting regression suite for non-zero gains, BigInt-safe cost basis and exports past 200 events (#659)
 - `NotConfiguredError` (`NOT_CONFIGURED`, fail-fast) for a required network deployment or SDK provider that has not been configured (#638, #642)
@@ -25,6 +26,7 @@
 - Zod schemas for position entries (`EnrichedLPPositionSchema`, `PositionMathSchema`, `PositionSummarySchema`, exported from `@/schemas`) with a malformed/valid fixture suite (`tests/positions-schema.test.ts`): missing or empty fields, wrong primitive types, `NaN`/infinite/out-of-range `share`, fractional/negative/out-of-ceiling `feeBps`, non-bigint stroops, and summary-level failures — each pinned to a `ValidationError` naming the offending field
 
 ### Changed
+
 - Governance module validates `createProposal` and `castVote` inputs with zod schemas (`CreateProposalInputSchema`, `CastVoteInputSchema`), replacing the hand-written guards while keeping `ValidationError` as the thrown type (#488)
 - `StakingModule` and `StopLossModule` validate parameters with zod schemas via `validateWithSchema`; zero/invalid inputs now throw the shared `ValidationError` with `code: "VALIDATION_ERROR"` and `details.zodErrors`, and the message format is `Invalid <label>: path: message` instead of ad hoc, hand-built strings (#746)
 - `MonitoringModule.getSystemMetrics(period)` validates `period` through the shared `MonitoringPeriodSchema` (zod) via `validateWithSchema`, replacing the hand-written check; the error is still a `ValidationError` (#493)
@@ -41,6 +43,7 @@
 - `PositionsModule.getPosition()` validates its BigInt math operands and the assembled entry before returning, and `getPositions()` validates the final summary, so a malformed chain read fails as a `ValidationError` naming the field instead of a raw `TypeError` (mixing a `number` into `reserve0 * balance`) or a silently wrong-shaped object. A `ValidationError` from one pool is no longer swallowed by `Promise.allSettled`; transient per-pair RPC failures are still skipped
 
 ### Fixed
+
 - `checkCompatibility` flags patch-level downgrades (e.g. `1.2.3` → `1.2.1` and `1.2.0` → `1.1.0`) as incompatible instead of treating same-minor patch returns as compatible, with advisory warning steps (#639)
 - `OracleModule.getPriceDeviation()` no longer reports `0` bps when the reference TWAP is `0n`. `computeDeviationBps()` short-circuited to `0`, so a pair whose TWAP accumulator never advanced was indistinguishable from one where oracle and spot agreed exactly — the manipulation detector returned its best possible score while blind. `price0DeviationBps`/`price1DeviationBps` are now `number | null`, where `null` means no usable reference price (#641)
 - `FeeModule.getFeeRevenue()` no longer corrupts revenue figures: fee amounts are computed and accumulated in stroop-level BigInt (no `Number()` precision loss above 2^53), display conversions use each input token's own `decimals()` read from its contract instead of a hard-coded 10^7, and swap events are fetched through the shared `TypedEventCursor` with full cursor pagination so windows with more than 200 events are fully retrievable. Returns exact `totalFeeStroops`/`feeStroops` totals plus a per-token breakdown (`totalFeeByToken`), with input validation for the ledger window and page limit (#632)
@@ -56,11 +59,13 @@
 - `getFeeRevenue()` decoded `amount_in` into a `number` and divided every fee by `1e7`: a 6-decimal token's fees came out 10× too small, a 12-decimal token's 100,000× too large, amounts above 2^53 lost stroops to float rounding, and one non-paginated `getEvents` call (with a bare `"swap"` topic string that live RPC never matches) dropped every swap past the first page. Fees are BigInt now, priced per token, and the stream is paginated
 
 ### Removed
+
 - Unused `GetOpenOrdersSchema` and `GetOrderSummarySchema` exports from the package entry (#664)
 
 ## [1.1.0] - 2026-02-17
 
 ### Added
+
 - Pluggable `Signer` interface in `src/types/common.ts` for wallet adapter support
 - `KeypairSigner` default implementation in `src/utils/signer.ts`
 - `signer` option in `CoralSwapConfig` for external wallet integration (Freighter, Albedo)
@@ -77,17 +82,19 @@
 - Test scaffolding with Jest configuration
 - Full README documentation with examples
 
-
 ### Changed
+
 - `CoralSwapClient` now accepts both `secretKey` and `signer` config options
-- `submitTransaction()` now awaits `signer.signTransaction()` 
+- `submitTransaction()` now awaits `signer.signTransaction()`
 
 ### Backward Compatible
+
 - Existing `secretKey` usage continues to work unchanged
 
 ## [2.0.0] - 2026-06-29
 
 ### Added
+
 - Full [Migration Guide](./MIGRATION.md) from v1 to v2
 - Treasury, Staking, Governance, Limit Orders, DCA, Stop Loss, Positions modules
 - Alerts, Webhooks, Monitoring modules
@@ -100,11 +107,13 @@
 - 18 new utility functions (validation, simulation, gas, events)
 
 ### Changed
+
 - Improved error handling with `executeWithFallback` for multi-RPC resilience
 - `CoralSwapClient` constructor now supports `rpcUrl` as string array for fallback URLs
 - `SwapModule.getQuote()`/`execute()` now accept `path` for multi-hop routing
 - `LiquidityModule.getAddLiquidityQuote()` signature simplified (removed `amountBDesired`)
 
 ### Deprecated
+
 - Legacy `simulateTransaction(ops, source)` string form — prefer enhanced options object
 - Manual `instanceof` error chain — prefer `mapError()`

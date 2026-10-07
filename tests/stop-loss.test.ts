@@ -1,37 +1,26 @@
-import { nativeToScVal } from '@stellar/stellar-sdk';
-import { CoralSwapClient } from '../src/client';
-import { StopLossModule } from '../src/modules/stop-loss';
-import { SwapModule } from '../src/modules/swap';
+import { nativeToScVal } from "@stellar/stellar-sdk";
+import { CoralSwapClient } from "../src/client";
+import { StopLossModule } from "../src/modules/stop-loss";
+import { SwapModule } from "../src/modules/swap";
 import {
   StaleOracleError,
   TransactionError,
   ValidationError,
-} from '../src/errors';
-import { Network, TradeType } from '../src/types/common';
-import type {
-  StopLossOrder,
-  StopLossParams,
-} from '../src/types/stop-loss';
-import type { SimulateTransactionResult } from '../src/types/common';
+} from "../src/errors";
+import { Network, TradeType } from "../src/types/common";
+import type { StopLossOrder, StopLossParams } from "../src/types/stop-loss";
+import type { SimulateTransactionResult } from "../src/types/common";
 
-const TEST_SECRET =
-  'SB6K2AINTGNYBFX4M7TRPGSKQ5RKNOXXWB7UZUHRYOVTM7REDUGECKZU';
-const MANAGER =
-  'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC';
-const ORACLE =
-  'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM';
-const TOKEN_IN =
-  'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM';
-const TOKEN_OUT =
-  'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4';
-const TOKEN_MID =
-  'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM';
-const PAIR =
-  'CAAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQC526';
-const OWNER =
-  'GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFSHONUCEOASW7QC7OX2H';
+const TEST_SECRET = "SB6K2AINTGNYBFX4M7TRPGSKQ5RKNOXXWB7UZUHRYOVTM7REDUGECKZU";
+const MANAGER = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
+const ORACLE = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM";
+const TOKEN_IN = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM";
+const TOKEN_OUT = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4";
+const TOKEN_MID = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM";
+const PAIR = "CAAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQC526";
+const OWNER = "GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFSHONUCEOASW7QC7OX2H";
 
-const TEST_TX_HASH = 'stop-loss-tx-123';
+const TEST_TX_HASH = "stop-loss-tx-123";
 const NOW_MS = 1_720_000_000_000;
 
 function makeParams(overrides: Partial<StopLossParams> = {}): StopLossParams {
@@ -41,7 +30,7 @@ function makeParams(overrides: Partial<StopLossParams> = {}): StopLossParams {
     amount: 1_000_0000000n,
     triggerPrice: 9_000_000n,
     pairAddress: PAIR,
-    oracleAsset: 'XLM',
+    oracleAsset: "XLM",
     ...overrides,
   };
 }
@@ -50,32 +39,30 @@ function makeOrderNative(
   overrides: Partial<Record<string, unknown>> = {},
 ): Record<string, unknown> {
   return {
-    id: 'order-1',
+    id: "order-1",
     owner: OWNER,
     token_in: TOKEN_IN,
     token_out: TOKEN_OUT,
-    amount: '10000000000',
-    trigger_price: '9000000',
-    oracle_asset: 'XLM',
-    status: 'active',
+    amount: "10000000000",
+    trigger_price: "9000000",
+    oracle_asset: "XLM",
+    status: "active",
     created_at: NOW_MS - 60_000,
     ...overrides,
   };
 }
 
-function makeOrder(
-  overrides: Partial<StopLossOrder> = {},
-): StopLossOrder {
+function makeOrder(overrides: Partial<StopLossOrder> = {}): StopLossOrder {
   return {
-    id: 'order-1',
+    id: "order-1",
     owner: OWNER,
     tokenIn: TOKEN_IN,
     tokenOut: TOKEN_OUT,
     amount: 1_000_0000000n,
     triggerPrice: 9_000_000n,
     currentPrice: 10_000_000n,
-    oracleAsset: 'XLM',
-    status: 'active',
+    oracleAsset: "XLM",
+    status: "active",
     triggered: false,
     createdAt: NOW_MS - 60_000,
     ...overrides,
@@ -87,8 +74,8 @@ function makeSimResult(native: unknown): SimulateTransactionResult {
     success: true,
     returnValue: nativeToScVal(native),
     auth: [],
-    minResourceFee: '100',
-    cost: { cpuInsns: '1000', memBytes: '512' },
+    minResourceFee: "100",
+    cost: { cpuInsns: "1000", memBytes: "512" },
     transactionData: null,
     latestLedger: 12345,
     events: [],
@@ -102,8 +89,8 @@ function makeEmptySimResult(): SimulateTransactionResult {
     success: true,
     returnValue: null,
     auth: [],
-    minResourceFee: '100',
-    cost: { cpuInsns: '1000', memBytes: '512' },
+    minResourceFee: "100",
+    cost: { cpuInsns: "1000", memBytes: "512" },
     transactionData: null,
     latestLedger: 12345,
     events: [],
@@ -112,12 +99,14 @@ function makeEmptySimResult(): SimulateTransactionResult {
   };
 }
 
-function makeFailedSimResult(error = 'simulation failed'): SimulateTransactionResult {
+function makeFailedSimResult(
+  error = "simulation failed",
+): SimulateTransactionResult {
   return {
     success: false,
     returnValue: null,
     auth: [],
-    minResourceFee: '',
+    minResourceFee: "",
     cost: null,
     transactionData: null,
     latestLedger: 12345,
@@ -127,13 +116,13 @@ function makeFailedSimResult(error = 'simulation failed'): SimulateTransactionRe
   };
 }
 
-describe('StopLossModule', () => {
+describe("StopLossModule", () => {
   let client: CoralSwapClient;
   let stopLoss: StopLossModule;
   let mockSigner: { publicKey: jest.Mock; signTransaction: jest.Mock };
 
   beforeEach(() => {
-    jest.spyOn(Date, 'now').mockReturnValue(NOW_MS);
+    jest.spyOn(Date, "now").mockReturnValue(NOW_MS);
 
     client = new CoralSwapClient({
       network: Network.TESTNET,
@@ -144,7 +133,7 @@ describe('StopLossModule', () => {
 
     mockSigner = {
       publicKey: jest.fn().mockResolvedValue(OWNER),
-      signTransaction: jest.fn().mockResolvedValue('signed-xdr'),
+      signTransaction: jest.fn().mockResolvedValue("signed-xdr"),
     };
   });
 
@@ -153,18 +142,18 @@ describe('StopLossModule', () => {
   });
 
   function mockSubmitSuccess(): jest.SpyInstance {
-    return jest.spyOn(client, 'submitTransaction').mockResolvedValue({
+    return jest.spyOn(client, "submitTransaction").mockResolvedValue({
       success: true,
       txHash: TEST_TX_HASH,
       data: { txHash: TEST_TX_HASH, ledger: 1000 },
     });
   }
 
-  describe('createStopLoss()', () => {
-    it('returns an order ID when the trigger is below market price', async () => {
+  describe("createStopLoss()", () => {
+    it("returns an order ID when the trigger is below market price", async () => {
       jest
-        .spyOn(client, 'simulateTransaction')
-        .mockResolvedValue(makeSimResult('10000000'));
+        .spyOn(client, "simulateTransaction")
+        .mockResolvedValue(makeSimResult("10000000"));
       mockSubmitSuccess();
 
       const id = await stopLoss.createStopLoss(makeParams(), mockSigner);
@@ -174,30 +163,30 @@ describe('StopLossModule', () => {
       expect(client.submitTransaction).toHaveBeenCalledTimes(1);
     });
 
-    it('rejects a trigger price at market price', async () => {
+    it("rejects a trigger price at market price", async () => {
       jest
-        .spyOn(client, 'simulateTransaction')
-        .mockResolvedValue(makeSimResult('9000000'));
+        .spyOn(client, "simulateTransaction")
+        .mockResolvedValue(makeSimResult("9000000"));
 
       await expect(
         stopLoss.createStopLoss(makeParams(), mockSigner),
-      ).rejects.toThrow('triggerPrice must be below the current market price');
+      ).rejects.toThrow("triggerPrice must be below the current market price");
     });
 
-    it('rejects a trigger price above market price', async () => {
+    it("rejects a trigger price above market price", async () => {
       jest
-        .spyOn(client, 'simulateTransaction')
-        .mockResolvedValue(makeSimResult('8000000'));
+        .spyOn(client, "simulateTransaction")
+        .mockResolvedValue(makeSimResult("8000000"));
 
       await expect(
         stopLoss.createStopLoss(makeParams(), mockSigner),
       ).rejects.toThrow(ValidationError);
     });
 
-    it('accepts a very small trigger distance below market', async () => {
+    it("accepts a very small trigger distance below market", async () => {
       jest
-        .spyOn(client, 'simulateTransaction')
-        .mockResolvedValue(makeSimResult('9000001'));
+        .spyOn(client, "simulateTransaction")
+        .mockResolvedValue(makeSimResult("9000001"));
       mockSubmitSuccess();
 
       const id = await stopLoss.createStopLoss(makeParams(), mockSigner);
@@ -205,23 +194,23 @@ describe('StopLossModule', () => {
       expect(id).toBe(TEST_TX_HASH);
     });
 
-    it('throws ValidationError with validateWithSchema format and zodErrors when amount is zero', async () => {
+    it("throws ValidationError with validateWithSchema format and zodErrors when amount is zero", async () => {
       try {
         await stopLoss.createStopLoss(makeParams({ amount: 0n }), mockSigner);
-        fail('Expected ValidationError to be thrown');
+        fail("Expected ValidationError to be thrown");
       } catch (err: any) {
         expect(err).toBeInstanceOf(ValidationError);
-        expect(err.name).toBe('ValidationError');
-        expect(err.code).toBe('VALIDATION_ERROR');
+        expect(err.name).toBe("ValidationError");
+        expect(err.code).toBe("VALIDATION_ERROR");
         expect(err.message).toBe(
-          'Invalid stopLoss.params: amount: amount must be greater than 0',
+          "Invalid stopLoss.params: amount: amount must be greater than 0",
         );
         expect(err.details).toEqual(
           expect.objectContaining({
             zodErrors: expect.arrayContaining([
               expect.objectContaining({
-                path: ['amount'],
-                message: 'amount must be greater than 0',
+                path: ["amount"],
+                message: "amount must be greater than 0",
               }),
             ]),
           }),
@@ -229,22 +218,19 @@ describe('StopLossModule', () => {
       }
     });
 
-    it('throws ValidationError when token addresses are identical', async () => {
+    it("throws ValidationError when token addresses are identical", async () => {
       await expect(
-        stopLoss.createStopLoss(
-          makeParams({ tokenOut: TOKEN_IN }),
-          mockSigner,
-        ),
+        stopLoss.createStopLoss(makeParams({ tokenOut: TOKEN_IN }), mockSigner),
       ).rejects.toThrow(ValidationError);
     });
 
-    it('throws TransactionError when submitTransaction fails', async () => {
+    it("throws TransactionError when submitTransaction fails", async () => {
       jest
-        .spyOn(client, 'simulateTransaction')
-        .mockResolvedValue(makeSimResult('10000000'));
-      jest.spyOn(client, 'submitTransaction').mockResolvedValue({
+        .spyOn(client, "simulateTransaction")
+        .mockResolvedValue(makeSimResult("10000000"));
+      jest.spyOn(client, "submitTransaction").mockResolvedValue({
         success: false,
-        error: { code: 'TX_FAILED', message: 'Escrow transfer failed' },
+        error: { code: "TX_FAILED", message: "Escrow transfer failed" },
       });
 
       await expect(
@@ -252,10 +238,10 @@ describe('StopLossModule', () => {
       ).rejects.toThrow(TransactionError);
     });
 
-    it('rejects order creation against a stale price feed by default', async () => {
-      jest.spyOn(client, 'simulateTransaction').mockResolvedValue(
+    it("rejects order creation against a stale price feed by default", async () => {
+      jest.spyOn(client, "simulateTransaction").mockResolvedValue(
         makeSimResult({
-          price: '10000000',
+          price: "10000000",
           timestamp: NOW_MS - 6 * 60 * 1000, // 6 minutes old (> DEFAULT_STALE_AFTER_MS)
         }),
       );
@@ -268,10 +254,10 @@ describe('StopLossModule', () => {
       expect(submit).not.toHaveBeenCalled();
     });
 
-    it('rejects order creation against a stale price feed with a custom threshold', async () => {
-      jest.spyOn(client, 'simulateTransaction').mockResolvedValue(
+    it("rejects order creation against a stale price feed with a custom threshold", async () => {
+      jest.spyOn(client, "simulateTransaction").mockResolvedValue(
         makeSimResult({
-          price: '10000000',
+          price: "10000000",
           timestamp: NOW_MS - 2 * 60 * 1000, // 2 minutes old
         }),
       );
@@ -286,10 +272,10 @@ describe('StopLossModule', () => {
       expect(submit).not.toHaveBeenCalled();
     });
 
-    it('accepts order creation when the price feed is fresh', async () => {
-      jest.spyOn(client, 'simulateTransaction').mockResolvedValue(
+    it("accepts order creation when the price feed is fresh", async () => {
+      jest.spyOn(client, "simulateTransaction").mockResolvedValue(
         makeSimResult({
-          price: '10000000',
+          price: "10000000",
           timestamp: NOW_MS - 4 * 60 * 1000, // 4 minutes old (< DEFAULT_STALE_AFTER_MS)
         }),
       );
@@ -301,7 +287,7 @@ describe('StopLossModule', () => {
     });
   });
 
-  describe('swapAndCreateStopLoss()', () => {
+  describe("swapAndCreateStopLoss()", () => {
     const RESERVE = 1_000_000_000n;
 
     function buildComposedMockClient() {
@@ -317,17 +303,19 @@ describe('StopLossModule', () => {
 
       return {
         config: { defaultSlippageBps: 50 },
-        networkConfig: { networkPassphrase: 'Test SDF Network ; September 2015' },
+        networkConfig: {
+          networkPassphrase: "Test SDF Network ; September 2015",
+        },
         publicKey: OWNER,
         getDeadline: jest.fn().mockReturnValue(9_999_999_999),
         getPairAddress: jest.fn().mockResolvedValue(PAIR),
         pair: jest.fn().mockReturnValue(pair),
         router: {
-          buildSwapExactIn: jest.fn().mockReturnValue('swap-operation'),
+          buildSwapExactIn: jest.fn().mockReturnValue("swap-operation"),
         },
         simulateTransaction: jest
           .fn()
-          .mockResolvedValue(makeSimResult('10000000')),
+          .mockResolvedValue(makeSimResult("10000000")),
         submitTransaction: jest.fn(),
         transactionComposer(this: any) {
           const operations: unknown[] = [];
@@ -349,7 +337,7 @@ describe('StopLossModule', () => {
       tradeType: TradeType.EXACT_IN,
     };
 
-    it('submits the swap and the stop-loss as a single atomic transaction', async () => {
+    it("submits the swap and the stop-loss as a single atomic transaction", async () => {
       const mockClient = buildComposedMockClient();
       mockClient.submitTransaction.mockResolvedValue({
         success: true,
@@ -357,7 +345,11 @@ describe('StopLossModule', () => {
       });
 
       const swapModule = new SwapModule(mockClient as any);
-      const composedStopLoss = new StopLossModule(mockClient as any, MANAGER, ORACLE);
+      const composedStopLoss = new StopLossModule(
+        mockClient as any,
+        MANAGER,
+        ORACLE,
+      );
 
       const result = await composedStopLoss.swapAndCreateStopLoss(
         swapModule,
@@ -371,19 +363,23 @@ describe('StopLossModule', () => {
 
       const [operations] = mockClient.submitTransaction.mock.calls[0];
       expect(operations).toHaveLength(2);
-      expect(operations[0]).toBe('swap-operation');
+      expect(operations[0]).toBe("swap-operation");
       expect(mockClient.router.buildSwapExactIn).toHaveBeenCalledTimes(1);
     });
 
-    it('rolls back both legs when the composed transaction fails', async () => {
+    it("rolls back both legs when the composed transaction fails", async () => {
       const mockClient = buildComposedMockClient();
       mockClient.submitTransaction.mockResolvedValue({
         success: false,
-        error: { code: 'TX_FAILED', message: 'insufficient balance' },
+        error: { code: "TX_FAILED", message: "insufficient balance" },
       });
 
       const swapModule = new SwapModule(mockClient as any);
-      const composedStopLoss = new StopLossModule(mockClient as any, MANAGER, ORACLE);
+      const composedStopLoss = new StopLossModule(
+        mockClient as any,
+        MANAGER,
+        ORACLE,
+      );
 
       await expect(
         composedStopLoss.swapAndCreateStopLoss(
@@ -399,11 +395,15 @@ describe('StopLossModule', () => {
       expect(mockClient.submitTransaction).toHaveBeenCalledTimes(1);
     });
 
-    it('rejects the whole composed flow when the trigger price is not below market', async () => {
+    it("rejects the whole composed flow when the trigger price is not below market", async () => {
       const mockClient = buildComposedMockClient();
 
       const swapModule = new SwapModule(mockClient as any);
-      const composedStopLoss = new StopLossModule(mockClient as any, MANAGER, ORACLE);
+      const composedStopLoss = new StopLossModule(
+        mockClient as any,
+        MANAGER,
+        ORACLE,
+      );
 
       await expect(
         composedStopLoss.swapAndCreateStopLoss(
@@ -418,92 +418,92 @@ describe('StopLossModule', () => {
     });
   });
 
-  describe('getStopLossOrders()', () => {
-    it('sorts orders by createdAt descending by default', async () => {
-      const simulate = jest.spyOn(client, 'simulateTransaction');
+  describe("getStopLossOrders()", () => {
+    it("sorts orders by createdAt descending by default", async () => {
+      const simulate = jest.spyOn(client, "simulateTransaction");
       simulate.mockResolvedValueOnce(
         makeSimResult([
-          makeOrderNative({ id: 'oldest', created_at: NOW_MS - 3_000 }),
-          makeOrderNative({ id: 'newest', created_at: NOW_MS - 1_000 }),
-          makeOrderNative({ id: 'middle', created_at: NOW_MS - 2_000 }),
+          makeOrderNative({ id: "oldest", created_at: NOW_MS - 3_000 }),
+          makeOrderNative({ id: "newest", created_at: NOW_MS - 1_000 }),
+          makeOrderNative({ id: "middle", created_at: NOW_MS - 2_000 }),
         ]),
       );
       simulate
-        .mockResolvedValueOnce(makeSimResult('10000000'))
-        .mockResolvedValueOnce(makeSimResult('10000000'))
-        .mockResolvedValueOnce(makeSimResult('10000000'));
+        .mockResolvedValueOnce(makeSimResult("10000000"))
+        .mockResolvedValueOnce(makeSimResult("10000000"))
+        .mockResolvedValueOnce(makeSimResult("10000000"));
 
       const orders = await stopLoss.getStopLossOrders(OWNER);
 
       expect(orders.map((order) => order.id)).toEqual([
-        'newest',
-        'middle',
-        'oldest',
+        "newest",
+        "middle",
+        "oldest",
       ]);
     });
 
-    it('filters by triggered state', async () => {
-      const simulate = jest.spyOn(client, 'simulateTransaction');
+    it("filters by triggered state", async () => {
+      const simulate = jest.spyOn(client, "simulateTransaction");
       simulate.mockResolvedValueOnce(
         makeSimResult([
-          makeOrderNative({ id: 'safe', trigger_price: '9000000' }),
-          makeOrderNative({ id: 'hit', trigger_price: '9500000' }),
+          makeOrderNative({ id: "safe", trigger_price: "9000000" }),
+          makeOrderNative({ id: "hit", trigger_price: "9500000" }),
         ]),
       );
       simulate
-        .mockResolvedValueOnce(makeSimResult('10000000'))
-        .mockResolvedValueOnce(makeSimResult('9000000'));
+        .mockResolvedValueOnce(makeSimResult("10000000"))
+        .mockResolvedValueOnce(makeSimResult("9000000"));
 
       const orders = await stopLoss.getStopLossOrders(OWNER, {
         triggered: true,
       });
 
       expect(orders).toHaveLength(1);
-      expect(orders[0].id).toBe('hit');
+      expect(orders[0].id).toBe("hit");
       expect(orders[0].triggered).toBe(true);
     });
 
-    it('filters by status and sorts by trigger price ascending', async () => {
-      const simulate = jest.spyOn(client, 'simulateTransaction');
+    it("filters by status and sorts by trigger price ascending", async () => {
+      const simulate = jest.spyOn(client, "simulateTransaction");
       simulate.mockResolvedValueOnce(
         makeSimResult([
           makeOrderNative({
-            id: 'cancelled',
-            status: 'cancelled',
-            trigger_price: '8700000',
+            id: "cancelled",
+            status: "cancelled",
+            trigger_price: "8700000",
           }),
           makeOrderNative({
-            id: 'active-high',
-            status: 'active',
-            trigger_price: '9300000',
+            id: "active-high",
+            status: "active",
+            trigger_price: "9300000",
           }),
           makeOrderNative({
-            id: 'active-low',
-            status: 'active',
-            trigger_price: '8800000',
+            id: "active-low",
+            status: "active",
+            trigger_price: "8800000",
           }),
         ]),
       );
       simulate
-        .mockResolvedValueOnce(makeSimResult('10000000'))
-        .mockResolvedValueOnce(makeSimResult('10000000'))
-        .mockResolvedValueOnce(makeSimResult('10000000'));
+        .mockResolvedValueOnce(makeSimResult("10000000"))
+        .mockResolvedValueOnce(makeSimResult("10000000"))
+        .mockResolvedValueOnce(makeSimResult("10000000"));
 
       const orders = await stopLoss.getStopLossOrders(OWNER, {
-        statuses: ['active'],
-        sortBy: 'triggerPrice',
-        sortDirection: 'asc',
+        statuses: ["active"],
+        sortBy: "triggerPrice",
+        sortDirection: "asc",
       });
 
       expect(orders.map((order) => order.id)).toEqual([
-        'active-low',
-        'active-high',
+        "active-low",
+        "active-high",
       ]);
     });
 
-    it('returns an empty array when the manager returns no orders', async () => {
+    it("returns an empty array when the manager returns no orders", async () => {
       jest
-        .spyOn(client, 'simulateTransaction')
+        .spyOn(client, "simulateTransaction")
         .mockResolvedValue(makeSimResult([]));
 
       const orders = await stopLoss.getStopLossOrders(OWNER);
@@ -511,33 +511,33 @@ describe('StopLossModule', () => {
       expect(orders).toEqual([]);
     });
 
-    it('throws ValidationError for an empty address', async () => {
-      await expect(stopLoss.getStopLossOrders('')).rejects.toThrow(
+    it("throws ValidationError for an empty address", async () => {
+      await expect(stopLoss.getStopLossOrders("")).rejects.toThrow(
         ValidationError,
       );
     });
   });
 
-  describe('estimateStopLossGas()', () => {
-    it('returns a realistic estimate for a single-hop stop-loss', async () => {
+  describe("estimateStopLossGas()", () => {
+    it("returns a realistic estimate for a single-hop stop-loss", async () => {
       const simulate = jest
-        .spyOn(client, 'simulateTransaction')
+        .spyOn(client, "simulateTransaction")
         .mockResolvedValue(makeSimResult(null));
 
       const gas = await stopLoss.estimateStopLossGas(makeParams());
 
       expect(gas.fee).toBe(100);
-      expect(gas.feeXLM).toBe('0.00001 XLM');
+      expect(gas.feeXLM).toBe("0.00001 XLM");
       expect(simulate).toHaveBeenCalledTimes(1);
-      expect((simulate.mock.calls[0][0] as unknown[])).toHaveLength(1);
+      expect(simulate.mock.calls[0][0] as unknown[]).toHaveLength(1);
     });
 
-    it('includes an extra pricing operation for multi-hop routes', async () => {
+    it("includes an extra pricing operation for multi-hop routes", async () => {
       const simulate = jest
-        .spyOn(client, 'simulateTransaction')
+        .spyOn(client, "simulateTransaction")
         .mockResolvedValue({
           ...makeSimResult(null),
-          minResourceFee: '275',
+          minResourceFee: "275",
         });
 
       const gas = await stopLoss.estimateStopLossGas(makeParams(), {
@@ -545,76 +545,76 @@ describe('StopLossModule', () => {
       });
 
       expect(gas.fee).toBe(275);
-      expect(gas.feeXLM).toBe('0.00003 XLM');
-      expect((simulate.mock.calls[0][0] as unknown[])).toHaveLength(2);
+      expect(gas.feeXLM).toBe("0.00003 XLM");
+      expect(simulate.mock.calls[0][0] as unknown[]).toHaveLength(2);
     });
 
-    it('rejects invalid route addresses for multi-hop pricing', async () => {
+    it("rejects invalid route addresses for multi-hop pricing", async () => {
       await expect(
         stopLoss.estimateStopLossGas(makeParams(), {
-          route: [TOKEN_IN, 'not-an-address', TOKEN_OUT],
+          route: [TOKEN_IN, "not-an-address", TOKEN_OUT],
         }),
       ).rejects.toThrow(ValidationError);
     });
 
-    it('propagates simulation failure from mocked RPC', async () => {
+    it("propagates simulation failure from mocked RPC", async () => {
       jest
-        .spyOn(client, 'simulateTransaction')
-        .mockResolvedValue(makeFailedSimResult('out of budget'));
+        .spyOn(client, "simulateTransaction")
+        .mockResolvedValue(makeFailedSimResult("out of budget"));
 
-      await expect(
-        stopLoss.estimateStopLossGas(makeParams()),
-      ).rejects.toThrow('out of budget');
+      await expect(stopLoss.estimateStopLossGas(makeParams())).rejects.toThrow(
+        "out of budget",
+      );
     });
   });
 
-  describe('trigger detection', () => {
-    it('marks an order as triggered when price crosses below the threshold', async () => {
-      const simulate = jest.spyOn(client, 'simulateTransaction');
+  describe("trigger detection", () => {
+    it("marks an order as triggered when price crosses below the threshold", async () => {
+      const simulate = jest.spyOn(client, "simulateTransaction");
       simulate.mockResolvedValueOnce(makeSimResult(makeOrderNative()));
-      simulate.mockResolvedValueOnce(makeSimResult('8500000'));
+      simulate.mockResolvedValueOnce(makeSimResult("8500000"));
 
-      const order = await stopLoss.getStopLoss('order-1');
+      const order = await stopLoss.getStopLoss("order-1");
 
       expect(order.currentPrice).toBe(8_500_000n);
       expect(order.triggered).toBe(true);
     });
 
-    it('marks an order as triggered when price exactly equals the threshold', async () => {
-      const simulate = jest.spyOn(client, 'simulateTransaction');
+    it("marks an order as triggered when price exactly equals the threshold", async () => {
+      const simulate = jest.spyOn(client, "simulateTransaction");
       simulate.mockResolvedValueOnce(makeSimResult(makeOrderNative()));
-      simulate.mockResolvedValueOnce(makeSimResult('9000000'));
+      simulate.mockResolvedValueOnce(makeSimResult("9000000"));
 
-      const order = await stopLoss.getStopLoss('order-1');
+      const order = await stopLoss.getStopLoss("order-1");
 
       expect(order.triggered).toBe(true);
     });
 
-    it('does not trigger when price barely misses the threshold by one unit', async () => {
-      const simulate = jest.spyOn(client, 'simulateTransaction');
+    it("does not trigger when price barely misses the threshold by one unit", async () => {
+      const simulate = jest.spyOn(client, "simulateTransaction");
       simulate.mockResolvedValueOnce(makeSimResult(makeOrderNative()));
-      simulate.mockResolvedValueOnce(makeSimResult('9000001'));
+      simulate.mockResolvedValueOnce(makeSimResult("9000001"));
 
-      const order = await stopLoss.getStopLoss('order-1');
+      const order = await stopLoss.getStopLoss("order-1");
 
       expect(order.currentPrice).toBe(9_000_001n);
       expect(order.triggered).toBe(false);
     });
 
-    it('returns false from direct trigger evaluation when market is above trigger', async () => {
+    it("returns false from direct trigger evaluation when market is above trigger", async () => {
       jest
-        .spyOn(client, 'simulateTransaction')
-        .mockResolvedValue(makeSimResult('10000000'));
+        .spyOn(client, "simulateTransaction")
+        .mockResolvedValue(makeSimResult("10000000"));
 
-      await expect(
-        stopLoss.isStopLossTriggered(makeOrder()),
-      ).resolves.toBe(false);
+      await expect(stopLoss.isStopLossTriggered(makeOrder())).resolves.toBe(
+        false,
+      );
     });
 
-    it('throws StaleOracleError when oracle timestamp is older than max age', async () => {
-      jest.spyOn(client, 'simulateTransaction').mockResolvedValue(
+    it("throws StaleOracleError when oracle timestamp is older than max age", async () => {
+      jest.spyOn(client, "simulateTransaction").mockResolvedValue(
         makeSimResult({
-          price: '8500000',
+          price: "8500000",
           timestamp: NOW_MS - 301_000,
         }),
       );
@@ -624,10 +624,10 @@ describe('StopLossModule', () => {
       ).rejects.toThrow(StaleOracleError);
     });
 
-    it('accepts fresh oracle data at the staleness boundary', async () => {
-      jest.spyOn(client, 'simulateTransaction').mockResolvedValue(
+    it("accepts fresh oracle data at the staleness boundary", async () => {
+      jest.spyOn(client, "simulateTransaction").mockResolvedValue(
         makeSimResult({
-          price: '8500000',
+          price: "8500000",
           timestamp: NOW_MS - 300_000,
         }),
       );
@@ -638,395 +638,391 @@ describe('StopLossModule', () => {
     });
   });
 
-  describe('getStopLoss()', () => {
-    it('throws ValidationError for an empty orderId', async () => {
-      await expect(stopLoss.getStopLoss('')).rejects.toThrow(ValidationError);
+  describe("getStopLoss()", () => {
+    it("throws ValidationError for an empty orderId", async () => {
+      await expect(stopLoss.getStopLoss("")).rejects.toThrow(ValidationError);
     });
 
-    it('throws ValidationError when the order does not exist', async () => {
+    it("throws ValidationError when the order does not exist", async () => {
       jest
-        .spyOn(client, 'simulateTransaction')
+        .spyOn(client, "simulateTransaction")
         .mockResolvedValue(makeEmptySimResult());
 
-      await expect(stopLoss.getStopLoss('missing')).rejects.toThrow(
-        'Stop-loss order not found',
+      await expect(stopLoss.getStopLoss("missing")).rejects.toThrow(
+        "Stop-loss order not found",
       );
     });
   });
 
-  describe('distancePercent calculation', () => {
-    it('calculates positive distancePercent when price is above trigger', async () => {
-      jest.spyOn(client, 'simulateTransaction');
+  describe("distancePercent calculation", () => {
+    it("calculates positive distancePercent when price is above trigger", async () => {
+      jest.spyOn(client, "simulateTransaction");
       (client.simulateTransaction as jest.Mock).mockResolvedValueOnce(
-        makeSimResult(makeOrderNative())
+        makeSimResult(makeOrderNative()),
       );
       (client.simulateTransaction as jest.Mock).mockResolvedValueOnce(
-        makeSimResult('12000000') // 33% above trigger of 9000000
+        makeSimResult("12000000"), // 33% above trigger of 9000000
       );
 
-      const order = await stopLoss.getStopLoss('order-1');
+      const order = await stopLoss.getStopLoss("order-1");
 
       expect(order.distancePercent).toBeGreaterThan(0);
       expect(order.distancePercent).toBeCloseTo(33.33, 1);
     });
 
-    it('calculates negative distancePercent when price is below trigger', async () => {
-      jest.spyOn(client, 'simulateTransaction');
+    it("calculates negative distancePercent when price is below trigger", async () => {
+      jest.spyOn(client, "simulateTransaction");
       (client.simulateTransaction as jest.Mock).mockResolvedValueOnce(
-        makeSimResult(makeOrderNative())
+        makeSimResult(makeOrderNative()),
       );
       (client.simulateTransaction as jest.Mock).mockResolvedValueOnce(
-        makeSimResult('6000000') // 33% below trigger of 9000000
+        makeSimResult("6000000"), // 33% below trigger of 9000000
       );
 
-      const order = await stopLoss.getStopLoss('order-1');
+      const order = await stopLoss.getStopLoss("order-1");
 
       expect(order.distancePercent).toBeLessThan(0);
       expect(order.distancePercent).toBeCloseTo(-33.33, 1);
     });
 
-    it('calculates zero distancePercent when price equals trigger', async () => {
-      jest.spyOn(client, 'simulateTransaction');
+    it("calculates zero distancePercent when price equals trigger", async () => {
+      jest.spyOn(client, "simulateTransaction");
       (client.simulateTransaction as jest.Mock).mockResolvedValueOnce(
-        makeSimResult(makeOrderNative())
+        makeSimResult(makeOrderNative()),
       );
       (client.simulateTransaction as jest.Mock).mockResolvedValueOnce(
-        makeSimResult('9000000') // Exactly at trigger
+        makeSimResult("9000000"), // Exactly at trigger
       );
 
-      const order = await stopLoss.getStopLoss('order-1');
+      const order = await stopLoss.getStopLoss("order-1");
 
       expect(order.distancePercent).toBeCloseTo(0, 1);
     });
   });
 
-  describe('getStopLossOrders() with distancePercent sorting', () => {
-    it('includes distancePercent in each order', async () => {
-      const order1 = makeOrderNative({ id: 'order-1', trigger_price: '9000000' });
-      const order2 = makeOrderNative({ id: 'order-2', trigger_price: '8000000' });
+  describe("getStopLossOrders() with distancePercent sorting", () => {
+    it("includes distancePercent in each order", async () => {
+      const order1 = makeOrderNative({
+        id: "order-1",
+        trigger_price: "9000000",
+      });
+      const order2 = makeOrderNative({
+        id: "order-2",
+        trigger_price: "8000000",
+      });
 
       jest
-        .spyOn(client, 'simulateTransaction')
-        .mockResolvedValueOnce(
-          makeSimResult([order1, order2])
-        )
-        .mockResolvedValueOnce(makeSimResult('10000000'))
-        .mockResolvedValueOnce(makeSimResult('10000000'));
+        .spyOn(client, "simulateTransaction")
+        .mockResolvedValueOnce(makeSimResult([order1, order2]))
+        .mockResolvedValueOnce(makeSimResult("10000000"))
+        .mockResolvedValueOnce(makeSimResult("10000000"));
 
       const orders = await stopLoss.getStopLossOrders(OWNER);
 
       expect(orders.length).toBe(2);
       for (const order of orders) {
         expect(order.distancePercent).toBeDefined();
-        expect(typeof order.distancePercent).toBe('number');
+        expect(typeof order.distancePercent).toBe("number");
       }
     });
 
-    it('sorts orders by distancePercent ascending (closest to trigger first)', async () => {
+    it("sorts orders by distancePercent ascending (closest to trigger first)", async () => {
       const order1 = makeOrderNative({
-        id: 'order-1',
-        trigger_price: '9000000',
+        id: "order-1",
+        trigger_price: "9000000",
       });
       const order2 = makeOrderNative({
-        id: 'order-2',
-        trigger_price: '7000000',
+        id: "order-2",
+        trigger_price: "7000000",
       });
 
       jest
-        .spyOn(client, 'simulateTransaction')
-        .mockResolvedValueOnce(
-          makeSimResult([order1, order2])
-        )
-        .mockResolvedValueOnce(makeSimResult('9100000'))
-        .mockResolvedValueOnce(makeSimResult('9100000'));
+        .spyOn(client, "simulateTransaction")
+        .mockResolvedValueOnce(makeSimResult([order1, order2]))
+        .mockResolvedValueOnce(makeSimResult("9100000"))
+        .mockResolvedValueOnce(makeSimResult("9100000"));
 
       const orders = await stopLoss.getStopLossOrders(OWNER, {
-        sortBy: 'distancePercent',
-        sortDirection: 'asc',
+        sortBy: "distancePercent",
+        sortDirection: "asc",
       });
 
       expect(orders).toHaveLength(2);
       expect(orders[0].distancePercent).toBeLessThanOrEqual(
-        orders[1].distancePercent
+        orders[1].distancePercent,
       );
     });
 
-    it('sorts orders by distancePercent descending', async () => {
+    it("sorts orders by distancePercent descending", async () => {
       const order1 = makeOrderNative({
-        id: 'order-1',
-        trigger_price: '9000000',
+        id: "order-1",
+        trigger_price: "9000000",
       });
       const order2 = makeOrderNative({
-        id: 'order-2',
-        trigger_price: '7000000',
+        id: "order-2",
+        trigger_price: "7000000",
       });
 
       jest
-        .spyOn(client, 'simulateTransaction')
-        .mockResolvedValueOnce(
-          makeSimResult([order1, order2])
-        )
-        .mockResolvedValueOnce(makeSimResult('9100000'))
-        .mockResolvedValueOnce(makeSimResult('9100000'));
+        .spyOn(client, "simulateTransaction")
+        .mockResolvedValueOnce(makeSimResult([order1, order2]))
+        .mockResolvedValueOnce(makeSimResult("9100000"))
+        .mockResolvedValueOnce(makeSimResult("9100000"));
 
       const orders = await stopLoss.getStopLossOrders(OWNER, {
-        sortBy: 'distancePercent',
-        sortDirection: 'desc',
+        sortBy: "distancePercent",
+        sortDirection: "desc",
       });
 
       expect(orders).toHaveLength(2);
       expect(orders[0].distancePercent).toBeGreaterThanOrEqual(
-        orders[1].distancePercent
+        orders[1].distancePercent,
       );
     });
 
-    it('default sorting still uses createdAt when sortBy is not specified', async () => {
+    it("default sorting still uses createdAt when sortBy is not specified", async () => {
       const order1 = makeOrderNative({
-        id: 'order-1',
+        id: "order-1",
         created_at: NOW_MS - 100_000,
       });
       const order2 = makeOrderNative({
-        id: 'order-2',
+        id: "order-2",
         created_at: NOW_MS - 200_000,
       });
 
       jest
-        .spyOn(client, 'simulateTransaction')
-        .mockResolvedValueOnce(
-          makeSimResult([order1, order2])
-        )
-        .mockResolvedValueOnce(makeSimResult('10000000'))
-        .mockResolvedValueOnce(makeSimResult('10000000'));
+        .spyOn(client, "simulateTransaction")
+        .mockResolvedValueOnce(makeSimResult([order1, order2]))
+        .mockResolvedValueOnce(makeSimResult("10000000"))
+        .mockResolvedValueOnce(makeSimResult("10000000"));
 
       const orders = await stopLoss.getStopLossOrders(OWNER);
 
-      expect(orders[0].createdAt).toBeGreaterThan(
-        orders[1].createdAt ?? 0
-      );
+      expect(orders[0].createdAt).toBeGreaterThan(orders[1].createdAt ?? 0);
     });
   });
 
-  describe('Oracle Staleness Checks on Enrichment Paths', () => {
-  describe('getStopLoss() with stale oracle', () => {
-    it('throws StaleOracleError by default when oracle is stale', async () => {
-      jest
-        .spyOn(client, 'simulateTransaction')
-        .mockResolvedValueOnce(makeSimResult(makeOrderNative()))
-        .mockResolvedValueOnce(
+  describe("Oracle Staleness Checks on Enrichment Paths", () => {
+    describe("getStopLoss() with stale oracle", () => {
+      it("throws StaleOracleError by default when oracle is stale", async () => {
+        jest
+          .spyOn(client, "simulateTransaction")
+          .mockResolvedValueOnce(makeSimResult(makeOrderNative()))
+          .mockResolvedValueOnce(
+            makeSimResult({
+              price: "8500000",
+              timestamp: NOW_MS - 6 * 60 * 1000, // 6 minutes old (> DEFAULT_STALE_AFTER_MS)
+            }),
+          );
+
+        await expect(stopLoss.getStopLoss("order-1")).rejects.toThrow(
+          StaleOracleError,
+        );
+      });
+
+      it("throws StaleOracleError with custom staleness threshold", async () => {
+        jest
+          .spyOn(client, "simulateTransaction")
+          .mockResolvedValueOnce(makeSimResult(makeOrderNative()))
+          .mockResolvedValueOnce(
+            makeSimResult({
+              price: "8500000",
+              timestamp: NOW_MS - 2 * 60 * 1000, // 2 minutes old
+            }),
+          );
+
+        await expect(
+          stopLoss.getStopLoss("order-1", { staleAfterMs: 60_000 }), // 1 minute threshold
+        ).rejects.toThrow(StaleOracleError);
+      });
+
+      it("accepts fresh oracle price within default threshold", async () => {
+        jest
+          .spyOn(client, "simulateTransaction")
+          .mockResolvedValueOnce(makeSimResult(makeOrderNative()))
+          .mockResolvedValueOnce(
+            makeSimResult({
+              price: "8500000",
+              timestamp: NOW_MS - 4 * 60 * 1000, // 4 minutes old (< DEFAULT_STALE_AFTER_MS)
+            }),
+          );
+
+        const order = await stopLoss.getStopLoss("order-1");
+
+        expect(order.currentPrice).toBe(8_500_000n);
+        expect(order.triggered).toBe(true);
+      });
+
+      it("accepts oracle price at exact staleness boundary", async () => {
+        jest
+          .spyOn(client, "simulateTransaction")
+          .mockResolvedValueOnce(makeSimResult(makeOrderNative()))
+          .mockResolvedValueOnce(
+            makeSimResult({
+              price: "8500000",
+              timestamp: NOW_MS - 5 * 60 * 1000, // Exactly 5 minutes old
+            }),
+          );
+
+        const order = await stopLoss.getStopLoss("order-1");
+
+        expect(order.currentPrice).toBe(8_500_000n);
+      });
+    });
+
+    describe("getStopLossOrders() with stale oracle", () => {
+      it("throws StaleOracleError by default when any oracle is stale", async () => {
+        jest
+          .spyOn(client, "simulateTransaction")
+          .mockResolvedValueOnce(
+            makeSimResult([
+              makeOrderNative({ id: "order-1" }),
+              makeOrderNative({ id: "order-2" }),
+            ]),
+          )
+          .mockResolvedValueOnce(
+            makeSimResult({
+              price: "10000000",
+              timestamp: NOW_MS - 4 * 60 * 1000, // Fresh
+            }),
+          )
+          .mockResolvedValueOnce(
+            makeSimResult({
+              price: "10000000",
+              timestamp: NOW_MS - 6 * 60 * 1000, // Stale
+            }),
+          );
+
+        await expect(stopLoss.getStopLossOrders(OWNER)).rejects.toThrow(
+          StaleOracleError,
+        );
+      });
+
+      it("accepts all orders when all oracles are fresh", async () => {
+        jest
+          .spyOn(client, "simulateTransaction")
+          .mockResolvedValueOnce(
+            makeSimResult([
+              makeOrderNative({ id: "order-1" }),
+              makeOrderNative({ id: "order-2" }),
+            ]),
+          )
+          .mockResolvedValueOnce(
+            makeSimResult({
+              price: "10000000",
+              timestamp: NOW_MS - 2 * 60 * 1000, // 2 minutes
+            }),
+          )
+          .mockResolvedValueOnce(
+            makeSimResult({
+              price: "9500000",
+              timestamp: NOW_MS - 3 * 60 * 1000, // 3 minutes
+            }),
+          );
+
+        const orders = await stopLoss.getStopLossOrders(OWNER);
+
+        expect(orders).toHaveLength(2);
+        expect(orders[0].currentPrice).toBe(10_000_000n);
+        expect(orders[1].currentPrice).toBe(9_500_000n);
+      });
+
+      it("respects custom staleness threshold for all orders", async () => {
+        jest
+          .spyOn(client, "simulateTransaction")
+          .mockResolvedValueOnce(
+            makeSimResult([makeOrderNative({ id: "order-1" })]),
+          )
+          .mockResolvedValueOnce(
+            makeSimResult({
+              price: "10000000",
+              timestamp: NOW_MS - 90_000, // 90 seconds old
+            }),
+          );
+
+        await expect(
+          stopLoss.getStopLossOrders(OWNER, {}, { staleAfterMs: 60_000 }),
+        ).rejects.toThrow(StaleOracleError);
+      });
+    });
+
+    describe("isStopLossTriggered() with default staleness", () => {
+      it("throws StaleOracleError by default when oracle is stale", async () => {
+        jest.spyOn(client, "simulateTransaction").mockResolvedValue(
           makeSimResult({
-            price: '8500000',
-            timestamp: NOW_MS - 6 * 60 * 1000, // 6 minutes old (> DEFAULT_STALE_AFTER_MS)
+            price: "8500000",
+            timestamp: NOW_MS - 6 * 60 * 1000, // 6 minutes old
           }),
         );
 
-      await expect(stopLoss.getStopLoss('order-1')).rejects.toThrow(
-        StaleOracleError,
-      );
-    });
+        await expect(stopLoss.isStopLossTriggered(makeOrder())).rejects.toThrow(
+          StaleOracleError,
+        );
+      });
 
-    it('throws StaleOracleError with custom staleness threshold', async () => {
-      jest
-        .spyOn(client, 'simulateTransaction')
-        .mockResolvedValueOnce(makeSimResult(makeOrderNative()))
-        .mockResolvedValueOnce(
+      it("accepts fresh oracle by default", async () => {
+        jest.spyOn(client, "simulateTransaction").mockResolvedValue(
           makeSimResult({
-            price: '8500000',
+            price: "8500000",
+            timestamp: NOW_MS - 4 * 60 * 1000, // 4 minutes old
+          }),
+        );
+
+        await expect(stopLoss.isStopLossTriggered(makeOrder())).resolves.toBe(
+          true,
+        );
+      });
+
+      it("still respects explicit staleness override", async () => {
+        jest.spyOn(client, "simulateTransaction").mockResolvedValue(
+          makeSimResult({
+            price: "8500000",
             timestamp: NOW_MS - 2 * 60 * 1000, // 2 minutes old
           }),
         );
 
-      await expect(
-        stopLoss.getStopLoss('order-1', { staleAfterMs: 60_000 }), // 1 minute threshold
-      ).rejects.toThrow(StaleOracleError);
-    });
-
-    it('accepts fresh oracle price within default threshold', async () => {
-      jest
-        .spyOn(client, 'simulateTransaction')
-        .mockResolvedValueOnce(makeSimResult(makeOrderNative()))
-        .mockResolvedValueOnce(
-          makeSimResult({
-            price: '8500000',
-            timestamp: NOW_MS - 4 * 60 * 1000, // 4 minutes old (< DEFAULT_STALE_AFTER_MS)
-          }),
+        // Should pass with default (5min)
+        await expect(stopLoss.isStopLossTriggered(makeOrder())).resolves.toBe(
+          true,
         );
 
-      const order = await stopLoss.getStopLoss('order-1');
-
-      expect(order.currentPrice).toBe(8_500_000n);
-      expect(order.triggered).toBe(true);
+        // Should fail with 1min threshold
+        await expect(
+          stopLoss.isStopLossTriggered(makeOrder(), { staleAfterMs: 60_000 }),
+        ).rejects.toThrow(StaleOracleError);
+      });
     });
 
-    it('accepts oracle price at exact staleness boundary', async () => {
-      jest
-        .spyOn(client, 'simulateTransaction')
-        .mockResolvedValueOnce(makeSimResult(makeOrderNative()))
-        .mockResolvedValueOnce(
+    describe("Oracle without timestamp", () => {
+      it("allows enrichment when oracle has no timestamp", async () => {
+        jest
+          .spyOn(client, "simulateTransaction")
+          .mockResolvedValueOnce(makeSimResult(makeOrderNative()))
+          .mockResolvedValueOnce(
+            makeSimResult({
+              price: "8500000",
+              // No timestamp field
+            }),
+          );
+
+        const order = await stopLoss.getStopLoss("order-1");
+
+        expect(order.currentPrice).toBe(8_500_000n);
+        expect(order.triggered).toBe(true);
+      });
+
+      it("allows trigger check when oracle has no timestamp", async () => {
+        jest.spyOn(client, "simulateTransaction").mockResolvedValue(
           makeSimResult({
-            price: '8500000',
-            timestamp: NOW_MS - 5 * 60 * 1000, // Exactly 5 minutes old
-          }),
-        );
-
-      const order = await stopLoss.getStopLoss('order-1');
-
-      expect(order.currentPrice).toBe(8_500_000n);
-    });
-  });
-
-  describe('getStopLossOrders() with stale oracle', () => {
-    it('throws StaleOracleError by default when any oracle is stale', async () => {
-      jest
-        .spyOn(client, 'simulateTransaction')
-        .mockResolvedValueOnce(
-          makeSimResult([
-            makeOrderNative({ id: 'order-1' }),
-            makeOrderNative({ id: 'order-2' }),
-          ]),
-        )
-        .mockResolvedValueOnce(
-          makeSimResult({
-            price: '10000000',
-            timestamp: NOW_MS - 4 * 60 * 1000, // Fresh
-          }),
-        )
-        .mockResolvedValueOnce(
-          makeSimResult({
-            price: '10000000',
-            timestamp: NOW_MS - 6 * 60 * 1000, // Stale
-          }),
-        );
-
-      await expect(stopLoss.getStopLossOrders(OWNER)).rejects.toThrow(
-        StaleOracleError,
-      );
-    });
-
-    it('accepts all orders when all oracles are fresh', async () => {
-      jest
-        .spyOn(client, 'simulateTransaction')
-        .mockResolvedValueOnce(
-          makeSimResult([
-            makeOrderNative({ id: 'order-1' }),
-            makeOrderNative({ id: 'order-2' }),
-          ]),
-        )
-        .mockResolvedValueOnce(
-          makeSimResult({
-            price: '10000000',
-            timestamp: NOW_MS - 2 * 60 * 1000, // 2 minutes
-          }),
-        )
-        .mockResolvedValueOnce(
-          makeSimResult({
-            price: '9500000',
-            timestamp: NOW_MS - 3 * 60 * 1000, // 3 minutes
-          }),
-        );
-
-      const orders = await stopLoss.getStopLossOrders(OWNER);
-
-      expect(orders).toHaveLength(2);
-      expect(orders[0].currentPrice).toBe(10_000_000n);
-      expect(orders[1].currentPrice).toBe(9_500_000n);
-    });
-
-    it('respects custom staleness threshold for all orders', async () => {
-      jest
-        .spyOn(client, 'simulateTransaction')
-        .mockResolvedValueOnce(
-          makeSimResult([makeOrderNative({ id: 'order-1' })]),
-        )
-        .mockResolvedValueOnce(
-          makeSimResult({
-            price: '10000000',
-            timestamp: NOW_MS - 90_000, // 90 seconds old
-          }),
-        );
-
-      await expect(
-        stopLoss.getStopLossOrders(OWNER, {}, { staleAfterMs: 60_000 }),
-      ).rejects.toThrow(StaleOracleError);
-    });
-  });
-
-  describe('isStopLossTriggered() with default staleness', () => {
-    it('throws StaleOracleError by default when oracle is stale', async () => {
-      jest.spyOn(client, 'simulateTransaction').mockResolvedValue(
-        makeSimResult({
-          price: '8500000',
-          timestamp: NOW_MS - 6 * 60 * 1000, // 6 minutes old
-        }),
-      );
-
-      await expect(
-        stopLoss.isStopLossTriggered(makeOrder()),
-      ).rejects.toThrow(StaleOracleError);
-    });
-
-    it('accepts fresh oracle by default', async () => {
-      jest.spyOn(client, 'simulateTransaction').mockResolvedValue(
-        makeSimResult({
-          price: '8500000',
-          timestamp: NOW_MS - 4 * 60 * 1000, // 4 minutes old
-        }),
-      );
-
-      await expect(
-        stopLoss.isStopLossTriggered(makeOrder()),
-      ).resolves.toBe(true);
-    });
-
-    it('still respects explicit staleness override', async () => {
-      jest.spyOn(client, 'simulateTransaction').mockResolvedValue(
-        makeSimResult({
-          price: '8500000',
-          timestamp: NOW_MS - 2 * 60 * 1000, // 2 minutes old
-        }),
-      );
-
-      // Should pass with default (5min)
-      await expect(
-        stopLoss.isStopLossTriggered(makeOrder()),
-      ).resolves.toBe(true);
-
-      // Should fail with 1min threshold
-      await expect(
-        stopLoss.isStopLossTriggered(makeOrder(), { staleAfterMs: 60_000 }),
-      ).rejects.toThrow(StaleOracleError);
-    });
-  });
-
-  describe('Oracle without timestamp', () => {
-    it('allows enrichment when oracle has no timestamp', async () => {
-      jest
-        .spyOn(client, 'simulateTransaction')
-        .mockResolvedValueOnce(makeSimResult(makeOrderNative()))
-        .mockResolvedValueOnce(
-          makeSimResult({
-            price: '8500000',
+            price: "8500000",
             // No timestamp field
           }),
         );
 
-      const order = await stopLoss.getStopLoss('order-1');
-
-      expect(order.currentPrice).toBe(8_500_000n);
-      expect(order.triggered).toBe(true);
+        await expect(stopLoss.isStopLossTriggered(makeOrder())).resolves.toBe(
+          true,
+        );
+      });
     });
-
-    it('allows trigger check when oracle has no timestamp', async () => {
-      jest.spyOn(client, 'simulateTransaction').mockResolvedValue(
-        makeSimResult({
-          price: '8500000',
-          // No timestamp field
-        }),
-      );
-
-      await expect(
-        stopLoss.isStopLossTriggered(makeOrder()),
-      ).resolves.toBe(true);
-    });
-  });
   });
 });

@@ -4,27 +4,44 @@ import {
   Transaction,
   Account,
   xdr,
-} from '@stellar/stellar-sdk';
-import { CoralSwapConfig, NetworkConfig, NETWORK_CONFIGS, DEFAULTS } from '@/config';
-import { Network, Result, Logger, Signer, SimulateTransactionOptions, SimulateTransactionResult } from '@/types/common';
-import { NotConfiguredError, SignerError } from '@/errors';
-import { FactoryClient } from '@/contracts/factory';
-import { PairClient } from '@/contracts/pair';
-import { RouterClient } from '@/contracts/router';
-import { LPTokenClient } from '@/contracts/lp-token';
-import { TokenListModule } from '@/modules/tokens';
-import { FactoryModule } from '@/modules/factory';
-import { PortfolioModule } from '@/modules/portfolio';
-import { KeypairSigner } from '@/utils/signer';
-import { TransactionPoller, PollingStrategy, PollingOptions } from '@/utils/polling';
-import { ConnectionPool } from '@/utils/connection-pool';
-import { buildSimulationResult } from '@/utils/simulation';
-import { RateLimiter } from '@/utils/rate-limiter';
-import { withRetry, RetryOptions, isRetryable } from '@/utils/retry';
-import { validateRpcUrls, getRpcUrlScheme } from '@/utils/rpc-url';
-import { TransactionComposer } from '@/transaction-composer';
-import { TypedEventCursor } from '@/utils/event-cursor';
-import { EventCursorOptions } from '@/utils/event-cursor';
+} from "@stellar/stellar-sdk";
+import {
+  CoralSwapConfig,
+  NetworkConfig,
+  NETWORK_CONFIGS,
+  DEFAULTS,
+} from "@/config";
+import {
+  Network,
+  Result,
+  Logger,
+  Signer,
+  SimulateTransactionOptions,
+  SimulateTransactionResult,
+} from "@/types/common";
+import { NotConfiguredError, SignerError } from "@/errors";
+import { FactoryClient } from "@/contracts/factory";
+import { PairClient } from "@/contracts/pair";
+import { RouterClient } from "@/contracts/router";
+import { LPTokenClient } from "@/contracts/lp-token";
+import { TokenListModule } from "@/modules/tokens";
+import { FactoryModule } from "@/modules/factory";
+import { PortfolioModule } from "@/modules/portfolio";
+import { KeypairSigner } from "@/utils/signer";
+import {
+  TransactionPoller,
+  PollingStrategy,
+  PollingOptions,
+} from "@/utils/polling";
+import { ConnectionPool } from "@/utils/connection-pool";
+import { buildSimulationResult } from "@/utils/simulation";
+import { RateLimiter } from "@/utils/rate-limiter";
+import { withRetry, RetryOptions, isRetryable } from "@/utils/retry";
+import { validateRpcUrls, getRpcUrlScheme } from "@/utils/rpc-url";
+import { clearTokenDecimalsCache } from "@/utils/token-decimals";
+import { TransactionComposer } from "@/transaction-composer";
+import { TypedEventCursor } from "@/utils/event-cursor";
+import { EventCursorOptions } from "@/utils/event-cursor";
 export { KeypairSigner, PollingStrategy, PollingOptions };
 
 /**
@@ -93,17 +110,17 @@ export class CoralSwapClient {
 
       try {
         const result = await withRetry(
-            async () => {
-              // Acquire a rate-limiter token per dispatch attempt so retries
-              // and fallback-endpoint rotations are each individually throttled.
-              if (this._rateLimiter) {
-                await this._rateLimiter.acquire();
-              }
-              return fn(this.server);
-            },
-            options,
-            this.logger,
-            `${label}[RPC:${rpcUrl}]`,
+          async () => {
+            // Acquire a rate-limiter token per dispatch attempt so retries
+            // and fallback-endpoint rotations are each individually throttled.
+            if (this._rateLimiter) {
+              await this._rateLimiter.acquire();
+            }
+            return fn(this.server);
+          },
+          options,
+          this.logger,
+          `${label}[RPC:${rpcUrl}]`,
         );
 
         this._connectionPool.reportSuccess(rpcUrl);
@@ -115,11 +132,14 @@ export class CoralSwapClient {
 
         lastError = err;
         this._connectionPool.reportFailure(rpcUrl);
-        this.logger?.info(`executeWithFallback: RPC call failed, trying fallback`, {
-          label,
-          url: rpcUrl,
-          error: err instanceof Error ? err.message : err,
-        });
+        this.logger?.info(
+          `executeWithFallback: RPC call failed, trying fallback`,
+          {
+            label,
+            url: rpcUrl,
+            error: err instanceof Error ? err.message : err,
+          },
+        );
       }
     }
 
@@ -154,7 +174,7 @@ export class CoralSwapClient {
     const options: Record<string, unknown> = {
       headers: this.config.rpcHeaders,
       ...this.config.fetchOptions,
-      allowHttp: scheme !== 'https',
+      allowHttp: scheme !== "https",
     };
     return new rpc.Server(url, options);
   }
@@ -187,7 +207,9 @@ export class CoralSwapClient {
 
     // Handle custom RPC URL(s)
     if (config.rpcUrl) {
-      this._rpcUrls = Array.isArray(config.rpcUrl) ? config.rpcUrl : [config.rpcUrl];
+      this._rpcUrls = Array.isArray(config.rpcUrl)
+        ? config.rpcUrl
+        : [config.rpcUrl];
       this.networkConfig = { ...this.networkConfig, rpcUrl: this._rpcUrls[0] };
     } else {
       this._rpcUrls = [this.networkConfig.rpcUrl];
@@ -207,8 +229,8 @@ export class CoralSwapClient {
       this.signer = config.signer;
     } else if (config.secretKey) {
       const kpSigner = new KeypairSigner(
-          config.secretKey,
-          this.networkConfig.networkPassphrase,
+        config.secretKey,
+        this.networkConfig.networkPassphrase,
       );
       this.signer = kpSigner;
       this._publicKeyCache = kpSigner.publicKeySync;
@@ -275,18 +297,18 @@ export class CoralSwapClient {
     if (!this._factory) {
       if (!this.networkConfig.factoryAddress) {
         throw new NotConfiguredError(
-            "Factory contract",
-            { network: this.network, configKey: "factoryAddress" },
-            `set factoryAddress for network "${this.network}" ` +
-                `(NetworkConfig.factoryAddress) before accessing client.factory`,
+          "Factory contract",
+          { network: this.network, configKey: "factoryAddress" },
+          `set factoryAddress for network "${this.network}" ` +
+            `(NetworkConfig.factoryAddress) before accessing client.factory`,
         );
       }
       this._factory = new FactoryClient(
-          this.networkConfig.factoryAddress,
-          this.server,
-          this.networkConfig.networkPassphrase,
-          this.getRetryOptions(),
-          this.logger,
+        this.networkConfig.factoryAddress,
+        this.server,
+        this.networkConfig.networkPassphrase,
+        this.getRetryOptions(),
+        this.logger,
       );
     }
     return this._factory;
@@ -304,18 +326,18 @@ export class CoralSwapClient {
     if (!this._router) {
       if (!this.networkConfig.routerAddress) {
         throw new NotConfiguredError(
-            "Router contract",
-            { network: this.network, configKey: "routerAddress" },
-            `set routerAddress for network "${this.network}" ` +
-                `(NetworkConfig.routerAddress) before accessing client.router`,
+          "Router contract",
+          { network: this.network, configKey: "routerAddress" },
+          `set routerAddress for network "${this.network}" ` +
+            `(NetworkConfig.routerAddress) before accessing client.router`,
         );
       }
       this._router = new RouterClient(
-          this.networkConfig.routerAddress,
-          this.server,
-          this.networkConfig.networkPassphrase,
-          this.getRetryOptions(),
-          this.logger,
+        this.networkConfig.routerAddress,
+        this.server,
+        this.networkConfig.networkPassphrase,
+        this.getRetryOptions(),
+        this.logger,
       );
     }
     return this._router;
@@ -327,12 +349,12 @@ export class CoralSwapClient {
   pair(pairAddress: string): PairClient {
     const sourceAccount = this._publicKeyCache ?? this.config.publicKey;
     return new PairClient(
-        pairAddress,
-        this.server,
-        this.networkConfig.networkPassphrase,
-        this.getRetryOptions(),
-        this.logger,
-        sourceAccount,
+      pairAddress,
+      this.server,
+      this.networkConfig.networkPassphrase,
+      this.getRetryOptions(),
+      this.logger,
+      sourceAccount,
     );
   }
 
@@ -376,6 +398,26 @@ export class CoralSwapClient {
   }
 
   /**
+   * Reset all network-scoped singletons and caches so the client can be
+   * re-pointed at a different network without retaining stale RPC state.
+   */
+  reset(): void {
+    const factoryModule = this._factoryModule;
+    if (factoryModule) {
+      factoryModule.clearCache();
+    }
+
+    this._poller = null;
+    this._factory = null;
+    this._router = null;
+    this._factoryModule = null;
+    this._portfolio = null;
+    this._publicKeyCache = null;
+
+    clearTokenDecimalsCache();
+  }
+
+  /**
    * Switch the client to a different network.
    *
    * @param network - The target network.
@@ -384,50 +426,79 @@ export class CoralSwapClient {
    * client.setNetwork(Network.MAINNET);
    */
   setNetwork(network: Network, rpcUrl?: string): void {
-    this.network = network;
-    this.networkConfig = {
+    const previousNetwork = this.network;
+    const previousNetworkConfig = this.networkConfig;
+    const previousRpcUrls = [...this._rpcUrls];
+    const previousActiveRpcUrl = this._activeRpcUrl;
+    const previousServer = this.server;
+    const previousFactory = this._factory;
+    const previousRouter = this._router;
+    const previousFactoryModule = this._factoryModule;
+    const previousPortfolio = this._portfolio;
+    const previousPoller = this._poller;
+    const previousSigner = this.signer;
+    const previousPublicKeyCache = this._publicKeyCache;
+
+    const nextNetworkConfig = {
       ...NETWORK_CONFIGS[network],
     };
-
-    if (rpcUrl) {
-      this._rpcUrls = Array.isArray(rpcUrl) ? rpcUrl : [rpcUrl];
-    } else {
-      this._rpcUrls = [this.networkConfig.rpcUrl];
-    }
+    const nextRpcUrls = rpcUrl
+      ? Array.isArray(rpcUrl)
+        ? rpcUrl
+        : [rpcUrl]
+      : [nextNetworkConfig.rpcUrl];
 
     // Reject cleartext / invalid RPC endpoints before anything can be sent.
-    validateRpcUrls(this._rpcUrls, network);
+    validateRpcUrls(nextRpcUrls, network);
 
-    // Keep networkConfig.rpcUrl in sync with the active RPC URL
-    this.networkConfig.rpcUrl = this._rpcUrls[0];
+    const nextConfig = {
+      ...nextNetworkConfig,
+      rpcUrl: nextRpcUrls[0],
+    };
 
-    this._connectionPool = new ConnectionPool(this._rpcUrls);
-    this._activeRpcUrl = this._rpcUrls[0];
-    this._server = this.createRpcServer(this._activeRpcUrl);
+    const nextConnectionPool = new ConnectionPool(nextRpcUrls);
+    const nextServer = this.createRpcServer(nextRpcUrls[0]);
 
-    // Reset contract client singletons to trigger re-initialization
-    this._factory = null;
-    this._router = null;
+    try {
+      this.network = network;
+      this.networkConfig = nextConfig;
+      this._rpcUrls = nextRpcUrls;
+      this._connectionPool = nextConnectionPool;
+      this._activeRpcUrl = nextRpcUrls[0];
+      this._server = nextServer;
 
-    // Reset factory module cache
-    if (this._factoryModule) {
-      this._factoryModule.clearCache();
-    }
+      this.reset();
 
-    // Refresh signer if using built-in KeypairSigner
-    if (this.config.secretKey) {
-      const kpSigner = new KeypairSigner(
+      // Refresh signer if using built-in KeypairSigner
+      if (this.config.secretKey) {
+        const kpSigner = new KeypairSigner(
           this.config.secretKey,
           this.networkConfig.networkPassphrase,
-      );
-      this.signer = kpSigner;
-      this._publicKeyCache = kpSigner.publicKeySync;
-    }
+        );
+        this.signer = kpSigner;
+        this._publicKeyCache = kpSigner.publicKeySync;
+      }
 
-    this.logger?.info("setNetwork: network switched", {
-      network: this.network,
-      rpcUrl: this.networkConfig.rpcUrl,
-    });
+      this.logger?.info("setNetwork: network switched", {
+        network: this.network,
+        rpcUrl: this.networkConfig.rpcUrl,
+      });
+    } catch (error) {
+      this.network = previousNetwork;
+      this.networkConfig = previousNetworkConfig;
+      this._rpcUrls = previousRpcUrls;
+      this._activeRpcUrl = previousActiveRpcUrl;
+      this._server = previousServer;
+      this._connectionPool = new ConnectionPool(previousRpcUrls);
+      this._factory = previousFactory;
+      this._router = previousRouter;
+      this._factoryModule = previousFactoryModule;
+      this._portfolio = previousPortfolio;
+      this._poller = previousPoller;
+      this.signer = previousSigner;
+      this._publicKeyCache = previousPublicKeyCache;
+      throw error;
+    }
   }
 
   /**
@@ -435,11 +506,11 @@ export class CoralSwapClient {
    */
   lpToken(lpTokenAddress: string): LPTokenClient {
     return new LPTokenClient(
-        lpTokenAddress,
-        this.server,
-        this.networkConfig.networkPassphrase,
-        this.getRetryOptions(),
-        this.logger,
+      lpTokenAddress,
+      this.server,
+      this.networkConfig.networkPassphrase,
+      this.getRetryOptions(),
+      this.logger,
     );
   }
 
@@ -487,8 +558,8 @@ export class CoralSwapClient {
    * const result = await client.submitTransaction([op]);
    */
   async submitTransaction(
-      operations: xdr.Operation[],
-      source?: string,
+    operations: xdr.Operation[],
+    source?: string,
   ): Promise<Result<{ txHash: string; ledger: number }>> {
     // Soroban account sequences are nonces. Queue the complete
     // getAccount -> build -> simulate -> sign -> send -> poll lifecycle,
@@ -507,16 +578,16 @@ export class CoralSwapClient {
 
   /** Execute one transaction lifecycle. Calls are serialized by submitTransaction. */
   private async submitTransactionUnlocked(
-      operations: xdr.Operation[],
-      source?: string,
+    operations: xdr.Operation[],
+    source?: string,
   ): Promise<Result<{ txHash: string; ledger: number }>> {
     try {
       const sourceKey = source ?? (await this.resolvePublicKey());
 
       this.logger?.debug("getAccount: fetching account", { sourceKey });
       const account = await this.executeWithFallback(
-          (server) => server.getAccount(sourceKey),
-          "getAccount",
+        (server) => server.getAccount(sourceKey),
+        "getAccount",
       );
       this.logger?.debug("getAccount: success", { sourceKey });
 
@@ -536,15 +607,20 @@ export class CoralSwapClient {
         operationCount: operations.length,
       });
       const sim = await this.executeWithFallback(
-          (server) => server.simulateTransaction(tx),
-          "simulateTransaction",
+        (server) => server.simulateTransaction(tx),
+        "simulateTransaction",
       );
       if (!rpc.Api.isSimulationSuccess(sim)) {
         const simSummary = {
-          error: rpc.Api.isSimulationError(sim) ? sim.error : 'restore required',
+          error: rpc.Api.isSimulationError(sim)
+            ? sim.error
+            : "restore required",
           latestLedger: sim.latestLedger,
         };
-        this.logger?.error("simulateTransaction: simulation failed", simSummary);
+        this.logger?.error(
+          "simulateTransaction: simulation failed",
+          simSummary,
+        );
         this.logger?.debug("simulateTransaction: full simulation response", {
           simulation: sim,
         });
@@ -567,20 +643,20 @@ export class CoralSwapClient {
           error: {
             code: "NO_SIGNER",
             message:
-                "No signing key configured. Provide secretKey or a Signer instance.",
+              "No signing key configured. Provide secretKey or a Signer instance.",
           },
         };
       }
 
       const signedXdr = await this.signer.signTransaction(preparedTx.toXdr());
       const signedTx = new Transaction(
-          signedXdr,
-          this.networkConfig.networkPassphrase,
+        signedXdr,
+        this.networkConfig.networkPassphrase,
       );
 
       const response = await this.executeWithFallback(
-          (server) => server.sendTransaction(signedTx),
-          "sendTransaction",
+        (server) => server.sendTransaction(signedTx),
+        "sendTransaction",
       );
 
       if (response.status === "ERROR") {
@@ -589,7 +665,10 @@ export class CoralSwapClient {
           hash: response.hash,
           latestLedger: response.latestLedger,
         };
-        this.logger?.error("sendTransaction: submission failed", responseSummary);
+        this.logger?.error(
+          "sendTransaction: submission failed",
+          responseSummary,
+        );
         this.logger?.debug("sendTransaction: full submission response", {
           response,
         });
@@ -610,7 +689,7 @@ export class CoralSwapClient {
       return result;
     } catch (err) {
       this.logger?.error("submitTransaction: unexpected error", {
-        name: err instanceof Error ? err.name : 'Unknown',
+        name: err instanceof Error ? err.name : "Unknown",
         message: err instanceof Error ? err.message : String(err),
       });
       return {
@@ -619,7 +698,7 @@ export class CoralSwapClient {
           code: "UNEXPECTED_ERROR",
           message: err instanceof Error ? err.message : "Unknown error",
           details: {
-            name: err instanceof Error ? err.name : 'Unknown',
+            name: err instanceof Error ? err.name : "Unknown",
             message: err instanceof Error ? err.message : String(err),
           },
         },
@@ -631,14 +710,17 @@ export class CoralSwapClient {
    * Poll for transaction confirmation using the customized poller.
    */
   private async pollTransaction(
-      txHash: string,
+    txHash: string,
   ): Promise<Result<{ txHash: string; ledger: number }>> {
     return this.poller().poll(txHash, {
       strategy: this.config.pollingStrategy ?? DEFAULTS.pollingStrategy,
       interval: this.config.pollingIntervalMs ?? DEFAULTS.pollingIntervalMs,
-      maxAttempts: this.config.maxPollingAttempts ?? DEFAULTS.maxPollingAttempts,
-      backoffFactor: this.config.pollingBackoffFactor ?? DEFAULTS.pollingBackoffFactor,
-      maxInterval: this.config.maxPollingIntervalMs ?? DEFAULTS.maxPollingIntervalMs,
+      maxAttempts:
+        this.config.maxPollingAttempts ?? DEFAULTS.maxPollingAttempts,
+      backoffFactor:
+        this.config.pollingBackoffFactor ?? DEFAULTS.pollingBackoffFactor,
+      maxInterval:
+        this.config.maxPollingIntervalMs ?? DEFAULTS.maxPollingIntervalMs,
     });
   }
 
@@ -656,8 +738,8 @@ export class CoralSwapClient {
    * if (rpc.Api.isSimulationSuccess(sim)) { ... }
    */
   async simulateTransaction(
-      operations: xdr.Operation[],
-      source?: string,
+    operations: xdr.Operation[],
+    source?: string,
   ): Promise<rpc.Api.SimulateTransactionResponse>;
 
   /**
@@ -697,42 +779,42 @@ export class CoralSwapClient {
    * console.log('Auth required:', result.auth.length);
    */
   async simulateTransaction(
-      operations: xdr.Operation[],
-      options: SimulateTransactionOptions,
+    operations: xdr.Operation[],
+    options: SimulateTransactionOptions,
   ): Promise<SimulateTransactionResult>;
 
   // Unified implementation — handles both call forms.
   async simulateTransaction(
-      operations: xdr.Operation[],
-      sourceOrOptions?: string | SimulateTransactionOptions,
+    operations: xdr.Operation[],
+    sourceOrOptions?: string | SimulateTransactionOptions,
   ): Promise<rpc.Api.SimulateTransactionResponse | SimulateTransactionResult> {
     // Distinguish enhanced form (options object) from legacy form (string or undefined).
     const isEnhanced =
-        sourceOrOptions !== undefined && typeof sourceOrOptions !== 'string';
+      sourceOrOptions !== undefined && typeof sourceOrOptions !== "string";
 
     const source =
-        typeof sourceOrOptions === 'string'
-            ? sourceOrOptions
-            : (sourceOrOptions as SimulateTransactionOptions | undefined)?.source;
+      typeof sourceOrOptions === "string"
+        ? sourceOrOptions
+        : (sourceOrOptions as SimulateTransactionOptions | undefined)?.source;
 
     const timeoutSec = isEnhanced
-        ? ((sourceOrOptions as SimulateTransactionOptions).timeoutSec ??
-            this.networkConfig.sorobanTimeout)
-        : 30; // preserve the original hardcoded value for the legacy path
+      ? ((sourceOrOptions as SimulateTransactionOptions).timeoutSec ??
+        this.networkConfig.sorobanTimeout)
+      : 30; // preserve the original hardcoded value for the legacy path
 
     const fee = isEnhanced
-        ? ((sourceOrOptions as SimulateTransactionOptions).fee ?? '100')
-        : '100';
+      ? ((sourceOrOptions as SimulateTransactionOptions).fee ?? "100")
+      : "100";
 
     const sourceKey = source ?? this.publicKey;
 
-    this.logger?.debug('simulateTransaction (dry-run): fetching account', {
+    this.logger?.debug("simulateTransaction (dry-run): fetching account", {
       sourceKey,
       enhanced: isEnhanced,
     });
     const account = await this.executeWithFallback(
-        (server) => server.getAccount(sourceKey),
-        'simulateTransaction_getAccount',
+      (server) => server.getAccount(sourceKey),
+      "simulateTransaction_getAccount",
     );
 
     let builder = new TransactionBuilder(account, {
@@ -746,16 +828,16 @@ export class CoralSwapClient {
 
     const tx = builder.setTimeout(timeoutSec).build();
 
-    this.logger?.debug('simulateTransaction (dry-run): simulating', {
+    this.logger?.debug("simulateTransaction (dry-run): simulating", {
       sourceKey,
       operationCount: operations.length,
       enhanced: isEnhanced,
     });
     const sim = await this.executeWithFallback(
-        (server) => server.simulateTransaction(tx),
-        'simulateTransaction_simulate',
+      (server) => server.simulateTransaction(tx),
+      "simulateTransaction_simulate",
     );
-    this.logger?.debug('simulateTransaction (dry-run): completed', {
+    this.logger?.debug("simulateTransaction (dry-run): completed", {
       success: rpc.Api.isSimulationSuccess(sim),
       enhanced: isEnhanced,
     });
@@ -771,7 +853,7 @@ export class CoralSwapClient {
    */
   getDeadline(offsetSec?: number): number {
     const offset =
-        offsetSec ?? this.config.defaultDeadlineSec ?? DEFAULTS.deadlineSec;
+      offsetSec ?? this.config.defaultDeadlineSec ?? DEFAULTS.deadlineSec;
     return Math.floor(Date.now() / 1000) + offset;
   }
 
@@ -781,8 +863,8 @@ export class CoralSwapClient {
   async isHealthy(): Promise<boolean> {
     try {
       const health = await this.executeWithFallback(
-          (server) => server.getHealth(),
-          "getHealth",
+        (server) => server.getHealth(),
+        "getHealth",
       );
       return health.status === "healthy";
     } catch {
@@ -795,8 +877,8 @@ export class CoralSwapClient {
    */
   async getCurrentLedger(): Promise<number> {
     const info = await this.executeWithFallback(
-        (server) => server.getLatestLedger(),
-        "getLatestLedger",
+      (server) => server.getLatestLedger(),
+      "getLatestLedger",
     );
     return info.sequence;
   }
@@ -829,8 +911,8 @@ export class CoralSwapClient {
   async getAccount(publicKey?: string): Promise<Account> {
     const sourceKey = publicKey ?? (await this.resolvePublicKey());
     return this.executeWithFallback(
-        (server) => server.getAccount(sourceKey),
-        "getAccount",
+      (server) => server.getAccount(sourceKey),
+      "getAccount",
     );
   }
 
