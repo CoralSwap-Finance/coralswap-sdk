@@ -53,6 +53,11 @@ function expectNoListenerGrowth(
   }
 }
 
+// Heap-growth assertions are only meaningful when the test can force a
+// collection between measurements. `npm run test:memory` passes --expose-gc;
+// the regular parallel suite does not, so those tests are skipped there.
+const itWithGc = typeof (globalThis as { gc?: () => void }).gc === 'function' ? it : it.skip;
+
 async function forceGc(): Promise<void> {
   const gc = (globalThis as { gc?: () => void }).gc;
   if (typeof gc === 'function') {
@@ -189,7 +194,7 @@ describe('subscription memory / cleanup', () => {
   });
 
   describe('watchOrder', () => {
-    it('keeps heap growth under 1MB across 1000 polling cycles', async () => {
+    itWithGc('keeps heap growth under 1MB across 1000 polling cycles', async () => {
       const module = makeLimitOrderModule();
       // Stub status fetches so we measure the subscription loop, not XDR/simulation churn.
       jest.spyOn(module, 'getLimitOrderStatus').mockResolvedValue({
@@ -287,7 +292,7 @@ describe('subscription memory / cleanup', () => {
       unsub();
     }, 10_000);
 
-    it('keeps heap growth under 1MB across 1000 polling cycles', async () => {
+    itWithGc('keeps heap growth under 1MB across 1000 polling cycles', async () => {
       let pollCount = 0;
       const getEvents = jest.fn().mockImplementation(async () => {
         pollCount += 1;
@@ -342,7 +347,7 @@ describe('subscription memory / cleanup', () => {
   });
 
   describe('alert polling', () => {
-    it('keeps heap growth under 1MB across 1000 polling cycles', async () => {
+    itWithGc('keeps heap growth under 1MB across 1000 polling cycles', async () => {
       const alerts = makeAlertModule();
       const checkSpy = jest
         .spyOn(alerts, 'checkAlerts')
