@@ -1,5 +1,17 @@
-import { getTransactionStatus, submitIdempotent } from "../../src/utils/transactionStatus";
-import { MockProvider } from "../mocks/MockProvider"; // CHECK: real import path
+import { getTransactionStatus, submitIdempotent } from "../src/utils/transactionStatus";
+
+/** Minimal RPC stand-in: getTransaction() returns whatever was staged per hash. */
+class MockProvider {
+  private results = new Map<string, Record<string, unknown>>();
+
+  setTransactionResult(hash: string, result: Record<string, unknown>): void {
+    this.results.set(hash, result);
+  }
+
+  async getTransaction(hash: string): Promise<Record<string, unknown>> {
+    return this.results.get(hash) ?? { status: "NOT_FOUND" };
+  }
+}
 
 describe("getTransactionStatus", () => {
   it("reports SUCCESS when the transaction landed on-chain", async () => {
