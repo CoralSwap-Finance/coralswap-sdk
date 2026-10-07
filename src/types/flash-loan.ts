@@ -1,3 +1,5 @@
+import { EventDecodeStatus } from './events';
+
 /**
  * Flash loan request parameters.
  */
@@ -23,6 +25,8 @@ export interface FlashLoanExecutedEvent {
   feePaid: bigint;
   callbackAddress: string;
   token: string;
+  /** Status indicating whether the event was completely decoded without fabrication or partially synthesized */
+  decodeStatus?: EventDecodeStatus;
 }
 
 /**
@@ -33,6 +37,8 @@ export interface FlashLoanFailedEvent {
   borrowedAmount: bigint;
   token: string;
   reason: string;
+  /** Status indicating whether the event was completely decoded without fabrication or partially synthesized */
+  decodeStatus?: EventDecodeStatus;
 }
 
 /**

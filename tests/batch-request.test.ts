@@ -33,6 +33,34 @@ function makeFailingTask(error: unknown, delayMs = 0): () => Promise<never> {
 // ---------------------------------------------------------------------------
 
 describe('batchRequest()', () => {
+  describe('edge-case matrix', () => {
+    const batchFns = [
+      ['batchRequest', batchRequest],
+      ['batchCall', batchCall],
+      ['batchCallSequential', batchCallSequential],
+    ] as const;
+
+    it.each(batchFns)('%s returns an empty array for zero tasks', async (_name, fn) => {
+      const results = await fn([] as Array<() => Promise<unknown>>);
+      expect(results).toEqual([]);
+    });
+
+    it.each(batchFns)('%s preserves input order under partial failure', async (_name, fn) => {
+      const tasks = [
+        async () => 'first',
+        async () => { throw new Error('boom'); },
+        async () => 'third',
+      ];
+
+      const results = await fn(tasks as any);
+
+      expect(results).toHaveLength(3);
+      expect(results[0]).toEqual({ status: 'fulfilled', value: 'first' });
+      expect(results[1]).toMatchObject({ status: 'rejected' });
+      expect(results[2]).toEqual({ status: 'fulfilled', value: 'third' });
+    });
+  });
+
   // -------------------------------------------------------------------------
   // Result ordering
   // -------------------------------------------------------------------------
@@ -404,5 +432,25 @@ describe('batchCallSequential()', () => {
   it('handles empty array', async () => {
     const results = await batchCallSequential([]);
     expect(results).toEqual([]);
+  });
+});
+
+describe('batchRequest default concurrency', () => {
+  it('caps fan-out at DEFAULT_BATCH_CONCURRENCY when no concurrency is given', async () => {
+    let running = 0;
+    let maxRunning = 0;
+    const tasks = Array.from({ length: 50 }, () => async () => {
+      running++;
+      maxRunning = Math.max(maxRunning, running);
+      await new Promise((r) => setTimeout(r, 1));
+      running--;
+      return 1;
+    });
+    await batchRequest(tasks);
+    expect(maxRunning).toBeLessThanOrEqual(DEFAULT_BATCH_CONCURRENCY);
+  });
+
+  it.each([0, -1, 1.5, NaN])('rejects invalid concurrency %p', async (concurrency) => {
+    await expect(batchRequest([async () => 1], { concurrency })).rejects.toThrow(RangeError);
   });
 });

@@ -1,6 +1,13 @@
 import { Logger } from "@/types/common";
 
 import { DEFAULTS } from "@/config";
+import { DeadlineError } from "@/errors";
+
+/**
+ * Re-exported for backwards compatibility: `DeadlineError` lives in
+ * `@/errors`, and this is the same class, not a copy.
+ */
+export { DeadlineError };
 
 
 
@@ -10,21 +17,6 @@ export class CircuitOpenError extends Error {
     super(`Circuit is open for operation ${label}`);
     this.name = "CircuitOpenError";
     this.label = label;
-    Object.setPrototypeOf(this, new.target.prototype);
-  }
-}
-
-export class DeadlineError extends Error {
-  readonly deadlineMs: number;
-  readonly nowMs: number;
-  readonly pastDeadlineMs: number;
-  constructor(deadlineMs: number, nowMs: number = Date.now()) {
-    const pastDeadlineMs = Math.max(0, nowMs - deadlineMs);
-    super(`Retry deadline exceeded by ${pastDeadlineMs}ms`);
-    this.name = "DeadlineError";
-    this.deadlineMs = deadlineMs;
-    this.nowMs = nowMs;
-    this.pastDeadlineMs = pastDeadlineMs;
     Object.setPrototypeOf(this, new.target.prototype);
   }
 }
