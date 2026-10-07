@@ -233,17 +233,19 @@ export class EventCursor {
     };
 
     let currentCursor: string | undefined = undefined;
-    const seenEventKeys = new Set<string>();
+    // Keys of the last ledger's events from the previous page. Only set when
+    // that page had no cursor and the next request re-reads the same ledger;
+    // events with these keys were already returned and are skipped once.
+    let carriedKeys: Set<string> | null = null;
 
-    const eventPosition = (event: any, fallbackIndex: number) => {
-      const ledger = Number(event?.ledger);
-      if (!Number.isFinite(ledger)) return undefined;
-      const rawIndex = event?.indexWithinLedger ?? event?.index ?? event?.id;
-      const indexWithinLedger = Number(rawIndex);
-      return {
-        ledger,
-        indexWithinLedger: Number.isFinite(indexWithinLedger) ? indexWithinLedger : fallbackIndex,
-      };
+    // The event id is unique per event on a real RPC; fixtures without one
+    // fall back to the in-ledger index, then to the position in the page.
+    const eventKey = (event: any, pageIndex: number): string => {
+      if (typeof event?.id === 'string' && event.id.length > 0) return `id:${event.id}`;
+      const indexWithinLedger = Number(event?.indexWithinLedger);
+      return Number.isFinite(indexWithinLedger)
+        ? `pos:${event?.ledger}:${indexWithinLedger}`
+        : `page:${event?.ledger}:${pageIndex}`;
     };
 
     while (true) {
@@ -274,22 +276,19 @@ export class EventCursor {
         break;
       }
 
-      const newEvents = (events as rpc.Api.EventResponse[]).filter((event, index) => {
-        const position = eventPosition(event, index);
-        const key = position
-          ? `${position.ledger}:${position.indexWithinLedger}`
-          : `${event.id ?? ''}:${event.pagingToken ?? ''}`;
-        if (seenEventKeys.has(key)) return false;
-        seenEventKeys.add(key);
-        return true;
-      });
+      const carried: Set<string> | null = carriedKeys;
+      const newEvents = carried
+        ? (events as rpc.Api.EventResponse[]).filter(
+            (event, index) => !carried.has(eventKey(event, index))
+          )
+        : (events as rpc.Api.EventResponse[]);
       allEvents.push(...newEvents);
 
       const lastEvent = events[events.length - 1] as any;
       const lastLedger =
         lastEvent?.ledger ??
           (typeof res.latestLedger === 'number' ? res.latestLedger : undefined);
-      const lastPosition = eventPosition(lastEvent, events.length - 1);
+      const lastIndexWithinLedger = Number(lastEvent?.indexWithinLedger);
 
       const resCursor =
         typeof res?.cursor === "string" && res.cursor.length > 0
@@ -302,7 +301,9 @@ export class EventCursor {
         pageInfo = {
           startLedger,
           endLedger: lastLedger,
-          endIndexWithinLedger: lastPosition?.indexWithinLedger,
+          endIndexWithinLedger: Number.isFinite(lastIndexWithinLedger)
+            ? lastIndexWithinLedger
+            : undefined,
           limit,
           hasMore: events.length >= limit,
           nextCursor: resCursor,
@@ -314,13 +315,19 @@ export class EventCursor {
       if (resCursor) {
         currentCursor = resCursor;
         this.cursor = lastLedger;
+        carriedKeys = null;
       } else {
         // Do not advance to ledger + 1: the page may have ended halfway
         // through a ledger. Re-requesting the same ledger and filtering by
         // position preserves the remaining events in cursor-less fixtures and
         // RPC adapters while still terminating on a repeated page.
-        startLedger = lastPosition?.ledger ?? lastLedger;
+        startLedger = lastLedger;
         this.cursor = startLedger;
+        carriedKeys = new Set(
+          (events as any[])
+            .map((event, index) => (event?.ledger === lastLedger ? eventKey(event, index) : null))
+            .filter((key): key is string => key !== null)
+        );
       }
 
       if (toLedger !== undefined && lastLedger > toLedger) break;
