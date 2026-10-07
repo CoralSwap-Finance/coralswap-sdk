@@ -28,6 +28,7 @@ import {
   validateDistinctTokens,
 } from "@/utils/validation";
 import { isValidAddress } from "@/utils/addresses";
+import { idempotentResubmit } from "@/utils/idempotent-resubmit";
 import { decodeI128 } from "@/utils/numeric";
 import { z } from "zod";
 
@@ -145,16 +146,25 @@ export class StakingModule {
       publicKey,
     );
 
-    const result = await this.client.submitTransaction([op]);
+    const balanceBefore = await this.getStakedBalance(publicKey, lpTokenAddress);
 
-    if (!result.success) {
-      throw new TransactionError(
-        `Stake failed: ${result.error?.message ?? "Unknown error"}`,
-        result.txHash,
-      );
-    }
-
-    return result.txHash!;
+    return idempotentResubmit(
+      async () => {
+        const result = await this.client.submitTransaction([op]);
+        if (!result.success) {
+          throw new TransactionError(
+            `Stake failed: ${result.error?.message ?? "Unknown error"}`,
+            result.txHash,
+          );
+        }
+        return result.txHash!;
+      },
+      async () => {
+        const balanceAfter = await this.getStakedBalance(publicKey, lpTokenAddress);
+        return balanceAfter.amount >= balanceBefore.amount + amount ? "landed" : null;
+      },
+      { maxRetries: 3, baseDelayMs: 1000, deadlineMs: Date.now() + 30_000 },
+    );
   }
 
   /**
@@ -357,17 +367,26 @@ export class StakingModule {
   ): Promise<string> {
     const publicKey = await signer.publicKey();
     const op = await this.buildUnstakeOperation(lpTokenAddress, amount, publicKey);
+    // buildUnstakeOperation has already checked the staked balance covers `amount`.
+    const position = await this.getStakedBalance(publicKey, lpTokenAddress);
 
-    const result = await this.client.submitTransaction([op]);
-
-    if (!result.success) {
-      throw new TransactionError(
-        `Unstake failed: ${result.error?.message ?? "Unknown error"}`,
-        result.txHash,
-      );
-    }
-
-    return result.txHash!;
+    return idempotentResubmit(
+      async () => {
+        const result = await this.client.submitTransaction([op]);
+        if (!result.success) {
+          throw new TransactionError(
+            `Unstake failed: ${result.error?.message ?? "Unknown error"}`,
+            result.txHash,
+          );
+        }
+        return result.txHash!;
+      },
+      async () => {
+        const balanceAfter = await this.getStakedBalance(publicKey, lpTokenAddress);
+        return balanceAfter.amount <= position.amount - amount ? "landed" : null;
+      },
+      { maxRetries: 3, baseDelayMs: 1000, deadlineMs: Date.now() + 30_000 },
+    );
   }
 
   /**
