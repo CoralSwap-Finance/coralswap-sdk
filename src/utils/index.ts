@@ -116,6 +116,7 @@ export { EventCursor, TypedEventCursor, decodeEventTopic, MIN_START_LEDGER, MAX_
 export type { EventCursorOptions, TypedEventScanParams, PageInfo, ScanResult } from './event-cursor';
 export { ConnectionPool } from './connection-pool';
 
+
 export {
   getVotingPower,
   getVotingPowerAtLedger,
