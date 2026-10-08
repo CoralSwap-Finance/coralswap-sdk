@@ -259,7 +259,8 @@ export class SwapModule {
   async execute(request: SwapRequest, options: { estimateOnly: true }): Promise<GasEstimate>;
   async execute(request: SwapRequest, options?: { estimateOnly?: false }): Promise<SwapResult>;
   async execute(request: SwapRequest, options?: { estimateOnly?: boolean }): Promise<SwapResult | GasEstimate> {
-    const quote = await this.getQuote(request);
+    // Respect pre-verified quote (e.g. from swapWithPriceGuard) to eliminate TOCTOU window
+    const quote = request.quote ?? (await this.getQuote(request));
     const op = this.buildSwapOperation(request, quote);
 
     if (options?.estimateOnly) {
