@@ -13,9 +13,11 @@ import type { Signer } from "../src/types/common";
 // Constants
 // ---------------------------------------------------------------------------
 
-const MOCK_LP_TOKEN = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM";
+const MOCK_LP_TOKEN =
+  "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM";
 const MOCK_ADDRESS = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
-const MOCK_REWARD_TOKEN = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4";
+const MOCK_REWARD_TOKEN =
+  "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4";
 const MOCK_TX_HASH = "abc123def456";
 
 // ---------------------------------------------------------------------------
@@ -88,13 +90,15 @@ function createMockClient(
     simulateTransactionFn,
   } = overrides;
 
-  const simResponse = simulationFail || !simulationResult
-    ? createFailedSimResponse()
-    : createSuccessSimResponse(simulationResult);
+  const simResponse =
+    simulationFail || !simulationResult
+      ? createFailedSimResponse()
+      : createSuccessSimResponse(simulationResult);
 
   const mockServer = {
     getAccount: jest.fn().mockResolvedValue(createMockAccount()),
-    simulateTransaction: simulateTransactionFn ?? jest.fn().mockResolvedValue(simResponse),
+    simulateTransaction:
+      simulateTransactionFn ?? jest.fn().mockResolvedValue(simResponse),
   };
 
   return {
@@ -108,8 +112,16 @@ function createMockClient(
     },
     submitTransaction: jest.fn().mockResolvedValue(
       submitSuccess
-        ? { success: true, txHash: submitTxHash, data: { txHash: submitTxHash, ledger: 100 } }
-        : { success: false, txHash: submitTxHash, error: { message: submitErrorMessage } },
+        ? {
+            success: true,
+            txHash: submitTxHash,
+            data: { txHash: submitTxHash, ledger: 100 },
+          }
+        : {
+            success: false,
+            txHash: submitTxHash,
+            error: { message: submitErrorMessage },
+          },
     ),
   } as unknown as CoralSwapClient;
 }
@@ -217,14 +229,32 @@ describe("StakingModule", () => {
       expect(client.submitTransaction).toHaveBeenCalledTimes(1);
     });
 
-    it("should reject zero amount with ValidationError", async () => {
+    it("should reject zero amount with ValidationError and validateWithSchema error shape", async () => {
       const client = createMockClient();
       const module = new StakingModule(client);
       const signer = createMockSigner();
 
-      await expect(
-        module.stake(MOCK_LP_TOKEN, 0n, signer),
-      ).rejects.toThrow(ValidationError);
+      try {
+        await module.stake(MOCK_LP_TOKEN, 0n, signer);
+        fail("Expected ValidationError to be thrown");
+      } catch (err: any) {
+        expect(err).toBeInstanceOf(ValidationError);
+        expect(err.name).toBe("ValidationError");
+        expect(err.code).toBe("VALIDATION_ERROR");
+        expect(err.message).toBe(
+          "Invalid stake.params: amount: amount must be greater than 0, got 0",
+        );
+        expect(err.details).toEqual(
+          expect.objectContaining({
+            zodErrors: expect.arrayContaining([
+              expect.objectContaining({
+                path: ["amount"],
+                message: "amount must be greater than 0, got 0",
+              }),
+            ]),
+          }),
+        );
+      }
     });
 
     it("should reject negative amount with ValidationError", async () => {
@@ -232,9 +262,9 @@ describe("StakingModule", () => {
       const module = new StakingModule(client);
       const signer = createMockSigner();
 
-      await expect(
-        module.stake(MOCK_LP_TOKEN, -100n, signer),
-      ).rejects.toThrow(ValidationError);
+      await expect(module.stake(MOCK_LP_TOKEN, -100n, signer)).rejects.toThrow(
+        ValidationError,
+      );
     });
 
     it("should reject invalid LP token address with ValidationError", async () => {
@@ -255,9 +285,9 @@ describe("StakingModule", () => {
       const module = new StakingModule(client);
       const signer = createMockSigner();
 
-      await expect(
-        module.stake(MOCK_LP_TOKEN, 1000n, signer),
-      ).rejects.toThrow(TransactionError);
+      await expect(module.stake(MOCK_LP_TOKEN, 1000n, signer)).rejects.toThrow(
+        TransactionError,
+      );
     });
   });
 
@@ -269,7 +299,10 @@ describe("StakingModule", () => {
       const client = createMockClient();
       const module = new StakingModule(client);
 
-      const position = await module.getStakedBalance(MOCK_ADDRESS, MOCK_LP_TOKEN);
+      const position = await module.getStakedBalance(
+        MOCK_ADDRESS,
+        MOCK_LP_TOKEN,
+      );
 
       expect(position.amount).toBe(0n);
       expect(position.stakedAt).toBe(0);
@@ -281,7 +314,10 @@ describe("StakingModule", () => {
       const client = createMockClient({ simulationResult: mockResult });
       const module = new StakingModule(client);
 
-      const position = await module.getStakedBalance(MOCK_ADDRESS, MOCK_LP_TOKEN);
+      const position = await module.getStakedBalance(
+        MOCK_ADDRESS,
+        MOCK_LP_TOKEN,
+      );
 
       expect(position.amount).toBe(5000n);
       expect(position.stakedAt).toBe(1719400000);
@@ -325,9 +361,9 @@ describe("StakingModule", () => {
       const client = createMockClient();
       const module = new StakingModule(client);
 
-      await expect(
-        module.getStakingAPY("not_valid"),
-      ).rejects.toThrow(ValidationError);
+      await expect(module.getStakingAPY("not_valid")).rejects.toThrow(
+        ValidationError,
+      );
     });
   });
 
@@ -339,7 +375,10 @@ describe("StakingModule", () => {
       const client = createMockClient();
       const module = new StakingModule(client);
 
-      const rewards = await module.getStakingRewards(MOCK_ADDRESS, MOCK_LP_TOKEN);
+      const rewards = await module.getStakingRewards(
+        MOCK_ADDRESS,
+        MOCK_LP_TOKEN,
+      );
 
       expect(rewards.pendingRewards).toBe(0n);
       expect(rewards.claimedRewards).toBe(0n);
@@ -352,7 +391,10 @@ describe("StakingModule", () => {
       const client = createMockClient({ simulationResult: mockResult });
       const module = new StakingModule(client);
 
-      const rewards = await module.getStakingRewards(MOCK_ADDRESS, MOCK_LP_TOKEN);
+      const rewards = await module.getStakingRewards(
+        MOCK_ADDRESS,
+        MOCK_LP_TOKEN,
+      );
 
       expect(rewards.pendingRewards).toBe(500n);
       expect(rewards.claimedRewards).toBe(2000n);
@@ -364,7 +406,10 @@ describe("StakingModule", () => {
       const client = createMockClient({ simulationResult: mockResult });
       const module = new StakingModule(client);
 
-      const rewards = await module.getStakingRewards(MOCK_ADDRESS, MOCK_LP_TOKEN);
+      const rewards = await module.getStakingRewards(
+        MOCK_ADDRESS,
+        MOCK_LP_TOKEN,
+      );
 
       expect(rewards.projectedAPY).toBeCloseTo(1.0);
     });
@@ -390,9 +435,9 @@ describe("StakingModule", () => {
       const module = new StakingModule(client);
       const signer = createMockSigner();
 
-      await expect(
-        module.claimRewards(MOCK_LP_TOKEN, signer),
-      ).rejects.toThrow(StakingError);
+      await expect(module.claimRewards(MOCK_LP_TOKEN, signer)).rejects.toThrow(
+        StakingError,
+      );
     });
 
     it("should throw StakingError with correct message when no rewards", async () => {
@@ -400,9 +445,9 @@ describe("StakingModule", () => {
       const module = new StakingModule(client);
       const signer = createMockSigner();
 
-      await expect(
-        module.claimRewards(MOCK_LP_TOKEN, signer),
-      ).rejects.toThrow("No rewards pending to claim");
+      await expect(module.claimRewards(MOCK_LP_TOKEN, signer)).rejects.toThrow(
+        "No rewards pending to claim",
+      );
     });
   });
 
@@ -413,7 +458,11 @@ describe("StakingModule", () => {
     it("should return tx hash on successful unstake after cooldown", async () => {
       const pastTimestamp = Math.floor(Date.now() / 1000) - 3600;
       const mockCooldown = createMockCooldownResult(pastTimestamp);
-      const mockStake = createMockStakeResult(1000n, pastTimestamp - 86400, pastTimestamp);
+      const mockStake = createMockStakeResult(
+        1000n,
+        pastTimestamp - 86400,
+        pastTimestamp,
+      );
 
       const client = createSequentialMockClient([mockCooldown, mockStake]);
       const module = new StakingModule(client);
@@ -432,9 +481,9 @@ describe("StakingModule", () => {
       const module = new StakingModule(client);
       const signer = createMockSigner();
 
-      await expect(
-        module.unstake(MOCK_LP_TOKEN, 500n, signer),
-      ).rejects.toThrow(CooldownError);
+      await expect(module.unstake(MOCK_LP_TOKEN, 500n, signer)).rejects.toThrow(
+        CooldownError,
+      );
     });
 
     it("should include cooldownEnd in CooldownError", async () => {
@@ -460,29 +509,37 @@ describe("StakingModule", () => {
       const module = new StakingModule(client);
       const signer = createMockSigner();
 
-      await expect(
-        module.unstake(MOCK_LP_TOKEN, 0n, signer),
-      ).rejects.toThrow(ValidationError);
+      await expect(module.unstake(MOCK_LP_TOKEN, 0n, signer)).rejects.toThrow(
+        ValidationError,
+      );
     });
 
     it("should throw StakingError when unstake exceeds staked balance", async () => {
       const pastTimestamp = Math.floor(Date.now() / 1000) - 3600;
       const mockCooldown = createMockCooldownResult(pastTimestamp);
-      const mockStake = createMockStakeResult(100n, pastTimestamp - 86400, pastTimestamp);
+      const mockStake = createMockStakeResult(
+        100n,
+        pastTimestamp - 86400,
+        pastTimestamp,
+      );
 
       const client = createSequentialMockClient([mockCooldown, mockStake]);
       const module = new StakingModule(client);
       const signer = createMockSigner();
 
-      await expect(
-        module.unstake(MOCK_LP_TOKEN, 200n, signer),
-      ).rejects.toThrow(StakingError);
+      await expect(module.unstake(MOCK_LP_TOKEN, 200n, signer)).rejects.toThrow(
+        StakingError,
+      );
     });
 
     it("should support partial unstake", async () => {
       const pastTimestamp = Math.floor(Date.now() / 1000) - 3600;
       const mockCooldown = createMockCooldownResult(pastTimestamp);
-      const mockStake = createMockStakeResult(1000n, pastTimestamp - 86400, pastTimestamp);
+      const mockStake = createMockStakeResult(
+        1000n,
+        pastTimestamp - 86400,
+        pastTimestamp,
+      );
 
       const client = createSequentialMockClient([mockCooldown, mockStake]);
       const module = new StakingModule(client);
@@ -501,7 +558,10 @@ describe("StakingModule", () => {
     const TOKEN_A = MOCK_LP_TOKEN;
     const TOKEN_B = MOCK_REWARD_TOKEN;
 
-    function withComposer(client: CoralSwapClient, buildRemoveLiquidity: jest.Mock) {
+    function withComposer(
+      client: CoralSwapClient,
+      buildRemoveLiquidity: jest.Mock,
+    ) {
       return Object.assign(client, {
         router: { buildRemoveLiquidity },
         getDeadline: jest.fn().mockReturnValue(9_999_999_999),
@@ -534,10 +594,16 @@ describe("StakingModule", () => {
     it("unstakes and withdraws as a single atomic transaction once cooldown has elapsed", async () => {
       const pastTimestamp = Math.floor(Date.now() / 1000) - 3600;
       const mockCooldown = createMockCooldownResult(pastTimestamp);
-      const mockStake = createMockStakeResult(1000n, pastTimestamp - 86400, pastTimestamp);
+      const mockStake = createMockStakeResult(
+        1000n,
+        pastTimestamp - 86400,
+        pastTimestamp,
+      );
 
       const client = createSequentialMockClient([mockCooldown, mockStake]);
-      const buildRemoveLiquidity = jest.fn().mockReturnValue("withdraw-operation");
+      const buildRemoveLiquidity = jest
+        .fn()
+        .mockReturnValue("withdraw-operation");
       withComposer(client, buildRemoveLiquidity);
 
       const module = new StakingModule(client);
@@ -556,7 +622,8 @@ describe("StakingModule", () => {
       expect(buildRemoveLiquidity).toHaveBeenCalledTimes(1);
       expect(client.submitTransaction).toHaveBeenCalledTimes(1);
 
-      const [operations] = (client.submitTransaction as jest.Mock).mock.calls[0];
+      const [operations] = (client.submitTransaction as jest.Mock).mock
+        .calls[0];
       expect(operations).toHaveLength(2);
       expect(operations[1]).toBe("withdraw-operation");
     });
@@ -566,14 +633,21 @@ describe("StakingModule", () => {
       const mockCooldown = createMockCooldownResult(futureTimestamp);
 
       const client = createMockClient({ simulationResult: mockCooldown });
-      const buildRemoveLiquidity = jest.fn().mockReturnValue("withdraw-operation");
+      const buildRemoveLiquidity = jest
+        .fn()
+        .mockReturnValue("withdraw-operation");
       withComposer(client, buildRemoveLiquidity);
 
       const module = new StakingModule(client);
       const signer = createMockSigner();
 
       await expect(
-        module.unstakeAndWithdraw(MOCK_LP_TOKEN, 500n, removeLiquidityRequest(), signer),
+        module.unstakeAndWithdraw(
+          MOCK_LP_TOKEN,
+          500n,
+          removeLiquidityRequest(),
+          signer,
+        ),
       ).rejects.toThrow(CooldownError);
 
       expect(buildRemoveLiquidity).not.toHaveBeenCalled();
@@ -583,17 +657,28 @@ describe("StakingModule", () => {
     it("throws StakingError when unstake amount exceeds staked balance", async () => {
       const pastTimestamp = Math.floor(Date.now() / 1000) - 3600;
       const mockCooldown = createMockCooldownResult(pastTimestamp);
-      const mockStake = createMockStakeResult(100n, pastTimestamp - 86400, pastTimestamp);
+      const mockStake = createMockStakeResult(
+        100n,
+        pastTimestamp - 86400,
+        pastTimestamp,
+      );
 
       const client = createSequentialMockClient([mockCooldown, mockStake]);
-      const buildRemoveLiquidity = jest.fn().mockReturnValue("withdraw-operation");
+      const buildRemoveLiquidity = jest
+        .fn()
+        .mockReturnValue("withdraw-operation");
       withComposer(client, buildRemoveLiquidity);
 
       const module = new StakingModule(client);
       const signer = createMockSigner();
 
       await expect(
-        module.unstakeAndWithdraw(MOCK_LP_TOKEN, 200n, removeLiquidityRequest(), signer),
+        module.unstakeAndWithdraw(
+          MOCK_LP_TOKEN,
+          200n,
+          removeLiquidityRequest(),
+          signer,
+        ),
       ).rejects.toThrow(StakingError);
 
       expect(client.submitTransaction).not.toHaveBeenCalled();
@@ -602,17 +687,31 @@ describe("StakingModule", () => {
     it("rolls back both legs when the composed transaction fails on-chain", async () => {
       const pastTimestamp = Math.floor(Date.now() / 1000) - 3600;
       const mockCooldown = createMockCooldownResult(pastTimestamp);
-      const mockStake = createMockStakeResult(1000n, pastTimestamp - 86400, pastTimestamp);
+      const mockStake = createMockStakeResult(
+        1000n,
+        pastTimestamp - 86400,
+        pastTimestamp,
+      );
 
-      const client = createSequentialMockClient([mockCooldown, mockStake], false);
-      const buildRemoveLiquidity = jest.fn().mockReturnValue("withdraw-operation");
+      const client = createSequentialMockClient(
+        [mockCooldown, mockStake],
+        false,
+      );
+      const buildRemoveLiquidity = jest
+        .fn()
+        .mockReturnValue("withdraw-operation");
       withComposer(client, buildRemoveLiquidity);
 
       const module = new StakingModule(client);
       const signer = createMockSigner();
 
       await expect(
-        module.unstakeAndWithdraw(MOCK_LP_TOKEN, 500n, removeLiquidityRequest(), signer),
+        module.unstakeAndWithdraw(
+          MOCK_LP_TOKEN,
+          500n,
+          removeLiquidityRequest(),
+          signer,
+        ),
       ).rejects.toThrow(TransactionError);
 
       // Exactly one atomic submission attempted -- no dangling unstake-only transaction.
@@ -621,7 +720,9 @@ describe("StakingModule", () => {
 
     it("rejects invalid liquidity request params without touching the unstake leg", async () => {
       const client = createMockClient();
-      const buildRemoveLiquidity = jest.fn().mockReturnValue("withdraw-operation");
+      const buildRemoveLiquidity = jest
+        .fn()
+        .mockReturnValue("withdraw-operation");
       withComposer(client, buildRemoveLiquidity);
 
       const module = new StakingModule(client);
@@ -648,7 +749,10 @@ describe("StakingModule", () => {
       const client = createMockClient();
       const module = new StakingModule(client);
 
-      const status = await module.getCooldownStatus(MOCK_ADDRESS, MOCK_LP_TOKEN);
+      const status = await module.getCooldownStatus(
+        MOCK_ADDRESS,
+        MOCK_LP_TOKEN,
+      );
 
       expect(status.isInCooldown).toBe(false);
       expect(status.cooldownEnd).toBe(0);
@@ -660,7 +764,10 @@ describe("StakingModule", () => {
       const client = createMockClient({ simulationResult: mockResult });
       const module = new StakingModule(client);
 
-      const status = await module.getCooldownStatus(MOCK_ADDRESS, MOCK_LP_TOKEN);
+      const status = await module.getCooldownStatus(
+        MOCK_ADDRESS,
+        MOCK_LP_TOKEN,
+      );
 
       expect(status.isInCooldown).toBe(true);
       expect(status.cooldownEnd).toBe(futureTimestamp);
@@ -674,7 +781,10 @@ describe("StakingModule", () => {
       const client = createMockClient({ simulationResult: mockResult });
       const module = new StakingModule(client);
 
-      const status = await module.getCooldownStatus(MOCK_ADDRESS, MOCK_LP_TOKEN);
+      const status = await module.getCooldownStatus(
+        MOCK_ADDRESS,
+        MOCK_LP_TOKEN,
+      );
 
       expect(status.isInCooldown).toBe(false);
       expect(status.cooldownEnd).toBe(pastTimestamp);
@@ -700,7 +810,10 @@ describe("StakingModule", () => {
       const client = createMockClient({ simulationResult: mockResult });
       const module = new StakingModule(client);
 
-      const position = await module.getStakedBalance(MOCK_ADDRESS, MOCK_LP_TOKEN);
+      const position = await module.getStakedBalance(
+        MOCK_ADDRESS,
+        MOCK_LP_TOKEN,
+      );
 
       expect(position.amount).toBe(maxU128);
     });
@@ -710,7 +823,10 @@ describe("StakingModule", () => {
       const client = createMockClient({ simulationResult: mockResult });
       const module = new StakingModule(client);
 
-      const status = await module.getCooldownStatus(MOCK_ADDRESS, MOCK_LP_TOKEN);
+      const status = await module.getCooldownStatus(
+        MOCK_ADDRESS,
+        MOCK_LP_TOKEN,
+      );
 
       expect(status.isInCooldown).toBe(false);
       expect(status.cooldownEnd).toBe(0);
@@ -723,36 +839,56 @@ describe("StakingModule", () => {
   describe("staking test matrix", () => {
     describe("cooldown boundary matrix", () => {
       it("handles cooldown edge = 0 (never staked / zero cooldown)", async () => {
-        const client = createMockClient({ simulationResult: createMockCooldownResult(0) });
+        const client = createMockClient({
+          simulationResult: createMockCooldownResult(0),
+        });
         const module = new StakingModule(client);
-        const status = await module.getCooldownStatus(MOCK_ADDRESS, MOCK_LP_TOKEN);
+        const status = await module.getCooldownStatus(
+          MOCK_ADDRESS,
+          MOCK_LP_TOKEN,
+        );
         expect(status.isInCooldown).toBe(false);
         expect(status.cooldownEnd).toBe(0);
       });
 
       it("handles cooldown edge = below claim (active cooldown in future)", async () => {
         const future = Math.floor(Date.now() / 1000) + 1000;
-        const client = createMockClient({ simulationResult: createMockCooldownResult(future) });
+        const client = createMockClient({
+          simulationResult: createMockCooldownResult(future),
+        });
         const module = new StakingModule(client);
-        const status = await module.getCooldownStatus(MOCK_ADDRESS, MOCK_LP_TOKEN);
+        const status = await module.getCooldownStatus(
+          MOCK_ADDRESS,
+          MOCK_LP_TOKEN,
+        );
         expect(status.isInCooldown).toBe(true);
         expect(status.cooldownEnd).toBe(future);
       });
 
       it("handles cooldown edge = at claim time (cooldown ends right now)", async () => {
         const nowSec = Math.floor(Date.now() / 1000);
-        const client = createMockClient({ simulationResult: createMockCooldownResult(nowSec) });
+        const client = createMockClient({
+          simulationResult: createMockCooldownResult(nowSec),
+        });
         const module = new StakingModule(client);
-        const status = await module.getCooldownStatus(MOCK_ADDRESS, MOCK_LP_TOKEN);
+        const status = await module.getCooldownStatus(
+          MOCK_ADDRESS,
+          MOCK_LP_TOKEN,
+        );
         expect(status.isInCooldown).toBe(false);
         expect(status.cooldownEnd).toBe(nowSec);
       });
 
       it("handles cooldown edge = after claim time (cooldown expired in past)", async () => {
         const past = Math.floor(Date.now() / 1000) - 1000;
-        const client = createMockClient({ simulationResult: createMockCooldownResult(past) });
+        const client = createMockClient({
+          simulationResult: createMockCooldownResult(past),
+        });
         const module = new StakingModule(client);
-        const status = await module.getCooldownStatus(MOCK_ADDRESS, MOCK_LP_TOKEN);
+        const status = await module.getCooldownStatus(
+          MOCK_ADDRESS,
+          MOCK_LP_TOKEN,
+        );
         expect(status.isInCooldown).toBe(false);
         expect(status.cooldownEnd).toBe(past);
       });
@@ -762,7 +898,10 @@ describe("StakingModule", () => {
       it("returns false for non-staker or zero staked amount", async () => {
         const client = createMockClient({ simulationResult: null });
         const module = new StakingModule(client);
-        const eligibility = await module.getVoteEligibility(MOCK_ADDRESS, MOCK_LP_TOKEN);
+        const eligibility = await module.getVoteEligibility(
+          MOCK_ADDRESS,
+          MOCK_LP_TOKEN,
+        );
         expect(eligibility.isEligible).toBe(false);
       });
 
@@ -771,7 +910,10 @@ describe("StakingModule", () => {
         const mockStake = createMockStakeResult(1000n, pastStakedAt, 0);
         const client = createMockClient({ simulationResult: mockStake });
         const module = new StakingModule(client);
-        const eligibility = await module.getVoteEligibility(MOCK_ADDRESS, MOCK_LP_TOKEN);
+        const eligibility = await module.getVoteEligibility(
+          MOCK_ADDRESS,
+          MOCK_LP_TOKEN,
+        );
         expect(eligibility.isEligible).toBe(true);
         expect(eligibility.stakedAt).toBe(pastStakedAt);
       });
@@ -779,7 +921,11 @@ describe("StakingModule", () => {
 
     describe("claim amounts matrix", () => {
       it("claims non-zero pending rewards successfully", async () => {
-        const mockRewards = createMockRewardsResult(2500000000n, 100000000n, 1000);
+        const mockRewards = createMockRewardsResult(
+          2500000000n,
+          100000000n,
+          1000,
+        );
         const client = createMockClient({ simulationResult: mockRewards });
         const module = new StakingModule(client);
         const signer = createMockSigner();
@@ -794,7 +940,9 @@ describe("StakingModule", () => {
         const module = new StakingModule(client);
         const signer = createMockSigner();
 
-        await expect(module.claimRewards(MOCK_LP_TOKEN, signer)).rejects.toThrow(StakingError);
+        await expect(
+          module.claimRewards(MOCK_LP_TOKEN, signer),
+        ).rejects.toThrow(StakingError);
       });
     });
   });

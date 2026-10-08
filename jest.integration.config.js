@@ -1,25 +1,27 @@
 /** @type {import('ts-jest').JestConfigWithTsJest} */
 module.exports = {
-  preset: 'ts-jest',
-  testEnvironment: 'node',
-  testMatch: ['<rootDir>/tests/integration/**/*.test.ts'],
+  preset: "ts-jest",
+  testEnvironment: "node",
+  testMatch: ["<rootDir>/tests/integration/**/*.test.ts"],
+  testPathIgnorePatterns: ["<rootDir>/.kilo/"],
+  modulePathIgnorePatterns: ["<rootDir>/.kilo/"],
   testTimeout: 120_000, // testnet txs can be slow
   moduleNameMapper: {
-    '^@/(.*)$': '<rootDir>/src/$1',
+    "^@/(.*)$": "<rootDir>/src/$1",
   },
   transform: {
-    '^.+\\.tsx?$': [
-      'ts-jest',
+    "^.+\\.tsx?$": [
+      "ts-jest",
       {
         // Type-checking is enforced separately via `tsc --noEmit`.
         diagnostics: false,
         tsconfig: {
-          types: ['jest', 'node'],
+          types: ["jest", "node"],
         },
       },
     ],
-    '^.+\\.jsx?$': [
-      'ts-jest',
+    "^.+\\.jsx?$": [
+      "ts-jest",
       {
         diagnostics: false,
         isolatedModules: true,
@@ -27,6 +29,6 @@ module.exports = {
     ],
   },
   transformIgnorePatterns: [
-    'node_modules/(?!(@stellar/stellar-sdk|@stellar/js-xdr|@noble/ed25519|@noble/hashes|uint8array-extras|@exodus/bytes|zod)/)',
+    "node_modules/(?!(@stellar/stellar-sdk|@stellar/js-xdr|@noble/ed25519|@noble/hashes|uint8array-extras|@exodus/bytes|zod)/)",
   ],
 };

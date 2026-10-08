@@ -4,27 +4,31 @@ import { NetworkSwitcher } from "../src/contracts/switcher";
 import { Network } from "../src/types/common";
 import { NETWORK_CONFIGS } from "../src/config";
 import { NotConfiguredError } from "../src/errors";
+import {
+  clearTokenDecimalsCache,
+  getTokenDecimals,
+} from "../src/utils/token-decimals";
 
 // Mock SorobanRpc.Server
-jest.mock('@stellar/stellar-sdk', () => {
-    const actual = jest.requireActual('@stellar/stellar-sdk');
-    return {
-        ...actual,
-        SorobanRpc: {
-            ...actual.SorobanRpc,
-            Server: jest.fn().mockImplementation((rpcUrl) => ({
-                rpcUrl,
-                getAccount: jest.fn(),
-                simulateTransaction: jest.fn(),
-                sendTransaction: jest.fn(),
-                getTransaction: jest.fn(),
-            })),
-        },
-        Contract: jest.fn().mockImplementation((address) => ({
-            address,
-            call: jest.fn(),
-        })),
-    };
+jest.mock("@stellar/stellar-sdk", () => {
+  const actual = jest.requireActual("@stellar/stellar-sdk");
+  return {
+    ...actual,
+    SorobanRpc: {
+      ...actual.SorobanRpc,
+      Server: jest.fn().mockImplementation((rpcUrl) => ({
+        rpcUrl,
+        getAccount: jest.fn(),
+        simulateTransaction: jest.fn(),
+        sendTransaction: jest.fn(),
+        getTransaction: jest.fn(),
+      })),
+    },
+    Contract: jest.fn().mockImplementation((address) => ({
+      address,
+      call: jest.fn(),
+    })),
+  };
 });
 
 describe("Network Switching", () => {
@@ -49,10 +53,26 @@ describe("Network Switching", () => {
     };
 
     const cases = [
-      { network: Network.MAINNET, accessor: "factory" as const, configKey: "factoryAddress" },
-      { network: Network.MAINNET, accessor: "router" as const, configKey: "routerAddress" },
-      { network: Network.STAGING, accessor: "factory" as const, configKey: "factoryAddress" },
-      { network: Network.STAGING, accessor: "router" as const, configKey: "routerAddress" },
+      {
+        network: Network.MAINNET,
+        accessor: "factory" as const,
+        configKey: "factoryAddress",
+      },
+      {
+        network: Network.MAINNET,
+        accessor: "router" as const,
+        configKey: "routerAddress",
+      },
+      {
+        network: Network.STAGING,
+        accessor: "factory" as const,
+        configKey: "factoryAddress",
+      },
+      {
+        network: Network.STAGING,
+        accessor: "router" as const,
+        configKey: "routerAddress",
+      },
     ];
 
     for (const { network, accessor, configKey } of cases) {
@@ -152,6 +172,107 @@ describe("Network Switching", () => {
     expect(client.network).toBe(Network.MAINNET);
     expect(client.networkConfig.rpcUrl).toBe(customRpc);
     expect(String((client.server as any).serverURL)).toBe(customRpc + "/");
+  });
+
+  it("resets network-scoped caches and singletons when switching networks", async () => {
+    clearTokenDecimalsCache();
+    const client = new CoralSwapClient({
+      network: Network.TESTNET,
+      secretKey: TEST_SECRET,
+    });
+    const factoryAddress =
+      "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM";
+    const routerAddress =
+      "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4";
+    (client as any).networkConfig.factoryAddress = factoryAddress;
+    (client as any).networkConfig.routerAddress = routerAddress;
+
+    const initialPoller = client.poller();
+    const initialFactory = client.factory;
+    const initialRouter = client.router;
+    const factoryModule = client.factoryModule();
+    (factoryModule as any).cache.set("A:B", {
+      address: factoryAddress,
+      expiresAt: Date.now() + 60_000,
+    });
+
+    const tokenAddress =
+      "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4";
+    const lpToken = {
+      metadata: jest.fn().mockResolvedValue({ decimals: 9 }),
+    };
+    (client as any).lpToken = jest.fn().mockReturnValue(lpToken);
+    await getTokenDecimals(client, tokenAddress);
+    expect((client as any).lpToken).toHaveBeenCalledTimes(1);
+
+    client.setNetwork(Network.MAINNET);
+
+    (client as any).networkConfig.factoryAddress = factoryAddress;
+    (client as any).networkConfig.routerAddress = routerAddress;
+
+    expect(client.poller()).not.toBe(initialPoller);
+    expect(client.factory).not.toBe(initialFactory);
+    expect(client.router).not.toBe(initialRouter);
+    expect((client.factoryModule() as any).cache.size).toBe(0);
+    expect(client.network).toBe(Network.MAINNET);
+    expect(client.networkConfig.networkPassphrase).toBe(
+      NETWORK_CONFIGS[Network.MAINNET].networkPassphrase,
+    );
+
+    await getTokenDecimals(client, tokenAddress);
+    expect((client as any).lpToken).toHaveBeenCalledTimes(2);
+  });
+
+  it("leaves the client usable when an invalid network switch fails mid-reset", () => {
+    const client = new CoralSwapClient({
+      network: Network.TESTNET,
+      secretKey: TEST_SECRET,
+    });
+    const factoryAddress =
+      "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM";
+    (client as any).networkConfig.factoryAddress = factoryAddress;
+    (client as any).networkConfig.routerAddress = factoryAddress;
+
+    const beforeServer = client.server;
+    const beforePoller = client.poller();
+    const beforeFactory = client.factory;
+    const beforeRouter = client.router;
+
+    expect(() =>
+      client.setNetwork(Network.MAINNET, "http://localhost:8000"),
+    ).toThrow();
+
+    expect(client.network).toBe(Network.TESTNET);
+    expect(client.server).toBe(beforeServer);
+    expect(client.poller()).toBe(beforePoller);
+    expect(client.factory).toBe(beforeFactory);
+    expect(client.router).toBe(beforeRouter);
+  });
+
+  it("supports reselecting the same network without breaking the client", () => {
+    const client = new CoralSwapClient({
+      network: Network.TESTNET,
+      secretKey: TEST_SECRET,
+    });
+    const factoryAddress =
+      "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM";
+    (client as any).networkConfig.factoryAddress = factoryAddress;
+    (client as any).networkConfig.routerAddress = factoryAddress;
+
+    const beforeServer = client.server;
+    const beforePoller = client.poller();
+    const beforeFactory = client.factory;
+    const beforeRouter = client.router;
+
+    expect(() => client.setNetwork(Network.TESTNET)).not.toThrow();
+    expect(client.network).toBe(Network.TESTNET);
+    expect(client.networkConfig.networkPassphrase).toBe(
+      NETWORK_CONFIGS[Network.TESTNET].networkPassphrase,
+    );
+    expect(client.server).not.toBe(beforeServer);
+    expect(client.poller()).not.toBe(beforePoller);
+    expect(client.factory).not.toBe(beforeFactory);
+    expect(client.router).not.toBe(beforeRouter);
   });
 });
 
@@ -253,9 +374,9 @@ describe("RPC URL scheme validation on setNetwork", () => {
       secretKey: TEST_SECRET,
     });
 
-    expect(() => client.setNetwork(Network.MAINNET, "http://localhost:8000")).toThrow(
-      /cleartext/i,
-    );
+    expect(() =>
+      client.setNetwork(Network.MAINNET, "http://localhost:8000"),
+    ).toThrow(/cleartext/i);
   });
 
   it("allows cleartext http when switching to testnet", () => {

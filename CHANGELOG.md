@@ -26,7 +26,9 @@
 - Zod schemas for position entries (`EnrichedLPPositionSchema`, `PositionMathSchema`, `PositionSummarySchema`, exported from `@/schemas`) with a malformed/valid fixture suite (`tests/positions-schema.test.ts`): missing or empty fields, wrong primitive types, `NaN`/infinite/out-of-range `share`, fractional/negative/out-of-ceiling `feeBps`, non-bigint stroops, and summary-level failures — each pinned to a `ValidationError` naming the offending field
 
 ### Changed
+
 - Governance module validates `createProposal` and `castVote` inputs with zod schemas (`CreateProposalInputSchema`, `CastVoteInputSchema`), replacing the hand-written guards while keeping `ValidationError` as the thrown type (#488)
+- `StakingModule` and `StopLossModule` validate parameters with zod schemas via `validateWithSchema`; zero/invalid inputs now throw the shared `ValidationError` with `code: "VALIDATION_ERROR"` and `details.zodErrors`, and the message format is `Invalid <label>: path: message` instead of ad hoc, hand-built strings (#746)
 - `MonitoringModule.getSystemMetrics(period)` validates `period` through the shared `MonitoringPeriodSchema` (zod) via `validateWithSchema`, replacing the hand-written check; the error is still a `ValidationError` (#493)
 - `EventCursor` continues a multi-page scan from the previous page's cursor (paging token) instead of `lastLedger + 1`, so events beyond the page limit inside a single ledger are no longer skipped; continuation requests carry the cursor and no ledger range, as Soroban RPC requires (#657)
 - `Network.STAGING` now targets Stellar Futurenet (`rpc-futurenet.stellar.org`, futurenet passphrase) with empty factory and router addresses instead of aliasing Testnet; `client.factory` / `client.router` throw `NotConfiguredError` on STAGING and MAINNET until deployment addresses are configured (#638)
@@ -57,11 +59,13 @@
 - `getFeeRevenue()` decoded `amount_in` into a `number` and divided every fee by `1e7`: a 6-decimal token's fees came out 10× too small, a 12-decimal token's 100,000× too large, amounts above 2^53 lost stroops to float rounding, and one non-paginated `getEvents` call (with a bare `"swap"` topic string that live RPC never matches) dropped every swap past the first page. Fees are BigInt now, priced per token, and the stream is paginated
 
 ### Removed
+
 - Unused `GetOpenOrdersSchema` and `GetOrderSummarySchema` exports from the package entry (#664)
 
 ## [1.1.0] - 2026-02-17
 
 ### Added
+
 - Pluggable `Signer` interface in `src/types/common.ts` for wallet adapter support
 - `KeypairSigner` default implementation in `src/utils/signer.ts`
 - `signer` option in `CoralSwapConfig` for external wallet integration (Freighter, Albedo)
@@ -78,17 +82,19 @@
 - Test scaffolding with Jest configuration
 - Full README documentation with examples
 
-
 ### Changed
+
 - `CoralSwapClient` now accepts both `secretKey` and `signer` config options
-- `submitTransaction()` now awaits `signer.signTransaction()` 
+- `submitTransaction()` now awaits `signer.signTransaction()`
 
 ### Backward Compatible
+
 - Existing `secretKey` usage continues to work unchanged
 
 ## [2.0.0] - 2026-06-29
 
 ### Added
+
 - Full [Migration Guide](./MIGRATION.md) from v1 to v2
 - Treasury, Staking, Governance, Limit Orders, DCA, Stop Loss, Positions modules
 - Alerts, Webhooks, Monitoring modules
@@ -101,11 +107,13 @@
 - 18 new utility functions (validation, simulation, gas, events)
 
 ### Changed
+
 - Improved error handling with `executeWithFallback` for multi-RPC resilience
 - `CoralSwapClient` constructor now supports `rpcUrl` as string array for fallback URLs
 - `SwapModule.getQuote()`/`execute()` now accept `path` for multi-hop routing
 - `LiquidityModule.getAddLiquidityQuote()` signature simplified (removed `amountBDesired`)
 
 ### Deprecated
+
 - Legacy `simulateTransaction(ops, source)` string form — prefer enhanced options object
 - Manual `instanceof` error chain — prefer `mapError()`
