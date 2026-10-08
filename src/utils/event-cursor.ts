@@ -201,7 +201,9 @@ export class EventCursor {
     };
     truncated?: boolean;
   }> {
-    await this.anchorIfNeeded();
+    // The anchor only supplies a default start; an explicit fromLedger needs no
+    // round-trip to the network tip.
+    if (params.fromLedger === undefined) await this.anchorIfNeeded();
 
     const limit = params.limit ?? this.defaultLimit;
     if (!Number.isInteger(limit) || limit < 1 || limit > MAX_EVENT_LIMIT) {
@@ -277,9 +279,14 @@ export class EventCursor {
       }
 
       const carried: Set<string> | null = carriedKeys;
+      // On a cursor-less re-read, skip what the previous page already returned:
+      // events before the re-read ledger (an RPC never sends them; adapters
+      // that ignore startLedger do) and the re-read ledger's carried events.
       const newEvents = carried
         ? (events as rpc.Api.EventResponse[]).filter(
-            (event, index) => !carried.has(eventKey(event, index))
+            (event, index) =>
+              !(typeof event?.ledger === 'number' && event.ledger < startLedger) &&
+              !carried.has(eventKey(event, index))
           )
         : (events as rpc.Api.EventResponse[]);
       allEvents.push(...newEvents);
@@ -313,6 +320,8 @@ export class EventCursor {
       if (lastLedger === undefined) break;
 
       if (resCursor) {
+        // A cursor that does not advance would re-request the same page forever.
+        if (resCursor === currentCursor) break;
         currentCursor = resCursor;
         this.cursor = lastLedger;
         carriedKeys = null;

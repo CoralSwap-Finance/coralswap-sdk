@@ -116,6 +116,7 @@ export { EventCursor, TypedEventCursor, decodeEventTopic, MIN_START_LEDGER, MAX_
 export type { EventCursorOptions, TypedEventScanParams, PageInfo, ScanResult } from './event-cursor';
 export { ConnectionPool } from './connection-pool';
 
+
 export {
   getVotingPower,
   getVotingPowerAtLedger,
@@ -175,3 +176,12 @@ export type { TransactionStatus, RetryDecision } from './idempotent-resubmission
  * `10 ** decimals` from here rather than by a hardcoded `1e7`.
  */
 export { getTokenDecimals, clearTokenDecimalsCache, FALLBACK_TOKEN_DECIMALS } from './token-decimals';
+
+// Landed-status lookup and the submitIdempotent helper (#464). The lookup is
+// exported under its own name: getTransactionStatus above already names the
+// idempotent-resubmission variant.
+export {
+  getTransactionStatus as getTransactionLandedStatus,
+  submitIdempotent,
+} from "./transactionStatus";
+export type { TransactionStatusResult, TxLandedStatus } from "./transactionStatus";

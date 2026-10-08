@@ -16,7 +16,8 @@ import {
 import { PRECISION, DEFAULTS } from '../config';
 import { PairNotFoundError, ValidationError, InsufficientLiquidityError, TransactionError } from '../errors';
 import { PairClient } from '@/contracts/pair';
-import { Address, rpc, xdr } from '@stellar/stellar-sdk';
+import { Address } from '@stellar/stellar-sdk';
+import { EventCursor } from '@/utils/event-cursor';
 import { decodeI128 } from '@/utils/numeric';
 import { GasEstimate } from '../types/gas';
 import { estimateGas } from '../utils/gas';
@@ -822,27 +823,24 @@ export class SwapModule {
       );
     }
 
-    // Build the getEvents request.
-    // When pairAddress is given we scope the query to that contract, which is
-    // the most efficient path. Without it we query all contracts for "swap" topic.
-    const request: rpc.Server.GetEventsRequest = {
-      startLedger: fromLedger,
-      filters: [
-        {
-          type: "contract",
-          contractIds: filter.pairAddress ? [filter.pairAddress] : [],
-          topics: [[xdr.ScVal.scvSymbol("swap").toXdr("base64")]],
-        },
-      ],
-      limit: filter.limit ?? 200,
-    };
-
-    const response = await this.client.server.getEvents(request);
-    if (!response || !Array.isArray(response.events)) return [];
+    // The shared EventCursor builds the getEvents request (XDR-encoded "swap"
+    // topic, scoped to the pair when one is given) and pages through results.
+    // The cursor keeps paging while pages are full, so cap the raw events at
+    // `limit` to keep the previous single-page bound.
+    const limit = filter.limit ?? 200;
+    const cursor = new EventCursor(this.client.server);
+    const scanned = await cursor.scan({
+      contractIds: filter.pairAddress ? [filter.pairAddress] : [],
+      topics: ["swap"],
+      fromLedger,
+      toLedger,
+      limit,
+    });
+    const rawEvents = scanned.slice(0, limit);
 
     const events: SwapHistoryEvent[] = [];
 
-    for (const ev of response.events) {
+    for (const ev of rawEvents) {
       // Skip events beyond toLedger
       if (ev.ledger > toLedger) continue;
 
