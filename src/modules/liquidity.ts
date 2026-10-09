@@ -14,6 +14,7 @@ import { TransactionError, ValidationError } from "@/errors";
 import { isValidAddress } from "@/utils/addresses";
 import { validateWithSchema } from "@/schemas";
 import { estimateGas } from "@/utils/gas";
+import { submitIdempotent } from "@/utils/submit-idempotent";
 
 // ---------------------------------------------------------------------------
 // Input schemas
