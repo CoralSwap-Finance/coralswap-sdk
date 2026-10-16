@@ -1,4 +1,8 @@
 import { PoolState, FeeState } from '@/types/pool';
+import { CoralSwapClient } from '@/client';
+import { TransactionError } from '@/errors';
+import { validateAddress } from '@/utils/validation';
+import { getTransactionStatus, shouldRetrySubmission } from '@/utils/idempotent-resubmission';
 
 /**
  * Configuration for an RWA (Real-World Asset) liquidity pool.
@@ -184,4 +188,121 @@ export function navAdjustedSwapOutput(
 export function navPremiumRatio(spotPrice: bigint, navPerToken: bigint): bigint {
   if (navPerToken === 0n) return 0n;
   return (spotPrice * STELLAR_PRECISION) / navPerToken;
+}
+
+/** Parameters for registering a new RWA trading pair on-chain. */
+export interface CreateRWAPairRequest {
+  /** Address of the first token (e.g. a stablecoin such as USDC). */
+  tokenA: string;
+  /** Address of the second token (e.g. a yield-bearing RWA token such as deJTRSY). */
+  tokenB: string;
+  /** RedStone (or equivalent) NAV price feed contract address for `tokenB`. */
+  navPriceFeedAddress: string;
+}
+
+/** Result of a (possibly recovered) RWA pair creation. */
+export interface CreateRWAPairResult {
+  txHash: string;
+  ledger: number;
+  /** Resolved pair address, or null if it could not be looked up yet. */
+  pairAddress: string | null;
+}
+
+/**
+ * Write-path operations for RWA (Real-World Asset) pools.
+ *
+ * RWA pool interactions move real funds against NAV-priced positions, so a
+ * timeout during submission must never result in a blind resubmission --
+ * that would risk registering (or attempting to register) the same pair
+ * twice against real capital. On a retryable failure this module always
+ * checks the transaction's real on-chain status via the shared
+ * {@link getTransactionStatus} / {@link shouldRetrySubmission} utility
+ * before ever resubmitting.
+ */
+export class RWAModule {
+  private client: CoralSwapClient;
+
+  constructor(client: CoralSwapClient) {
+    this.client = client;
+  }
+
+  /**
+   * Register a new RWA trading pair, recording its NAV price feed on-chain.
+   *
+   * @throws {ValidationError} If any address is invalid.
+   * @throws {TransactionError} If the submission genuinely fails (not just times out).
+   */
+  async createRWAPair(request: CreateRWAPairRequest): Promise<CreateRWAPairResult> {
+    validateAddress(request.tokenA, 'tokenA');
+    validateAddress(request.tokenB, 'tokenB');
+    validateAddress(request.navPriceFeedAddress, 'navPriceFeedAddress');
+
+    const op = this.client.factory.buildCreateRWAPair(
+      this.client.publicKey,
+      request.tokenA,
+      request.tokenB,
+      request.navPriceFeedAddress,
+    );
+
+    const { txHash, ledger } = await this.submitIdempotent(op, 'RWA pair creation');
+
+    const pairAddress = await this.client.getPairAddress(request.tokenA, request.tokenB);
+
+    return { txHash, ledger, pairAddress };
+  }
+
+  /**
+   * Submit an operation, and on a retryable submission failure, check the
+   * transaction's real on-chain status before ever resubmitting.
+   *
+   * - Real status `SUCCESS` -- the write already landed despite the
+   *   client-side failure; return it rather than resubmitting.
+   * - Real status `FAILED` -- the write genuinely failed on-chain; throw
+   *   without resubmitting.
+   * - Real status `NOT_FOUND` / `ERROR` -- the write never landed (or its
+   *   status can't be confirmed); it is safe to resubmit exactly once.
+   */
+  private async submitIdempotent(
+    op: import('@stellar/stellar-sdk').xdr.Operation,
+    label: string,
+  ): Promise<{ txHash: string; ledger: number }> {
+    const result = await this.client.submitTransaction([op]);
+
+    if (result.success) {
+      return { txHash: result.txHash!, ledger: result.data!.ledger };
+    }
+
+    if (!result.txHash) {
+      throw new TransactionError(
+        `${label} failed: ${result.error?.message ?? 'Unknown error'}`,
+      );
+    }
+
+    const status = await getTransactionStatus(this.client.server, result.txHash);
+    const decision = shouldRetrySubmission(status);
+
+    if (!decision.shouldRetry) {
+      if (status.status === 'SUCCESS') {
+        // Timed out client-side, but the write genuinely landed -- report
+        // it rather than resubmitting a duplicate against real capital.
+        return { txHash: result.txHash, ledger: status.ledger };
+      }
+      throw new TransactionError(
+        `${label} failed on-chain: ${result.error?.message ?? 'Transaction failed'}`,
+        result.txHash,
+      );
+    }
+
+    // Genuinely never landed -- safe to resubmit exactly once. submitTransaction
+    // rebuilds the transaction (fresh account sequence number) internally.
+    const retryResult = await this.client.submitTransaction([op]);
+    if (!retryResult.success) {
+      throw new TransactionError(
+        `${label} failed after retry: ${retryResult.error?.message ?? 'Unknown error'}`,
+        retryResult.txHash,
+      );
+    }
+
+    return { txHash: retryResult.txHash!, ledger: retryResult.data!.ledger };
+  }
 }

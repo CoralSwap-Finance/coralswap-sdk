@@ -1,12 +1,13 @@
 import {
   Contract,
-  SorobanRpc,
+  rpc,
   TransactionBuilder,
   xdr,
   Address,
   nativeToScVal,
 } from "@stellar/stellar-sdk";
 import { withRetry, RetryOptions } from "@/utils/retry";
+import { decodeI128 } from "@/utils/scval";
 import { Logger } from "@/types/common";
 
 /**
@@ -17,7 +18,7 @@ import { Logger } from "@/types/common";
  */
 export class RouterClient {
   private contract: Contract;
-  private server: SorobanRpc.Server;
+  private server: rpc.Server;
   private networkPassphrase: string;
   private retryOptions: RetryOptions;
   private logger?: Logger;
@@ -33,7 +34,7 @@ export class RouterClient {
    */
   constructor(
     contractAddress: string,
-    server: SorobanRpc.Server,
+    server: rpc.Server,
     networkPassphrase: string,
     retryOptions: RetryOptions,
     logger?: Logger,
@@ -52,9 +53,10 @@ export class RouterClient {
    * @param tokenIn - Address of the token being sold.
    * @param tokenOut - Address of the token being bought.
    * @param amountIn - Exact amount of `tokenIn` to sell (i128).
-   * @param amountOutMin - Minimum acceptable output amount (slippage guard).
+   * @param amountOutMin - Minimum acceptable output amount (slippage guard). Must be > 0.
    * @param deadline - Unix timestamp after which the transaction reverts.
    * @returns An XDR operation ready to be included in a transaction.
+   * @throws {Error} If `amountOutMin` is not greater than zero.
    */
   buildSwapExactIn(
     sender: string,
@@ -64,6 +66,7 @@ export class RouterClient {
     amountOutMin: bigint,
     deadline: number,
   ): xdr.Operation {
+    this.assertSlippageBound(amountOutMin, "amountOutMin");
     return this.contract.call(
       "swap_exact_in",
       nativeToScVal(Address.fromString(sender), { type: "address" }),
@@ -82,9 +85,10 @@ export class RouterClient {
    * @param tokenIn - Address of the token being sold.
    * @param tokenOut - Address of the token being bought.
    * @param amountOut - Exact amount of `tokenOut` to receive (i128).
-   * @param amountInMax - Maximum amount of `tokenIn` willing to spend (slippage guard).
+   * @param amountInMax - Maximum amount of `tokenIn` willing to spend (slippage guard). Must be > 0.
    * @param deadline - Unix timestamp after which the transaction reverts.
    * @returns An XDR operation ready to be included in a transaction.
+   * @throws {Error} If `amountInMax` is not greater than zero.
    */
   buildSwapExactOut(
     sender: string,
@@ -94,6 +98,7 @@ export class RouterClient {
     amountInMax: bigint,
     deadline: number,
   ): xdr.Operation {
+    this.assertSlippageBound(amountInMax, "amountInMax");
     return this.contract.call(
       "swap_exact_out",
       nativeToScVal(Address.fromString(sender), { type: "address" }),
@@ -114,9 +119,10 @@ export class RouterClient {
    * @param sender - The address authorising the swap and receiving the final output token.
    * @param path - Ordered array of token addresses defining the route (min 2 tokens).
    * @param amountIn - Exact amount of the first token in `path` to sell (i128).
-   * @param amountOutMin - Minimum acceptable amount of the last token in `path` (slippage guard).
+   * @param amountOutMin - Minimum acceptable amount of the last token in `path` (slippage guard). Must be > 0.
    * @param deadline - Unix timestamp after which the transaction reverts.
    * @returns An XDR operation ready to be included in a transaction.
+   * @throws {Error} If `amountOutMin` is not greater than zero.
    */
   buildSwapExactTokensForTokens(
     sender: string,
@@ -125,6 +131,7 @@ export class RouterClient {
     amountOutMin: bigint,
     deadline: number,
   ): xdr.Operation {
+    this.assertSlippageBound(amountOutMin, "amountOutMin");
     const pathVal = xdr.ScVal.scvVec(
       path.map((addr) =>
         nativeToScVal(Address.fromString(addr), { type: "address" }),
@@ -224,7 +231,7 @@ export class RouterClient {
     );
     const result = await this.simulateRead(op);
     if (!result) return 30;
-    return result.u32() ?? 30;
+    return result.type === "scvU32" ? result.u32 : 30;
   }
 
   /**
@@ -249,10 +256,21 @@ export class RouterClient {
     );
     const result = await this.simulateRead(op);
     if (!result) throw new Error("Failed to get quote");
-    return (
-      BigInt(result.i128().lo().toString()) +
-      (BigInt(result.i128().hi().toString()) << 64n)
-    );
+    return decodeI128(result);
+  }
+
+  /**
+   * Assert that a swap slippage bound is explicit and strictly positive.
+   *
+   * The router rejects `0` and negative bounds because they would silently
+   * allow full/unbounded slippage. Every swap path must use a positive bound.
+   */
+  private assertSlippageBound(value: bigint, label: string): void {
+    if (value <= 0n) {
+      throw new Error(
+        `${label} must be > 0; refusing to swap with unbounded slippage`,
+      );
+    }
   }
 
   /**
@@ -287,7 +305,7 @@ export class RouterClient {
       this.logger,
       "RouterClient_simulateTransaction",
     );
-    if (SorobanRpc.Api.isSimulationSuccess(sim) && sim.result) {
+    if (rpc.Api.isSimulationSuccess(sim) && sim.result) {
       return sim.result.retval;
     }
     return null;

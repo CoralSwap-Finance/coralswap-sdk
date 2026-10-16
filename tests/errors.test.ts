@@ -12,6 +12,8 @@ import {
   ValidationError,
   FlashLoanError,
   SignerError,
+  InvalidOperationError,
+  NotConfiguredError,
   mapError,
 } from "../src/errors";
 
@@ -45,6 +47,62 @@ describe("Error Hierarchy", () => {
     const err = new PairNotFoundError("TOKEN_A", "TOKEN_B");
     expect(err.code).toBe("PAIR_NOT_FOUND");
     expect(err.details?.tokenA).toBe("TOKEN_A");
+  });
+
+  describe("NotConfiguredError", () => {
+    it("keeps the plain message when no hint is supplied", () => {
+      const err = new NotConfiguredError("Voting power query provider");
+
+      expect(err).toBeInstanceOf(NotConfiguredError);
+      expect(err.code).toBe("NOT_CONFIGURED");
+      expect(err.name).toBe("NotConfiguredError");
+      expect(err.message).toBe("Voting power query provider is not configured");
+      expect(err.configKey).toBeUndefined();
+    });
+
+    it("mirrors details.configKey onto the typed configKey field", () => {
+      const err = new NotConfiguredError("Factory contract", {
+        network: "mainnet",
+        configKey: "factoryAddress",
+      });
+
+      expect(err.configKey).toBe("factoryAddress");
+      expect(err.details).toEqual({
+        resource: "Factory contract",
+        network: "mainnet",
+        configKey: "factoryAddress",
+      });
+      expect(err.toJSON()).toMatchObject({
+        name: "NotConfiguredError",
+        code: "NOT_CONFIGURED",
+        details: { configKey: "factoryAddress" },
+      });
+    });
+
+    it("appends an actionable hint naming the key and network", () => {
+      const err = new NotConfiguredError(
+        "Factory contract",
+        { network: "mainnet", configKey: "factoryAddress" },
+        'set factoryAddress for network "mainnet" before accessing client.factory',
+      );
+
+      expect(err.message).toBe(
+        "Factory contract is not configured — " +
+          'set factoryAddress for network "mainnet" before accessing client.factory',
+      );
+      expect(err.message).toContain("factoryAddress");
+      expect(err.message).toContain("mainnet");
+    });
+
+    it("lets callers branch on the class when the value is typed as unknown", () => {
+      const caught: unknown = new NotConfiguredError("Router contract", {
+        network: "mainnet",
+        configKey: "routerAddress",
+      });
+
+      expect(caught).toBeInstanceOf(NotConfiguredError);
+      expect((caught as NotConfiguredError).configKey).toBe("routerAddress");
+    });
   });
 
   describe("mapError", () => {
@@ -397,49 +455,91 @@ describe("Error Hierarchy", () => {
         });
       });
 
-      describe("Router contract errors (300-306)", () => {
-        it("maps error code 300 - Pair not found", () => {
-          const err = mapError(new Error("Error(Contract, #300)"));
+      describe("Router contract errors (200-207)", () => {
+        it("maps error code 200 - Router already initialized", () => {
+          const err = mapError(new Error("Error(Contract, #200)"));
+          expect(err.code).toBe("INVALID_OPERATION");
+          expect(err).toBeInstanceOf(InvalidOperationError);
+          expect(err.details?.contractErrorCode).toBe(200);
+        });
+
+        it("maps error code 201 - Invalid swap path", () => {
+          const err = mapError(new Error("Error(Contract, #201)"));
+          expect(err.code).toBe("VALIDATION_ERROR");
+          expect(err.details?.contractErrorCode).toBe(201);
+        });
+
+        it("maps error code 202 - Insufficient output amount", () => {
+          const err = mapError(new Error("Error(Contract, #202)"));
+          expect(err.code).toBe("SLIPPAGE_EXCEEDED");
+          expect(err).toBeInstanceOf(SlippageError);
+          expect(err.details?.contractErrorCode).toBe(202);
+        });
+
+        it("maps error code 203 - Excessive input amount", () => {
+          const err = mapError(new Error("Error(Contract, #203)"));
+          expect(err.code).toBe("VALIDATION_ERROR");
+          expect(err.details?.contractErrorCode).toBe(203);
+        });
+
+        it("maps error code 204 - Expired deadline", () => {
+          const err = mapError(new Error("Error(Contract, #204)"));
+          expect(err.code).toBe("DEADLINE_EXCEEDED");
+          expect(err).toBeInstanceOf(DeadlineError);
+        });
+
+        it("maps error code 205 - Insufficient liquidity", () => {
+          const err = mapError(new Error("Error(Contract, #205)"));
+          expect(err.code).toBe("INSUFFICIENT_LIQUIDITY");
+          expect(err).toBeInstanceOf(InsufficientLiquidityError);
+          expect(err.details?.contractErrorCode).toBe(205);
+        });
+
+        it("maps error code 206 - Pair not found", () => {
+          const err = mapError(new Error("Error(Contract, #206)"));
           expect(err.code).toBe("PAIR_NOT_FOUND");
           expect(err).toBeInstanceOf(PairNotFoundError);
         });
 
-        it("maps error code 301 - Invalid path", () => {
+        it("maps error code 207 - Identical tokens", () => {
+          const err = mapError(new Error("Error(Contract, #207)"));
+          expect(err.code).toBe("VALIDATION_ERROR");
+          expect(err.details?.contractErrorCode).toBe(207);
+        });
+      });
+
+      describe("Factory contract errors (300-304)", () => {
+        it("maps error code 300 - Factory already initialized", () => {
+          const err = mapError(new Error("Error(Contract, #300)"));
+          expect(err.code).toBe("INVALID_OPERATION");
+          expect(err).toBeInstanceOf(InvalidOperationError);
+          expect(err.message).toBe("Factory already initialized");
+          expect(err.details?.contractErrorCode).toBe(300);
+        });
+
+        it("maps error code 301 - Unauthorized caller", () => {
           const err = mapError(new Error("Error(Contract, #301)"));
           expect(err.code).toBe("VALIDATION_ERROR");
           expect(err.details?.contractErrorCode).toBe(301);
         });
 
-        it("maps error code 302 - Slippage exceeded", () => {
+        it("maps error code 302 - Pair already exists", () => {
           const err = mapError(new Error("Error(Contract, #302)"));
-          expect(err.code).toBe("SLIPPAGE_EXCEEDED");
-          expect(err).toBeInstanceOf(SlippageError);
+          expect(err.code).toBe("INVALID_OPERATION");
+          expect(err).toBeInstanceOf(InvalidOperationError);
           expect(err.details?.contractErrorCode).toBe(302);
         });
 
-        it("maps error code 303 - Deadline exceeded", () => {
+        it("maps error code 303 - Zero address provided", () => {
           const err = mapError(new Error("Error(Contract, #303)"));
-          expect(err.code).toBe("DEADLINE_EXCEEDED");
-          expect(err).toBeInstanceOf(DeadlineError);
+          expect(err.code).toBe("VALIDATION_ERROR");
+          expect(err.details?.contractErrorCode).toBe(303);
         });
 
-        it("maps error code 304 - Insufficient liquidity", () => {
+        it("maps error code 304 - Invalid fee configuration", () => {
           const err = mapError(new Error("Error(Contract, #304)"));
-          expect(err.code).toBe("INSUFFICIENT_LIQUIDITY");
-          expect(err).toBeInstanceOf(InsufficientLiquidityError);
+          expect(err.code).toBe("VALIDATION_ERROR");
           expect(err.details?.contractErrorCode).toBe(304);
-        });
-
-        it("maps error code 305 - Excessive input amount", () => {
-          const err = mapError(new Error("Error(Contract, #305)"));
-          expect(err.code).toBe("VALIDATION_ERROR");
-          expect(err.details?.contractErrorCode).toBe(305);
-        });
-
-        it("maps error code 306 - Invalid token", () => {
-          const err = mapError(new Error("Error(Contract, #306)"));
-          expect(err.code).toBe("VALIDATION_ERROR");
-          expect(err.details?.contractErrorCode).toBe(306);
         });
       });
 
@@ -462,10 +562,13 @@ describe("Error Hierarchy", () => {
         expect(err.message).toBe("some string error");
       });
 
-      it("preserves original error in details", () => {
+      it("preserves original error name and message in details", () => {
         const original = new Error("custom error");
         const err = mapError(original);
-        expect(err.details?.originalError).toBe(original);
+        expect(err.details?.originalError).toEqual({
+          name: "Error",
+          message: "custom error",
+        });
       });
 
       it("handles non-Error objects", () => {

@@ -73,6 +73,40 @@ function mockLpTokenClient(totalSupply: bigint = 500_000n) {
     };
 }
 
+describe('FactoryClient and PairClient contract view wrappers', () => {
+    it('exposes total pair and fee-state version accessors', async () => {
+        const factory = new (require('../src/contracts/factory').FactoryClient)(
+            'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM',
+            {} as any,
+            'Test SDF Network ; September 2015',
+            { maxRetries: 0, baseDelayMs: 0, maxDelayMs: 0 },
+        );
+
+        (factory as any).simulateRead = jest.fn()
+            .mockResolvedValueOnce({ type: 'scvU32', u32: 42 })
+            .mockResolvedValueOnce({ type: 'scvU32', u32: 7 });
+
+        await expect(factory.getTotalPairs()).resolves.toBe(42);
+        await expect(factory.getFeeStateVersion()).resolves.toBe(7);
+    });
+
+    it('exposes pair wasm and fee-state version accessors', async () => {
+        const pair = new (require('../src/contracts/pair').PairClient)(
+            'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM',
+            {} as any,
+            'Test SDF Network ; September 2015',
+            { maxRetries: 0, baseDelayMs: 0, maxDelayMs: 0 },
+        );
+
+        (pair as any).simulateRead = jest.fn()
+            .mockResolvedValueOnce({ type: 'scvBytes', bytes: () => Buffer.from('abcd', 'hex') })
+            .mockResolvedValueOnce({ type: 'scvU32', u32: 17 });
+
+        await expect(pair.getWasmHash()).resolves.toBe('abcd');
+        await expect(pair.getFeeStateVersion()).resolves.toBe(17);
+    });
+});
+
 // ---------------------------------------------------------------------------
 // Existing cache tests (preserved + migrated to TTL-aware entries)
 // ---------------------------------------------------------------------------
@@ -522,5 +556,56 @@ describe('FactoryModule — cache TTL', () => {
 
         await module.getPairAddress(TOKEN_A, TOKEN_B);
         expect(getPairFn).toHaveBeenCalledTimes(2); // invalidated → re-fetch
+    });
+
+    // -----------------------------------------------------------------------
+    // verifyPairAddress
+    // -----------------------------------------------------------------------
+
+    describe('verifyPairAddress', () => {
+        it('returns true for a registered pair', async () => {
+            const client = buildClient();
+            const module = new FactoryModule(client);
+            // Mock getAllPairs to include the test pair
+            (client as any).factory.getAllPairs = jest.fn().mockResolvedValue([
+                PAIR_AB,
+                'COTHERPAIR0000000000000000000000000000000000000000000',
+            ]);
+
+            const result = await module.verifyPairAddress(PAIR_AB);
+            expect(result).toBe(true);
+        });
+
+        it('returns false for an unregistered/spoofed address', async () => {
+            const client = buildClient();
+            const module = new FactoryModule(client);
+            const spoofedAddress = 'CSPOOFED000000000000000000000000000000000000000000000';
+
+            (client as any).factory.getAllPairs = jest.fn().mockResolvedValue([
+                PAIR_AB,
+                PAIR_CD,
+            ]);
+
+            const result = await module.verifyPairAddress(spoofedAddress);
+            expect(result).toBe(false);
+        });
+
+        it('returns false for empty pair list', async () => {
+            const client = buildClient();
+            const module = new FactoryModule(client);
+            (client as any).factory.getAllPairs = jest.fn().mockResolvedValue([]);
+
+            const result = await module.verifyPairAddress(PAIR_AB);
+            expect(result).toBe(false);
+        });
+
+        it('throws ValidationError for empty address', async () => {
+            const client = buildClient();
+            const module = new FactoryModule(client);
+            (client as any).factory.getAllPairs = jest.fn().mockResolvedValue([]);
+
+            await expect(module.verifyPairAddress('')).rejects.toThrow();
+            await expect(module.verifyPairAddress('   ')).rejects.toThrow();
+        });
     });
 });

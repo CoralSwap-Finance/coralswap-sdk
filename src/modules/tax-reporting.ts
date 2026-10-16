@@ -1,7 +1,12 @@
 import { CoralSwapClient } from "@/client";
 import { fromSorobanAmount } from "@/utils/amounts";
 import { validateAddress } from "@/utils/validation";
-import { SorobanRpc } from "@stellar/stellar-sdk";
+import { EventCursor, decodeEventTopic, MIN_START_LEDGER } from "@/utils/event-cursor";
+import {
+  ledgerToApproxTime,
+  LedgerHead,
+  LEDGER_CLOSE_INTERVAL_SECONDS,
+} from "@/utils/ledger";
 
 /**
  * Options for exporting trade history.
@@ -32,6 +37,52 @@ export interface TaxReportRow {
   txHash: string;
 }
 
+/**
+ * Cost basis for a token position using FIFO or LIFO accounting.
+ */
+export interface CostBasis {
+  token: string;
+  totalQuantity: string;
+  totalCost: string;
+  averageCost: string;
+  method: "FIFO" | "LIFO";
+  disposals: CostBasisDisposal[];
+}
+
+/**
+ * A single disposal event with calculated gain/loss.
+ */
+export interface CostBasisDisposal {
+  date: string;
+  quantity: string;
+  costBasis: string;
+  salePrice: string;
+  gain: string;
+  loss: string;
+  txHash: string;
+}
+
+/**
+ * Capital gains calculation result.
+ */
+export interface CapitalGains {
+  period: { start: string; end: string };
+  shortTermGains: string;
+  shortTermLosses: string;
+  longTermGains: string;
+  longTermLosses: string;
+  totalGain: string;
+  totalLoss: string;
+  netGain: string;
+}
+
+/**
+ * Options for cost basis calculations.
+ */
+export interface CostBasisOptions extends ExportOptions {
+  method?: "FIFO" | "LIFO";
+}
+
 const CSV_HEADERS = [
   "Date",
   "Type",
@@ -46,8 +97,11 @@ const CSV_HEADERS = [
 
 const TOKEN_DECIMALS = 7;
 
-/** Default ledger history window when no date range is provided. */
-const DEFAULT_HISTORY_WINDOW = 17280; // ~1 day of ledgers
+/** Default ledger history window when no date range is provided (~1 day of ledgers). */
+const DEFAULT_HISTORY_WINDOW = 86400 / LEDGER_CLOSE_INTERVAL_SECONDS;
+
+/** Upper bound on events pulled per topic for a single report. */
+const MAX_HISTORY_EVENTS = 200;
 
 /**
  * Tax reporting module for CoralSwap.
@@ -86,11 +140,19 @@ export class TaxReportingModule {
     const { format = "csv", fromDate, toDate, timezone = "UTC" } = options;
 
     const currentLedger = await this.client.getCurrentLedger();
-    const startLedger = Math.max(0, currentLedger - DEFAULT_HISTORY_WINDOW);
+    // Anchored against the chain head rather than clamped to ledger 0, which
+    // is not a cursor the RPC accepts.
+    const startLedger = Math.max(MIN_START_LEDGER, currentLedger - DEFAULT_HISTORY_WINDOW);
+    // Reference head for approximating an event's close time when the RPC
+    // response omits `ledgerClosedAt`. The chain head is ~now.
+    const head: LedgerHead = {
+      ledger: currentLedger,
+      closeTime: Math.floor(Date.now() / 1000),
+    };
 
     const [swapEvents, liquidityEvents] = await Promise.all([
-      this.fetchSwapEvents(address, startLedger),
-      this.fetchLiquidityEvents(address, startLedger),
+      this.fetchSwapEvents(address, startLedger, head),
+      this.fetchLiquidityEvents(address, startLedger, head),
     ]);
 
     const rows: TaxReportRow[] = [
@@ -123,6 +185,7 @@ export class TaxReportingModule {
   private async fetchSwapEvents(
     address: string,
     startLedger: number,
+    head: LedgerHead,
   ): Promise<TaxReportRow[]> {
     const response = await this.fetchEvents(startLedger, ["swap"]);
     const rows: TaxReportRow[] = [];
@@ -140,7 +203,7 @@ export class TaxReportingModule {
       const feeAmount = (amountIn * BigInt(feeBps)) / 10000n;
 
       rows.push({
-        date: new Date(ev.ledgerClosedAt ?? 0).toISOString(),
+        date: eventDate(ev, head),
         type: "swap",
         tokenIn: readAddress(data, "token_in") ?? "",
         amountIn: fromSorobanAmount(amountIn, TOKEN_DECIMALS),
@@ -158,6 +221,7 @@ export class TaxReportingModule {
   private async fetchLiquidityEvents(
     address: string,
     startLedger: number,
+    head: LedgerHead,
   ): Promise<TaxReportRow[]> {
     const [addEvents, removeEvents] = await Promise.all([
       this.fetchEvents(startLedger, ["add_liquidity"]),
@@ -167,7 +231,9 @@ export class TaxReportingModule {
     const rows: TaxReportRow[] = [];
 
     for (const ev of [...addEvents, ...removeEvents]) {
-      const isAdd = (ev.topic?.[0] ?? "") === "add_liquidity";
+      // Event topics are XDR ScVals: comparing them to a bare string always
+      // failed, which silently reported every add_liquidity as a removal.
+      const isAdd = decodeEventTopic(ev.topic?.[0]) === "add_liquidity";
       const data = decodeMapEvent(ev.value);
       if (!data) continue;
 
@@ -180,7 +246,7 @@ export class TaxReportingModule {
       const tokenB = readAddress(data, "token_b") ?? "";
 
       rows.push({
-        date: new Date(ev.ledgerClosedAt ?? 0).toISOString(),
+        date: eventDate(ev, head),
         type: isAdd ? "add_liquidity" : "remove_liquidity",
         tokenIn: tokenA,
         amountIn: fromSorobanAmount(amountA, TOKEN_DECIMALS),
@@ -195,19 +261,237 @@ export class TaxReportingModule {
     return rows;
   }
 
-  private async fetchEvents(
-    startLedger: number,
-    topics: string[],
-  ): Promise<RawEvent[]> {
-    const request: SorobanRpc.Server.GetEventsRequest = {
-      startLedger,
-      filters: [{ type: "contract", contractIds: [], topics: [topics] }],
-      limit: 200,
-    };
+  /**
+   * Calculate cost basis for a token using FIFO or LIFO accounting method.
+   *
+   * @param address - Stellar account address
+   * @param token - Token address to calculate cost basis for
+   * @param options - Cost basis options including method (FIFO or LIFO) and date range
+   * @returns Cost basis with all disposals and gains/losses
+   */
+  async getCostBasis(
+    address: string,
+    token: string,
+    options: CostBasisOptions = {},
+  ): Promise<CostBasis> {
+    validateAddress(address, "address");
+    validateAddress(token, "token");
 
-    const response = await this.client.server.getEvents(request);
-    if (!response || !Array.isArray(response.events)) return [];
-    return response.events as unknown as RawEvent[];
+    const { method = "FIFO", fromDate, toDate, timezone = "UTC" } = options;
+
+    const history = await this.exportTradeHistory(address, {
+      format: "json",
+      fromDate,
+      toDate,
+      timezone,
+    });
+
+    const rows = JSON.parse(history) as TaxReportRow[];
+    const purchases: Array<{
+      date: string;
+      quantity: bigint;
+      costStroops: bigint;
+      txHash: string;
+    }> = [];
+    const disposals: CostBasisDisposal[] = [];
+
+    let totalQuantity = 0n;
+    let totalCost = 0n;
+
+    for (const row of rows) {
+      if (row.type === "swap" && row.tokenOut === token) {
+        const amount = parseAmountToStroops(row.amountOut);
+        const costStroops = parseAmountToStroops(row.amountIn) + parseAmountToStroops(row.fee);
+        purchases.push({
+          date: row.date,
+          quantity: amount,
+          costStroops,
+          txHash: row.txHash,
+        });
+        totalQuantity += amount;
+        totalCost += costStroops;
+      } else if (row.type === "swap" && row.tokenIn === token) {
+        const disposalQty = parseAmountToStroops(row.amountIn);
+        const orderedPurchases = method === "FIFO" ? purchases : [...purchases].reverse();
+        let remainingDisposal = disposalQty;
+        let disposalCostBasis = 0n;
+
+        for (let i = 0; i < orderedPurchases.length && remainingDisposal > 0n; i++) {
+          const purchase = orderedPurchases[i];
+          if (purchase.quantity <= 0n) continue;
+
+          const qtyToTake = remainingDisposal > purchase.quantity ? purchase.quantity : remainingDisposal;
+          const lotCostBasis = (qtyToTake * purchase.costStroops) / purchase.quantity;
+
+          disposalCostBasis += lotCostBasis;
+          purchase.costStroops -= lotCostBasis;
+          purchase.quantity -= qtyToTake;
+          remainingDisposal -= qtyToTake;
+
+          if (purchase.quantity === 0n) {
+            if (method === "FIFO") {
+              purchases.shift();
+              i--;
+            } else {
+              purchases.pop();
+              i--;
+            }
+          }
+        }
+
+        const costBasisStr = fromSorobanAmount(disposalCostBasis, TOKEN_DECIMALS);
+        const salePriceStroops = parseAmountToStroops(row.amountOut);
+        const salePriceStr = fromSorobanAmount(salePriceStroops, TOKEN_DECIMALS);
+        const gainStroops = salePriceStroops - disposalCostBasis;
+
+        disposals.push({
+          date: row.date,
+          quantity: fromSorobanAmount(disposalQty, TOKEN_DECIMALS),
+          costBasis: costBasisStr,
+          salePrice: salePriceStr,
+          gain: gainStroops > 0n ? fromSorobanAmount(gainStroops, TOKEN_DECIMALS) : "0.0000000",
+          loss: gainStroops < 0n ? fromSorobanAmount(-gainStroops, TOKEN_DECIMALS) : "0.0000000",
+          txHash: row.txHash,
+        });
+
+        totalQuantity -= disposalQty;
+      }
+    }
+
+    return {
+      token,
+      totalQuantity: fromSorobanAmount(totalQuantity, TOKEN_DECIMALS),
+      totalCost: fromSorobanAmount(totalCost, TOKEN_DECIMALS),
+      averageCost:
+        totalQuantity > 0n
+          ? fromSorobanAmount(totalCost / totalQuantity, TOKEN_DECIMALS)
+          : "0.0000000",
+      method,
+      disposals,
+    };
+  }
+
+  /**
+   * Calculate capital gains/losses for a tax year.
+   *
+   * @param address - Stellar account address
+   * @param taxYear - Tax year (e.g., 2024) or date range via options
+   * @param options - Options including date range and timezone
+   * @returns Capital gains categorized by short-term and long-term
+   */
+  async getCapitalGains(
+    address: string,
+    taxYear: number,
+    options: ExportOptions = {},
+  ): Promise<CapitalGains> {
+    validateAddress(address, "address");
+
+    const startDate =
+      options.fromDate || new Date(`${taxYear}-01-01T00:00:00Z`);
+    const endDate = options.toDate || new Date(`${taxYear}-12-31T23:59:59Z`);
+
+    const history = await this.exportTradeHistory(address, {
+      format: "json",
+      fromDate: startDate,
+      toDate: endDate,
+      timezone: options.timezone,
+    });
+
+    const rows = JSON.parse(history) as TaxReportRow[];
+    const holdingPeriods = new Map<string, { date: string; quantity: bigint; costBasis: bigint }[]>();
+
+    let shortTermGains = 0n;
+    let shortTermLosses = 0n;
+    let longTermGains = 0n;
+    let longTermLosses = 0n;
+
+    for (const row of rows) {
+      if (row.type === "swap") {
+        if (!holdingPeriods.has(row.tokenOut)) {
+          holdingPeriods.set(row.tokenOut, []);
+        }
+        const boughtQty = parseAmountToStroops(row.amountOut);
+        const boughtCost = parseAmountToStroops(row.amountIn) + parseAmountToStroops(row.fee);
+        holdingPeriods.get(row.tokenOut)!.push({
+          date: row.date,
+          quantity: boughtQty,
+          costBasis: boughtCost,
+        });
+
+        if (holdingPeriods.has(row.tokenIn)) {
+          const holdings = holdingPeriods.get(row.tokenIn)!;
+          const disposalQty = parseAmountToStroops(row.amountIn);
+          const saleProceeds = parseAmountToStroops(row.amountOut);
+
+          for (let i = 0; i < holdings.length; i++) {
+            if (disposalQty <= 0n) break;
+            const holding = holdings[i];
+            if (holding.quantity <= 0n) continue;
+
+            const qty = disposalQty > holding.quantity ? holding.quantity : disposalQty;
+            const holdingDate = new Date(holding.date);
+            const disposalDate = new Date(row.date);
+            const holdDays =
+              (disposalDate.getTime() - holdingDate.getTime()) / (1000 * 60 * 60 * 24);
+            const isLongTerm = holdDays > 365;
+
+            const costBasisForQty = (qty * holding.costBasis) / holding.quantity;
+            const proceedsForQty = (qty * saleProceeds) / disposalQty;
+            const gain = proceedsForQty - costBasisForQty;
+
+            if (isLongTerm) {
+              if (gain > 0n) longTermGains += gain;
+              else longTermLosses += -gain;
+            } else {
+              if (gain > 0n) shortTermGains += gain;
+              else shortTermLosses += -gain;
+            }
+
+            holding.costBasis -= costBasisForQty;
+            holding.quantity -= qty;
+            if (holding.quantity <= 0n) {
+              holdings.splice(i, 1);
+              i--;
+            }
+          }
+        }
+      }
+    }
+
+    return {
+      period: {
+        start: startDate.toISOString().split("T")[0],
+        end: endDate.toISOString().split("T")[0],
+      },
+      shortTermGains: fromSorobanAmount(shortTermGains, TOKEN_DECIMALS),
+      shortTermLosses: fromSorobanAmount(shortTermLosses, TOKEN_DECIMALS),
+      longTermGains: fromSorobanAmount(longTermGains, TOKEN_DECIMALS),
+      longTermLosses: fromSorobanAmount(longTermLosses, TOKEN_DECIMALS),
+      totalGain: fromSorobanAmount(shortTermGains + longTermGains, TOKEN_DECIMALS),
+      totalLoss: fromSorobanAmount(shortTermLosses + longTermLosses, TOKEN_DECIMALS),
+      netGain: fromSorobanAmount(
+        shortTermGains + longTermGains - shortTermLosses - longTermLosses,
+        TOKEN_DECIMALS
+      ),
+    };
+  }
+
+  /**
+   * Fetch contract events for the given topics through the shared EventCursor.
+   *
+   * The cursor encodes topics as base64 XDR ScVals and keeps the ledger cursor
+   * anchored to the chain head — hand-rolling either here is what produced the
+   * raw-string filter bug this module was audited for.
+   */
+  private async fetchEvents(startLedger: number, topics: string[]): Promise<RawEvent[]> {
+    const cursor = new EventCursor(this.client.server);
+    const events = await cursor.scan({
+      topics,
+      fromLedger: startLedger,
+      limit: MAX_HISTORY_EVENTS,
+    });
+
+    return events as unknown as RawEvent[];
   }
 }
 
@@ -216,64 +500,92 @@ export class TaxReportingModule {
 // ---------------------------------------------------------------------------
 
 interface RawEvent {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  value: any;
-  topic?: string[];
+  value: unknown;
+  /** Topic entries are XDR ScVals (or base64 XDR on raw responses). */
+  topic?: unknown[];
   txHash?: string;
   ledgerClosedAt?: string | number;
   ledger?: number;
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function decodeMapEvent(value: any): Map<string, any> | null {
+/**
+ * Resolve an event's close time as an ISO string. Prefers the on-chain
+ * `ledgerClosedAt`; when absent, approximates it from the event's ledger
+ * sequence via the shared {@link ledgerToApproxTime} helper.
+ */
+function eventDate(ev: RawEvent, head: LedgerHead): string {
+  if (ev.ledgerClosedAt != null) {
+    return new Date(ev.ledgerClosedAt).toISOString();
+  }
+  if (typeof ev.ledger === "number") {
+    return new Date(ledgerToApproxTime(ev.ledger, head) * 1000).toISOString();
+  }
+  return new Date(0).toISOString();
+}
+
+function decodeMapEvent(value: unknown): Map<string, unknown> | null {
+  if (!value || typeof value !== "object") return null;
+  const valObj = value as Record<string, unknown>;
   const entries: unknown[] =
-    typeof value?.map === "function" ? value.map() : value?._value;
+    typeof valObj.map === "function" ? (valObj.map as () => unknown[])() : (valObj._value as unknown[]);
   if (!Array.isArray(entries)) return null;
 
   const map = new Map<string, unknown>();
-  for (const entry of entries as Array<{ key: unknown; val: unknown }>) {
-    const k = entry.key as Record<string, () => { toString(): string }>;
+  for (const entry of entries) {
+    if (!entry || typeof entry !== "object") continue;
+    const entryObj = entry as { key: unknown; val: unknown };
+    const k = entryObj.key as Record<string, () => { toString(): string }>;
     let key: string | undefined;
     try {
       key = k.sym?.().toString() ?? k.str?.().toString();
     } catch { /* skip */ }
-    if (key) map.set(key, entry.val);
+    if (key) map.set(key, entryObj.val);
   }
-  return map as Map<string, unknown>;
+  return map;
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function readAddress(map: Map<string, any>, key: string): string | undefined {
+function readAddress(map: Map<string, unknown>, key: string): string | undefined {
   const val = map.get(key);
-  if (!val) return undefined;
+  if (!val || typeof val !== "object") return undefined;
+  const valObj = val as Record<string, unknown>;
   try {
-    if (typeof val.address === "function") return val.address().toString();
-    if (typeof val._value?.toString === "function") return val._value.toString();
+    if (typeof valObj.address === "function") return (valObj.address as () => { toString(): string })().toString();
+    if (typeof valObj._value?.toString === "function") return (valObj._value as { toString(): string }).toString();
   } catch { /* skip */ }
   return undefined;
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function readI128(map: Map<string, any>, key: string): bigint | undefined {
+function readI128(map: Map<string, unknown>, key: string): bigint | undefined {
   const val = map.get(key);
-  if (!val) return undefined;
+  if (!val || typeof val !== "object") return undefined;
+  const valObj = val as Record<string, unknown>;
   try {
-    if (typeof val.i128 === "function") {
-      const parts = val.i128();
+    if (typeof valObj.i128 === "function") {
+      const parts = (valObj.i128 as () => { hi(): { toString(): string }; lo(): { toString(): string } })();
       return (BigInt(parts.hi().toString()) << 64n) + BigInt(parts.lo().toString());
     }
   } catch { /* skip */ }
   return undefined;
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function readU32(map: Map<string, any>, key: string): number | undefined {
+function readU32(map: Map<string, unknown>, key: string): number | undefined {
   const val = map.get(key);
-  if (!val) return undefined;
+  if (!val || typeof val !== "object") return undefined;
+  const valObj = val as Record<string, unknown>;
   try {
-    if (typeof val.u32 === "function") return val.u32();
+    if (typeof valObj.u32 === "function") return (valObj.u32 as () => number)();
   } catch { /* skip */ }
   return undefined;
+}
+
+function parseAmountToStroops(amountStr: string, decimals = 7): bigint {
+  if (!amountStr || amountStr === "0" || amountStr === "0.0000000") return 0n;
+  const parts = amountStr.split(".");
+  const whole = BigInt(parts[0] || "0");
+  const fracStr = (parts[1] || "").padEnd(decimals, "0").slice(0, decimals);
+  const frac = BigInt(fracStr);
+  const factor = 10n ** BigInt(decimals);
+  return whole >= 0n ? whole * factor + frac : whole * factor - frac;
 }
 
 function formatDate(date: Date, timezone: string): string {

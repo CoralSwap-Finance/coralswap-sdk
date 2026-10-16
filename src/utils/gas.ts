@@ -3,7 +3,29 @@ import { SimulateTransactionResult } from '@/types/common';
 import { GasEstimate } from '@/types/gas';
 import { SimulationError } from '@/errors';
 
-const STROOPS_PER_XLM = 10_000_000;
+/**
+ * Parse a stroop string into a BigInt without passing through `Number`.
+ * Empty or malformed input yields `0n`.
+ */
+export function parseStroops(raw: string | undefined | null): bigint {
+  const trimmed = (raw ?? '').trim();
+  if (!/^\d+$/.test(trimmed)) return 0n;
+  return BigInt(trimmed);
+}
+
+/**
+ * Format a stroop amount as an XLM string with 5 decimal places
+ * (rounded half-up), using only BigInt arithmetic.
+ */
+export function formatStroopsAsXLM(stroops: bigint): string {
+  const negative = stroops < 0n;
+  const abs = negative ? -stroops : stroops;
+  // 5 decimals => scale of 100 stroops, round half-up.
+  const scaled = (abs + 50n) / 100n;
+  const whole = scaled / 100_000n;
+  const frac = (scaled % 100_000n).toString().padStart(5, '0');
+  return `${negative ? '-' : ''}${whole}.${frac} XLM`;
+}
 
 /**
  * A function that simulates a set of operations and returns a typed result.
@@ -36,10 +58,10 @@ export async function estimateGas(
   const sim = await simulate(operations);
   if (!sim.success) {
     throw new SimulationError(sim.error ?? 'Simulation failed', {
-      simulation: sim.raw,
+      reason: sim.error ?? 'Simulation failed',
     });
   }
-  const fee = parseInt(sim.minResourceFee, 10) || 0;
-  const feeXLM = `${(fee / STROOPS_PER_XLM).toFixed(5)} XLM`;
-  return { fee, feeXLM };
+  const fee = parseStroops(sim.minResourceFee);
+  const feeXLM = formatStroopsAsXLM(fee);
+  return { fee, feeRaw: fee.toString(), feeXLM };
 }
