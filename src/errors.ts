@@ -126,14 +126,29 @@ export class TransactionError extends CoralSwapSDKError {
 }
 
 /**
- * Transaction deadline exceeded.
+ * Deadline exceeded — either a transaction deadline rejected by the contract
+ * or a retry deadline (`RetryOptions.deadlineMs`) reached by `withRetry`.
+ *
+ * This is the only `DeadlineError` class in the SDK; `@/utils/retry`
+ * re-exports it, so `instanceof DeadlineError` matches regardless of which
+ * module it was imported from.
  */
 export class DeadlineError extends CoralSwapSDKError {
-  constructor(deadline: number) {
+  /** The deadline that was exceeded. */
+  readonly deadlineMs: number;
+  /** Clock reading when the deadline was detected. */
+  readonly nowMs: number;
+  /** How far past the deadline `nowMs` was (never negative). */
+  readonly pastDeadlineMs: number;
+
+  constructor(deadline: number, nowMs: number = Date.now()) {
     super("DEADLINE_EXCEEDED", `Transaction deadline exceeded (deadline: ${deadline})`, {
       deadline,
     });
     this.name = "DeadlineError";
+    this.deadlineMs = deadline;
+    this.nowMs = nowMs;
+    this.pastDeadlineMs = Math.max(0, nowMs - deadline);
   }
 }
 
@@ -423,11 +438,33 @@ export class MissingPriceFeedError extends CoralSwapSDKError {
   }
 }
 
-/** A required network deployment or SDK provider has not been configured. */
+/**
+ * A required network deployment or SDK provider has not been configured.
+ *
+ * When the missing setting has a name (e.g. `factoryAddress`), pass it as
+ * `details.configKey`: it is mirrored on {@link configKey} so callers can
+ * branch on the class *and* on the key instead of matching message text.
+ * An optional `hint` is appended to the message, keeping the failure
+ * actionable — it should say which key, network or env variable to set.
+ */
 export class NotConfiguredError extends CoralSwapSDKError {
-  constructor(resource: string, details?: Record<string, unknown>) {
-    super("NOT_CONFIGURED", `${resource} is not configured`, { resource, ...details });
+  /** Missing configuration key (`details.configKey`), when one is known. */
+  readonly configKey?: string;
+
+  constructor(
+    resource: string,
+    details?: Record<string, unknown>,
+    hint?: string,
+  ) {
+    const configKey =
+      typeof details?.configKey === "string" ? details.configKey : undefined;
+    super(
+      "NOT_CONFIGURED",
+      hint ? `${resource} is not configured — ${hint}` : `${resource} is not configured`,
+      { resource, ...details },
+    );
     this.name = "NotConfiguredError";
+    this.configKey = configKey;
   }
 }
 

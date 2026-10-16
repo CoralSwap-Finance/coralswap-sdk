@@ -28,7 +28,7 @@
 
 // Core client
 export { CoralSwapClient } from "@/client";
-export { KeypairSigner } from "@/utils/signer";
+export { KeypairSigner, assertSignerNetwork } from "@/utils/signer";
 
 // Configuration
 export {
@@ -132,6 +132,8 @@ export {
   decodeDiagnosticEvents,
   buildSimulationResult,
   estimateGas,
+  parseStroops,
+  formatStroopsAsXLM,
   withRetry,
   isRetryable,
   sleep,
@@ -188,6 +190,8 @@ export type {
   RetryDecision,
   EventCursorOptions,
   TypedEventScanParams,
+  PageInfo,
+  ScanResult,
   DecimalsResolverOptions,
 } from "./utils";
 

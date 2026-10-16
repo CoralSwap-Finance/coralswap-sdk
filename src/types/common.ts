@@ -105,6 +105,11 @@ export interface Signer {
   publicKey(): Promise<string>;
   /** Sign a Stellar transaction and return the signed transaction. */
   signTransaction(xdr: string): Promise<string>;
+  /**
+   * Network passphrase this signer signs for, if it is network-bound.
+   * When set, the client verifies it matches its configured network.
+   */
+  readonly networkPassphrase?: string;
 }
 
 /**

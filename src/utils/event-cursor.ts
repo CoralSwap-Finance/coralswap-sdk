@@ -63,6 +63,57 @@ export interface EventCursorOptions {
 }
 
 /**
+ * Paging metadata attached to every {@link EventCursor} and
+ * {@link TypedEventCursor} scan result.
+ *
+ * Consumers can use `hasMore` / `nextCursor` to drive further pages
+ * without pre-querying total counts.
+ */
+export interface PageInfo {
+  /** Ledger the scan started from. */
+  startLedger?: number;
+  /** Ledger sequence of the last event returned (or the scan end). */
+  endLedger?: number;
+  /** Event position within `endLedger`, when supplied by the RPC response. */
+  endIndexWithinLedger?: number;
+  /** Per-request page limit that was used. */
+  limit?: number;
+  /**
+   * `true` when the response page was full — further pages likely exist.
+   * Equivalent to `hasNextPage` on the result object.
+   */
+  hasMore?: boolean;
+  /**
+   * Opaque RPC cursor string to resume from on the next request.
+   * `null` when the result set is exhausted.
+   */
+  nextCursor?: string | null;
+}
+
+/**
+ * An array of `T` augmented with cursor-paging metadata so callers can
+ * drive subsequent pages without hand-rolling their own caps.
+ *
+ * @example
+ * ```ts
+ * const result = await cursor.scan({ limit: 200 });
+ * processEvents(result);           // still a plain array
+ * if (result.hasNextPage) {
+ *   const next = await cursor.scan({ limit: 200 }); // cursor already advanced
+ * }
+ * ```
+ */
+export type ScanResult<T> = T[] & {
+  /** Full paging metadata for the completed scan. */
+  pageInfo: PageInfo;
+  /**
+   * `true` when the last page hit the limit and further pages may exist.
+   * Shorthand for `pageInfo.hasMore`.
+   */
+  hasNextPage: boolean;
+};
+
+/**
  * EventCursor — shared utility to scan Soroban `getEvents` safely and
  * consistently across modules.
  *
@@ -75,8 +126,10 @@ export interface EventCursorOptions {
  *   raw strings directly to RPC filters.
  * - Persists a cursor in-memory per-instance and advances it as scans
  *   progress.
- * - Handles pagination by looping while RPC responses are full (== limit)
- *   and advancing the start ledger to `lastEvent.ledger + 1`.
+ * - Handles pagination by preferring the RPC's opaque cursor. If a response
+ *   does not include one, the fallback resumes at the last event's ledger and
+ *   de-duplicates by its `(ledger,indexWithinLedger)` position instead of
+ *   skipping the remainder of a page-spanning ledger.
  *
  * Usage example:
  *
@@ -140,6 +193,7 @@ export class EventCursor {
     pageInfo?: {
       startLedger?: number;
       endLedger?: number;
+      endIndexWithinLedger?: number;
       limit?: number;
       hasMore?: boolean;
       nextCursor?: string | null;
@@ -147,7 +201,9 @@ export class EventCursor {
     };
     truncated?: boolean;
   }> {
-    await this.anchorIfNeeded();
+    // The anchor only supplies a default start; an explicit fromLedger needs no
+    // round-trip to the network tip.
+    if (params.fromLedger === undefined) await this.anchorIfNeeded();
 
     const limit = params.limit ?? this.defaultLimit;
     if (!Number.isInteger(limit) || limit < 1 || limit > MAX_EVENT_LIMIT) {
@@ -179,6 +235,20 @@ export class EventCursor {
     };
 
     let currentCursor: string | undefined = undefined;
+    // Keys of the last ledger's events from the previous page. Only set when
+    // that page had no cursor and the next request re-reads the same ledger;
+    // events with these keys were already returned and are skipped once.
+    let carriedKeys: Set<string> | null = null;
+
+    // The event id is unique per event on a real RPC; fixtures without one
+    // fall back to the in-ledger index, then to the position in the page.
+    const eventKey = (event: any, pageIndex: number): string => {
+      if (typeof event?.id === 'string' && event.id.length > 0) return `id:${event.id}`;
+      const indexWithinLedger = Number(event?.indexWithinLedger);
+      return Number.isFinite(indexWithinLedger)
+        ? `pos:${event?.ledger}:${indexWithinLedger}`
+        : `page:${event?.ledger}:${pageIndex}`;
+    };
 
     while (true) {
       // Soroban RPC rejects a request that carries both a cursor and a ledger
@@ -208,12 +278,24 @@ export class EventCursor {
         break;
       }
 
-      allEvents.push(...(events as rpc.Api.EventResponse[]));
+      const carried: Set<string> | null = carriedKeys;
+      // On a cursor-less re-read, skip what the previous page already returned:
+      // events before the re-read ledger (an RPC never sends them; adapters
+      // that ignore startLedger do) and the re-read ledger's carried events.
+      const newEvents = carried
+        ? (events as rpc.Api.EventResponse[]).filter(
+            (event, index) =>
+              !(typeof event?.ledger === 'number' && event.ledger < startLedger) &&
+              !carried.has(eventKey(event, index))
+          )
+        : (events as rpc.Api.EventResponse[]);
+      allEvents.push(...newEvents);
 
       const lastEvent = events[events.length - 1] as any;
       const lastLedger =
         lastEvent?.ledger ??
-        (typeof res.latestLedger === 'number' ? res.latestLedger : undefined);
+          (typeof res.latestLedger === 'number' ? res.latestLedger : undefined);
+      const lastIndexWithinLedger = Number(lastEvent?.indexWithinLedger);
 
       const resCursor =
         typeof res?.cursor === "string" && res.cursor.length > 0
@@ -226,6 +308,9 @@ export class EventCursor {
         pageInfo = {
           startLedger,
           endLedger: lastLedger,
+          endIndexWithinLedger: Number.isFinite(lastIndexWithinLedger)
+            ? lastIndexWithinLedger
+            : undefined,
           limit,
           hasMore: events.length >= limit,
           nextCursor: resCursor,
@@ -235,15 +320,27 @@ export class EventCursor {
       if (lastLedger === undefined) break;
 
       if (resCursor) {
+        // A cursor that does not advance would re-request the same page forever.
+        if (resCursor === currentCursor) break;
         currentCursor = resCursor;
         this.cursor = lastLedger;
+        carriedKeys = null;
       } else {
-        startLedger = lastLedger + 1;
+        // Do not advance to ledger + 1: the page may have ended halfway
+        // through a ledger. Re-requesting the same ledger and filtering by
+        // position preserves the remaining events in cursor-less fixtures and
+        // RPC adapters while still terminating on a repeated page.
+        startLedger = lastLedger;
         this.cursor = startLedger;
+        carriedKeys = new Set(
+          (events as any[])
+            .map((event, index) => (event?.ledger === lastLedger ? eventKey(event, index) : null))
+            .filter((key): key is string => key !== null)
+        );
       }
 
       if (toLedger !== undefined && lastLedger > toLedger) break;
-      if (events.length < limit) break;
+      if (events.length < limit || newEvents.length === 0) break;
     }
 
     const pagedEvents = allEvents as typeof allEvents & {
@@ -331,8 +428,12 @@ export class TypedEventCursor {
    * Applies the cursor's fixed contract/topic filters, advances the shared
    * pagination cursor, and decodes each raw response into a typed event
    * (undecodable / unrecognised entries are dropped).
+   *
+   * The returned value is a plain array extended with `.pageInfo` and
+   * `.hasNextPage` so callers can drive subsequent pages without
+   * pre-querying total counts or hand-rolling their own caps.
    */
-  async scan(params: TypedEventScanParams = {}): Promise<CoralSwapEvent[]> {
+  async scan(params: TypedEventScanParams = {}): Promise<ScanResult<CoralSwapEvent>> {
     const raw = await this.cursor.scan({
       contractIds: this.contractId ? [this.contractId] : [],
       topics: this.topicFilters,
@@ -340,7 +441,13 @@ export class TypedEventCursor {
       toLedger: params.toLedger,
       limit: params.limit,
     });
-    return this.decode(raw);
+    const decoded = this.decode(raw);
+    const pageInfo: PageInfo = raw.pageInfo ?? {};
+    const result = Object.assign(decoded, {
+      pageInfo,
+      hasNextPage: pageInfo.hasMore ?? false,
+    }) as ScanResult<CoralSwapEvent>;
+    return result;
   }
 
   /**

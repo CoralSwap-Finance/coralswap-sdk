@@ -40,8 +40,9 @@ export interface CompatibilityReport {
  * Registry of breaking changes keyed by version transition.
  *
  * Each key follows the pattern `"<from>-><to>"` using strict semver strings
- * (e.g. `"1.0.0->2.0.0"`).  Only non-trivial transitions (major or minor
- * bumps) are listed; patch-only bumps are treated as fully compatible.
+ * (e.g. `"1.0.0->2.0.0"`).  Only non-trivial forward transitions (major or minor
+ * bumps) are listed; forward patch-only bumps are treated as fully compatible,
+ * while patch downgrades are flagged as incompatible.
  */
 const BREAKING_CHANGES: Record<string, BreakingChange[]> = {
   "0.0.0->1.0.0": [
@@ -178,11 +179,14 @@ function parseSemver(version: string): { major: number; minor: number; patch: nu
  * of breaking changes and migration steps.
  *
  * **Compatibility rules:**
- * - Patch bumps (e.g. `1.0.0` → `1.0.1`) are always compatible — no migration
- *   needed.
+ * - Forward patch bumps (e.g. `1.0.0` → `1.0.1`) are always compatible — no
+ *   migration needed.
+ * - Patch downgrades (e.g. `1.2.3` → `1.2.1` or `1.0.1` → `1.0.0`) are
+ *   flagged as incompatible with advisory migration steps.
  * - Minor and major bumps are looked up in the built-in `BREAKING_CHANGES`
  *   registry.  If no entry exists for the transition the versions are treated
  *   as compatible with a warning note in `migrationSteps`.
+ * - Downgrades across minor or major versions are flagged as incompatible.
  * - Pre-release identifiers are not supported — pass the base release version.
  *
  * @param currentVersion - The version the consumer is currently on (e.g. `"1.0.0"`).
@@ -190,9 +194,22 @@ function parseSemver(version: string): { major: number; minor: number; patch: nu
  * @returns A `CompatibilityReport` describing breaking changes and migration steps.
  *
  * @example
- * // Patch bump — always compatible
+ * // Forward patch bump — always compatible
  * const report = await checkCompatibility("1.0.0", "1.0.5");
- * // => { isCompatible: true, breakingChanges: [], migrationSteps: [] }
+ * // => {
+ * //   isCompatible: true,
+ * //   breakingChanges: [],
+ * //   migrationSteps: ["Patch bump 1.0.0 → 1.0.5: no breaking changes."]
+ * // }
+ *
+ * @example
+ * // Patch downgrade — flagged as incompatible
+ * const report = await checkCompatibility("1.2.3", "1.2.1");
+ * // => {
+ * //   isCompatible: false,
+ * //   breakingChanges: [],
+ * //   migrationSteps: ["Downgrade from 1.2.3 to 1.2.1 is not recommended.", ...]
+ * // }
  *
  * @example
  * // Major bump with known breaking changes

@@ -115,13 +115,50 @@ describe('verifyRedStonePayload', () => {
     ).toThrow(MissingPriceFeedError);
   });
 
+  it('reports MissingPriceFeedError even when amounts are also degenerate', () => {
+    // The missing feed is the security-relevant failure, so it must not be
+    // masked by the degenerate-amount skip signal.
+    const payload = makePayload({ XLM: PRICES.XLM }); // no USDC price
+    expect(() =>
+      verifyRedStonePayload(payload, 'XLM', 'USDC', 0n, 0n, DEFAULT_CONFIG),
+    ).toThrow(MissingPriceFeedError);
+  });
+
+  it('returns a passing result with the observed deviation when the guard runs', () => {
+    const payload = makePayload(PRICES);
+    const result = verifyRedStonePayload(
+      payload,
+      'XLM',
+      'USDC',
+      10_000_000_000n,
+      990_000_000n, // 1% under oracle price
+      DEFAULT_CONFIG,
+    );
+
+    expect(result.guardSkipped).toBe(false);
+    expect(result.deviationBps).toBeGreaterThan(0);
+    expect(result.deviationBps).toBeLessThanOrEqual(DEFAULT_CONFIG.maxDeviationBps);
+  });
+
   it.each([
     ['zero input amount', 0n, 1_000_000_000n],
     ['zero output amount', 10_000_000_000n, 0n],
-  ])('rejects %s rather than bypassing the guard', (_label, amountIn, amountOut) => {
-    expect(() =>
-      verifyRedStonePayload(makePayload(PRICES), 'XLM', 'USDC', amountIn, amountOut, DEFAULT_CONFIG),
-    ).toThrow(ValidationError);
+    ['both amounts zero', 0n, 0n],
+    ['negative input amount', -1_000_000_000n, 1_000_000_000n],
+  ])('returns an explicit guardSkipped signal for %s', (_label, amountIn, amountOut) => {
+    const result = verifyRedStonePayload(
+      makePayload(PRICES),
+      'XLM',
+      'USDC',
+      amountIn,
+      amountOut,
+      DEFAULT_CONFIG,
+    );
+
+    // The caller is told the guard did not run, rather than receiving a quiet
+    // return that reads like a verified swap.
+    expect(result.guardSkipped).toBe(true);
+    expect(result.deviationBps).toBeUndefined();
   });
 
   it('rejects zero-valued feed prices', () => {
@@ -135,6 +172,86 @@ describe('verifyRedStonePayload', () => {
         DEFAULT_CONFIG,
       ),
     ).toThrow(MissingPriceFeedError);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// swapWithPriceGuard surfacing
+// ---------------------------------------------------------------------------
+
+describe('swapWithPriceGuard price guard reporting', () => {
+  function buildSwap(overrides: Partial<SwapModule> = {}): SwapModule {
+    return Object.assign(new SwapModule(null as never), overrides);
+  }
+
+  const REQUEST = {
+    tokenIn: 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC',
+    tokenOut: 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC',
+    amountIn: 10_000_000_000n,
+    minAmountOut: 1n,
+  } as unknown as SwapWithPriceGuardRequest;
+
+  const QUOTE = { amountIn: 10_000_000_000n, amountOut: 1_000_000_000n };
+
+  it('surfaces a passing guard result on the swap result', async () => {
+    const swap = buildSwap({
+      getQuote: jest.fn().mockResolvedValue(QUOTE),
+      execute: jest.fn().mockResolvedValue({ txHash: 'MOCK_TX' }),
+    } as unknown as Partial<SwapModule>);
+
+    const result = await swap.swapWithPriceGuard(
+      { ...REQUEST, redstonePayload: makePayload(PRICES) },
+      'XLM',
+      'USDC',
+    );
+
+    expect(result.priceGuard?.guardSkipped).toBe(false);
+  });
+
+  it('surfaces guardSkipped instead of hiding it when amounts are degenerate', async () => {
+    // amountIn is large enough to require the guard, amountOut is zero, so the
+    // guard is required but cannot compute a ratio.
+    const swap = buildSwap({
+      getQuote: jest.fn().mockResolvedValue({ amountIn: 10_000_000_000n, amountOut: 0n }),
+      execute: jest.fn().mockResolvedValue({ txHash: 'MOCK_TX' }),
+    } as unknown as Partial<SwapModule>);
+
+    const result = await swap.swapWithPriceGuard(
+      { ...REQUEST, redstonePayload: makePayload(PRICES) },
+      'XLM',
+      'USDC',
+    );
+
+    // The swap went through, but the caller can see the guard never verified it.
+    expect(result.priceGuard?.guardSkipped).toBe(true);
+  });
+
+  it('does not require the guard below the USD threshold, leaving priceGuard absent', async () => {
+    // amountIn of 0 makes the USD value 0, which is below the $100 threshold, so
+    // the guard is not required and the result carries no guard outcome.
+    const swap = buildSwap({
+      getQuote: jest.fn().mockResolvedValue({ amountIn: 0n, amountOut: 0n }),
+      execute: jest.fn().mockResolvedValue({ txHash: 'MOCK_TX' }),
+    } as unknown as Partial<SwapModule>);
+
+    const result = await swap.swapWithPriceGuard(
+      { ...REQUEST, redstonePayload: makePayload(PRICES) },
+      'XLM',
+      'USDC',
+    );
+
+    expect(result.priceGuard).toBeUndefined();
+  });
+
+  it('leaves priceGuard absent when no payload was supplied', async () => {
+    const swap = buildSwap({
+      getQuote: jest.fn().mockResolvedValue(QUOTE),
+      execute: jest.fn().mockResolvedValue({ txHash: 'MOCK_TX' }),
+    } as unknown as Partial<SwapModule>);
+
+    const result = await swap.swapWithPriceGuard(REQUEST, 'XLM', 'USDC');
+
+    expect(result.priceGuard).toBeUndefined();
   });
 });
 

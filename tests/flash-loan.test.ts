@@ -205,6 +205,21 @@ describe('FlashLoanModule.execute()', () => {
       expect(result.txHash).toBe('MOCK_TX');
       expect(result.event).toBeUndefined();
     });
+
+    it('returns raw tx with undefined event when events array is empty or corrupt', async () => {
+      const client = buildMockClient({
+        txResult: {
+          status: 'SUCCESS',
+          resultMetaXdr: buildMockMeta([]),
+        },
+      });
+
+      const module = new FlashLoanModule(client as any);
+      const result = await module.execute(FLASH_REQUEST);
+
+      expect(result.txHash).toBe('MOCK_TX');
+      expect(result.event).toBeUndefined();
+    });
   });
 
   describe('failed loan — FlashLoanFailed event', () => {

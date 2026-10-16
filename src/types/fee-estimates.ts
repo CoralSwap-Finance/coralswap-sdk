@@ -11,10 +11,10 @@ export interface FeeEstimates {
   protocolFeeBps: number;
 
   /** Protocol fee amount in stroops */
-  protocolFeeStroops: number;
+  protocolFeeStroops: bigint;
 
   /** Total fee (gas + protocol) in stroops */
-  totalStroops: number;
+  totalStroops: bigint;
 
   /** Total fee in XLM as string */
   totalXLM: string;
@@ -32,12 +32,12 @@ export interface FeeEstimates {
   /** Breakdown of fee components */
   breakdown: {
     gas: {
-      stroops: number;
+      stroops: bigint;
       xlm: string;
     };
     protocol: {
       bps: number;
-      stroops: number;
+      stroops: bigint;
       xlm: string;
     };
   };

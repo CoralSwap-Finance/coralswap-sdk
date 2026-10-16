@@ -1,4 +1,4 @@
-import { xdr, Address } from '@stellar/stellar-sdk';
+import { xdr, Address, Account, StrKey } from '@stellar/stellar-sdk';
 import { TreasuryModule } from '../src/modules/treasury';
 import { CoralSwapClient } from '../src/client';
 import { MIN_START_LEDGER } from '../src/utils/event-cursor';
@@ -168,7 +168,15 @@ function createMockClient(opts: {
         },
       ),
       getLatestLedger: jest.fn().mockResolvedValue({ sequence: currentLedger }),
+      getAccount: jest.fn().mockResolvedValue(new Account('GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF', '1')),
+      simulateTransaction: jest.fn().mockResolvedValue({
+        transactionData: {},
+        result: {
+          retval: xdr.ScVal.scvU32(7),
+        },
+      }),
     },
+    networkConfig: { networkPassphrase: 'Test SDF Network ; September 2015' },
     getCurrentLedger: jest.fn().mockResolvedValue(currentLedger),
   } as unknown as CoralSwapClient;
 }
@@ -749,5 +757,49 @@ describe('TreasuryModule', () => {
 
       expect(full.byPool[0].revenueUSD).toBeCloseTo(windowed.byPool[0].revenueUSD * 2, 6);
     });
+
+    it('resolves token decimals dynamically and handles non-7 decimal tokens with caching', async () => {
+      const validToken = StrKey.encodeContract(Buffer.alloc(32, 1));
+      const client = createMockClient({
+        pairs: [PAIR_ADDR_1],
+        eventsPerPair: {
+          [PAIR_ADDR_1]: [
+            makeSwapEvent(100, 1_000_000n, 30, validToken), // 1 USDC (6 decimals) -> fee 30 bps = 3000 stroops
+          ],
+        },
+        pairSpecs: {
+          [PAIR_ADDR_1]: { token0: validToken, token1: TOKEN_A, reserve0: 10_000_000n, reserve1: 10_000_000n },
+        },
+      });
+
+      // Mock simulateTransaction returning 6 decimals for validToken
+      (client.server.simulateTransaction as jest.Mock).mockResolvedValue({
+        transactionData: {},
+        result: { retval: xdr.ScVal.scvU32(6) },
+      });
+
+      const treasury = new TreasuryModule(client, { stableAddresses: [validToken] });
+      const result = await treasury.getFeeRevenue({ granularity: '1d' });
+
+      expect(result.byPool.length).toBe(1);
+      // For 6 decimals, divider is 10^6 = 1,000,000. 1,000,000 in with fee 3000 => 3000 / 1e6 * $1 = 0.003
+      expect(result.byPool[0].revenueUSD).toBeCloseTo(0.003, 6);
+      expect(client.server.simulateTransaction).toHaveBeenCalledTimes(1);
+
+      // Calling again should hit tokenDecimalsCache and not trigger additional simulateTransaction calls
+      await treasury.getFeeRevenue({ granularity: '1d' });
+      expect(client.server.simulateTransaction).toHaveBeenCalledTimes(1);
+    });
+
+    it('propagates RPC failures from getEvents instead of swallowing into zero', async () => {
+      const client = createMockClient({
+        pairs: [PAIR_ADDR_1],
+      });
+      (client.server.getEvents as jest.Mock).mockRejectedValue(new Error('RPC connection timeout'));
+
+      const treasury = new TreasuryModule(client, { stableAddresses: [STABLE_ADDR] });
+      await expect(treasury.getFeeRevenue({ granularity: '1d' })).rejects.toThrow('RPC connection timeout');
+    });
   });
 });
+

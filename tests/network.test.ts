@@ -37,6 +37,40 @@ describe("Network Switching", () => {
     expect(() => client.router).toThrow(NotConfiguredError);
   });
 
+  it("names the missing config key and how to set it on every undeployed network", () => {
+    const capture = (access: () => unknown): NotConfiguredError => {
+      try {
+        access();
+      } catch (err) {
+        expect(err).toBeInstanceOf(NotConfiguredError);
+        return err as NotConfiguredError;
+      }
+      throw new Error("expected access to throw NotConfiguredError");
+    };
+
+    const cases = [
+      { network: Network.MAINNET, accessor: "factory" as const, configKey: "factoryAddress" },
+      { network: Network.MAINNET, accessor: "router" as const, configKey: "routerAddress" },
+      { network: Network.STAGING, accessor: "factory" as const, configKey: "factoryAddress" },
+      { network: Network.STAGING, accessor: "router" as const, configKey: "routerAddress" },
+    ];
+
+    for (const { network, accessor, configKey } of cases) {
+      const client = new CoralSwapClient({ network });
+      const err = capture(() => client[accessor]);
+
+      expect(err.code).toBe("NOT_CONFIGURED");
+      expect(err.configKey).toBe(configKey);
+      expect(err.details?.configKey).toBe(configKey);
+      expect(err.details?.network).toBe(network);
+
+      // Actionable: names the config key, the network and the accessor.
+      expect(err.message).toContain(configKey);
+      expect(err.message).toContain(network);
+      expect(err.message).toContain(`client.${accessor}`);
+    }
+  });
+
   it("CoralSwapClient.setNetwork updates configuration correctly", () => {
     const client = new CoralSwapClient({
       network: Network.TESTNET,

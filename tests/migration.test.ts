@@ -107,6 +107,36 @@ describe('Migration Compatibility', () => {
       expect(report.migrationSteps[0]).toMatch(/downgrade/i);
     });
 
+    it('reports same-minor patch downgrade as incompatible with warning steps', async () => {
+      const report = await checkCompatibility('1.2.3', '1.2.1');
+
+      expect(report.isCompatible).toBe(false);
+      expect(report.breakingChanges).toHaveLength(0);
+      expect(report.migrationSteps[0]).toMatch(/downgrade/i);
+      expect(report.migrationSteps.join(' ')).toContain('1.2.3');
+      expect(report.migrationSteps.join(' ')).toContain('1.2.1');
+
+      const singlePatchReport = await checkCompatibility('1.0.1', '1.0.0');
+      expect(singlePatchReport.isCompatible).toBe(false);
+      expect(singlePatchReport.migrationSteps[0]).toMatch(/downgrade/i);
+    });
+
+    it('reports patch-level minor downgrade as incompatible (1.2.0 -> 1.1.0)', async () => {
+      const report = await checkCompatibility('1.2.0', '1.1.0');
+
+      expect(report.isCompatible).toBe(false);
+      expect(report.breakingChanges).toHaveLength(0);
+      expect(report.migrationSteps[0]).toMatch(/downgrade/i);
+    });
+
+    it('maintains compatibility for reverse patch upgrade (1.2.1 -> 1.2.3)', async () => {
+      const report = await checkCompatibility('1.2.1', '1.2.3');
+
+      expect(report.isCompatible).toBe(true);
+      expect(report.breakingChanges).toHaveLength(0);
+      expect(report.migrationSteps[0]).toMatch(/patch bump/i);
+    });
+
     it('throws ValidationError for invalid semver in currentVersion', async () => {
       await expect(checkCompatibility('not-a-version', '1.0.0')).rejects.toThrow();
     });

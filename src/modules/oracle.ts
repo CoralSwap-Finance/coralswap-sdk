@@ -302,18 +302,23 @@ export class OracleModule {
    * This metric compares two independent price sources (oracle TWAP vs pool spot price)
    * to detect potential manipulation or anomalies. Returns the deviation in basis points.
    *
+   * A `null` deviation field means that side's reference TWAP was `0n`, so no deviation
+   * could be computed. `null` is unavailability, not a perfect match: a pair whose TWAP
+   * never accumulated was reporting the best possible manipulation score while being
+   * entirely blind. Check for `null` before treating the value as a manipulation signal.
+   *
    * @param pairAddress - The address of the pair contract
    * @returns Deviation in basis points for both price directions, or null if TWAP unavailable
    * @throws {InsufficientLiquidityError} If pool has no liquidity
    * @example
    * const deviation = await client.oracle.getPriceDeviation('C...');
-   * if (deviation && deviation.price0DeviationBps > 500) {
+   * if (deviation?.price0DeviationBps != null && deviation.price0DeviationBps > 500) {
    *   console.warn('Price deviation exceeds 5%');
    * }
    */
   async getPriceDeviation(pairAddress: string): Promise<{
-    price0DeviationBps: number;
-    price1DeviationBps: number;
+    price0DeviationBps: number | null;
+    price1DeviationBps: number | null;
     twapPrice0: bigint;
     twapPrice1: bigint;
     spotPrice0: bigint;
@@ -355,11 +360,15 @@ export class OracleModule {
    *
    * @param referencePrice - The reference price (e.g., TWAP)
    * @param currentPrice - The current price to compare (e.g., spot)
-   * @returns Absolute deviation in basis points
+   * @returns Absolute deviation in basis points, or null when the reference price
+   *   is `0n` and no deviation can be computed
    * @private
    */
-  private computeDeviationBps(referencePrice: bigint, currentPrice: bigint): number {
-    if (referencePrice === 0n) return 0;
+  private computeDeviationBps(referencePrice: bigint, currentPrice: bigint): number | null {
+    // A zero reference price means the TWAP accumulator never advanced (or was
+    // reset), not that spot and oracle agree. Reporting 0 here handed consumers a
+    // perfect manipulation score from an oracle that had no usable reference.
+    if (referencePrice === 0n) return null;
 
     // Calculate absolute deviation: |current - reference| / reference * 10000
     const diff = currentPrice > referencePrice
