@@ -49,3 +49,4 @@ export { LimitOrderModule } from './limit-orders';
 export { SquidModule } from './squid';
 
 export { BlendModule } from './blend';
+export type { PortfolioModuleOptions } from './portfolio';
