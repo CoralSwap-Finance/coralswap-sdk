@@ -183,6 +183,8 @@ export type {
   WaitNextLedgerOptions,
   LedgerHead,
   DecodeEventsOptions,
+  EventCursorOptions,
+  RawRpcEvent,
   SimulateFn,
   BatchRequestOptions,
   BatchResult,

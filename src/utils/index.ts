@@ -112,6 +112,8 @@ export {
 } from './events';
 export type { DecodeEventsOptions } from './events';
 
+export { EventCursor } from './event-cursor';
+export type { EventCursorOptions, RawRpcEvent } from './event-cursor';
 export { EventCursor, TypedEventCursor, decodeEventTopic, MIN_START_LEDGER, MAX_EVENT_LIMIT } from './event-cursor';
 export type { EventCursorOptions, TypedEventScanParams, PageInfo, ScanResult } from './event-cursor';
 export { ConnectionPool } from './connection-pool';
