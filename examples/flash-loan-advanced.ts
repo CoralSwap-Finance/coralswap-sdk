@@ -198,6 +198,7 @@ async function main() {
       slippageTolerance: 100, // 1% slippage tolerance
     });
     
+    console.log('   Encoded payload:', arbitrageData);
     console.log('   {');
     console.log('     operation: "arbitrage",');
     console.log('     dexA: "CDEX_A_CONTRACT_ADDRESS",');
@@ -254,6 +255,7 @@ async function main() {
       minProfit: '5000000',
     });
     
+    console.log('   Encoded payload:', liquidationData);
     console.log('   {');
     console.log('     operation: "liquidation",');
     console.log('     lendingProtocol: "CLENDING_PROTOCOL_ADDRESS",');
@@ -312,6 +314,7 @@ async function main() {
       slippageTolerance: 100,
     });
     
+    console.log('   Encoded payload:', collateralSwapData);
     console.log('   {');
     console.log('     operation: "collateral_swap",');
     console.log('     lendingProtocol: "CLENDING_PROTOCOL_ADDRESS",');

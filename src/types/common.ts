@@ -1,4 +1,4 @@
-import type { SorobanRpc, xdr } from '@stellar/stellar-sdk';
+import type { rpc, xdr } from '@stellar/stellar-sdk';
 
 /**
  * Supported Soroban networks for CoralSwap deployment.
@@ -88,6 +88,8 @@ export interface Logger {
   debug(msg: string, data?: unknown): void;
   /** Info-level log for successful operations. */
   info(msg: string, data?: unknown): void;
+  /** Warning-level log for warnings and non-fatal errors. */
+  warn?(msg: string, data?: unknown): void;
   /** Error-level log for failed simulations, submissions, and exceptions. */
   error(msg: string, err?: unknown): void;
 }
@@ -103,6 +105,11 @@ export interface Signer {
   publicKey(): Promise<string>;
   /** Sign a Stellar transaction and return the signed transaction. */
   signTransaction(xdr: string): Promise<string>;
+  /**
+   * Network passphrase this signer signs for, if it is network-bound.
+   * When set, the client verifies it matches its configured network.
+   */
+  readonly networkPassphrase?: string;
 }
 
 /**
@@ -226,5 +233,5 @@ export interface SimulateTransactionResult {
   /**
    * Full, unmodified RPC response for advanced or escape-hatch use.
    */
-  raw: SorobanRpc.Api.SimulateTransactionResponse;
+  raw: rpc.Api.SimulateTransactionResponse;
 }

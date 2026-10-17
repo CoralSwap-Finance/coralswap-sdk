@@ -28,6 +28,77 @@ export function validateAddress(address: string, name: string): void {
 }
 
 /**
+ * Validate an optional date range for historical queries.
+ *
+ * Both bounds are optional and may be used independently, but when
+ * supplied they must:
+ * - be real `Date` instances (not `Invalid Date`)
+ * - not be in the future — historical queries cannot look ahead
+ * - satisfy `fromDate` < `toDate` when both are given
+ *
+ * @param fromDate - Optional inclusive lower bound.
+ * @param toDate - Optional inclusive upper bound.
+ * @throws {ValidationError} If either bound is malformed, in the future,
+ *   or the range is empty/inverted.
+ */
+export function validateDateRange(fromDate?: Date, toDate?: Date): void {
+  const now = Date.now();
+
+  if (fromDate !== undefined) {
+    if (!(fromDate instanceof Date) || Number.isNaN(fromDate.getTime())) {
+      throw new ValidationError(`fromDate must be a valid Date, got ${fromDate}`);
+    }
+    if (fromDate.getTime() > now) {
+      throw new ValidationError(
+        `fromDate must not be in the future, got ${fromDate.toISOString()}`,
+      );
+    }
+  }
+
+  if (toDate !== undefined) {
+    if (!(toDate instanceof Date) || Number.isNaN(toDate.getTime())) {
+      throw new ValidationError(`toDate must be a valid Date, got ${toDate}`);
+    }
+    if (toDate.getTime() > now) {
+      throw new ValidationError(
+        `toDate must not be in the future, got ${toDate.toISOString()}`,
+      );
+    }
+  }
+
+  if (fromDate !== undefined && toDate !== undefined && fromDate.getTime() >= toDate.getTime()) {
+    throw new ValidationError(
+      `fromDate must be earlier than toDate, got fromDate=${fromDate.toISOString()} and toDate=${toDate.toISOString()}`,
+    );
+  }
+}
+
+/**
+ * Validate an optional pagination limit.
+ *
+ * When supplied, the limit must be a positive integer no greater than
+ * `MAX_LIMIT` (1000). `undefined` means "no limit" and is accepted.
+ *
+ * @param limit - The limit value to validate.
+ * @param name - Human-readable parameter name for the error message.
+ * @throws {ValidationError} If the limit is not a positive integer, or
+ *   exceeds {@link MAX_LIMIT}.
+ */
+export function validateLimit(limit?: number, name: string = 'limit'): void {
+  if (limit === undefined) {
+    return;
+  }
+  if (typeof limit !== 'number' || !Number.isInteger(limit) || limit <= 0 || limit > MAX_LIMIT) {
+    throw new ValidationError(
+      `${name} must be a positive integer no greater than ${MAX_LIMIT}, got ${limit}`,
+    );
+  }
+}
+
+/** Maximum accepted value for pagination `limit` parameters. */
+export const MAX_LIMIT = 1000;
+
+/**
  * Validate that a bigint amount is strictly positive (> 0n).
  *
  * @param amount - The amount to validate.
@@ -84,6 +155,46 @@ export function validateDistinctTokens(tokenIn: string, tokenOut: string): void 
     throw new ValidationError(
       'tokenIn and tokenOut must be different addresses',
       { tokenIn, tokenOut },
+    );
+  }
+}
+
+/**
+ * Validate that a string length is within a given range.
+ */
+export function validateStringLength(
+  value: string,
+  name: string,
+  min: number,
+  max: number,
+): void {
+  const trimmed = value.trim();
+  if (trimmed.length < min) {
+    throw new ValidationError(
+      `${name} must be at least ${min} character(s), got ${trimmed.length}`,
+      { [name]: value, constraint: `length >= ${min}`, actual: trimmed.length },
+    );
+  }
+  if (trimmed.length > max) {
+    throw new ValidationError(
+      `${name} must be at most ${max} character(s), got ${trimmed.length}`,
+      { [name]: value, constraint: `length <= ${max}`, actual: trimmed.length },
+    );
+  }
+}
+
+/**
+ * Validate that a value is one of the allowed enum values.
+ */
+export function validateEnumValue<T extends string>(
+  value: T,
+  name: string,
+  allowed: readonly T[],
+): void {
+  if (!allowed.includes(value)) {
+    throw new ValidationError(
+      `${name} must be one of: ${allowed.join(', ')}, got: ${value}`,
+      { [name]: value, constraint: `one of [${allowed.join(', ')}]` },
     );
   }
 }

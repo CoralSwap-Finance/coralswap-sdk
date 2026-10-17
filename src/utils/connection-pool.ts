@@ -1,3 +1,4 @@
+import { ConnectionPoolExhaustedError } from '@/errors';
 /**
  * Round-robin connection pool for Soroban RPC endpoints.
  *
@@ -15,11 +16,10 @@
  *    so callers get an actionable error immediately instead of a silent hang.
  */
 
-export class PoolExhaustedError extends Error {
+export class PoolExhaustedError extends ConnectionPoolExhaustedError {
   constructor() {
     super('ConnectionPool: all endpoints are unhealthy');
     this.name = 'PoolExhaustedError';
-    Object.setPrototypeOf(this, new.target.prototype);
   }
 }
 
@@ -28,6 +28,8 @@ export interface ConnectionPoolOptions {
   failureThreshold?: number;
   /** Milliseconds before an unhealthy endpoint is re-tried. */
   recoveryTimeMs?: number;
+  /** Alias of {@link recoveryTimeMs}; `recoveryTimeMs` wins when both are set. */
+  failureTimeoutMs?: number;
 }
 
 interface EndpointState {
@@ -37,25 +39,68 @@ interface EndpointState {
 }
 
 export class ConnectionPool {
-  private readonly endpoints: EndpointState[];
+  private endpoints: EndpointState[];
   private readonly failureThreshold: number;
   private readonly recoveryTimeMs: number;
   /** Index used by round-robin. Points into the *original* endpoints array. */
   private rrIndex: number = 0;
 
-  constructor(urls: string[], options: ConnectionPoolOptions = {}) {
-    if (!urls || urls.length === 0) {
+  /**
+   * @param urlsOrOptions - Initial endpoint URLs (at least one), or options
+   *   for a pool that starts empty and is filled with {@link addEndpoint}.
+   * @param options - Options when the first argument is a URL list.
+   */
+  constructor(urlsOrOptions: string[] | ConnectionPoolOptions = {}, options: ConnectionPoolOptions = {}) {
+    const urls = Array.isArray(urlsOrOptions) ? urlsOrOptions : [];
+    const opts = Array.isArray(urlsOrOptions) ? options : urlsOrOptions;
+    if (Array.isArray(urlsOrOptions) && urls.length === 0) {
       throw new Error('ConnectionPool requires at least one URL');
     }
 
-    this.failureThreshold = options.failureThreshold ?? 3;
-    this.recoveryTimeMs = options.recoveryTimeMs ?? 30_000;
+    this.failureThreshold = opts.failureThreshold ?? 3;
+    this.recoveryTimeMs = opts.recoveryTimeMs ?? opts.failureTimeoutMs ?? 30_000;
 
     this.endpoints = urls.map((url) => ({
       url,
       consecutiveFailures: 0,
       unhealthyAt: null,
     }));
+  }
+
+  /** Add an endpoint to the rotation. A URL already in the pool is ignored. */
+  addEndpoint(url: string): void {
+    if (this._find(url)) return;
+    this.endpoints.push({ url, consecutiveFailures: 0, unhealthyAt: null });
+  }
+
+  /** Remove an endpoint, together with its failure state. */
+  removeEndpoint(url: string): void {
+    const before = this.endpoints.length;
+    this.endpoints = this.endpoints.filter((ep) => ep.url !== url);
+    if (this.endpoints.length !== before && this.rrIndex >= this.endpoints.length) {
+      this.rrIndex = 0;
+    }
+  }
+
+  /**
+   * Take an endpoint out of rotation immediately, without waiting for
+   * `failureThreshold` failures; it is retried after `recoveryTimeMs`.
+   */
+  markFailed(url: string, nowMs: number = Date.now()): void {
+    const ep = this._find(url);
+    if (!ep) return;
+    ep.consecutiveFailures = Math.max(ep.consecutiveFailures, this.failureThreshold);
+    ep.unhealthyAt = nowMs;
+  }
+
+  /** {@link getEndpoint} under the name used by the endpoint-management API. */
+  getNextEndpoint(nowMs: number = Date.now()): string {
+    return this.getEndpoint(nowMs);
+  }
+
+  /** {@link healthyEndpoints} under the name used by the endpoint-management API. */
+  getHealthyEndpoints(nowMs: number = Date.now()): string[] {
+    return this.healthyEndpoints(nowMs);
   }
 
   /**

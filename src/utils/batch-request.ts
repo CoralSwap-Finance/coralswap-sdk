@@ -9,27 +9,45 @@
 
 export interface BatchRequestOptions {
   /**
-   * Maximum number of tasks that may run simultaneously.
-   * Defaults to the length of the task array (i.e. all at once).
+   * Maximum number of tasks that may run simultaneously. Must be an
+   * integer >= 1. Defaults to {@link DEFAULT_BATCH_CONCURRENCY}.
    */
   concurrency?: number;
+
+  /**
+   * Optional per-task timeout in milliseconds.
+   * Tasks that exceed this duration are rejected with a TimeoutError.
+   * If omitted, tasks have no timeout.
+   */
+  taskTimeoutMs?: number;
 }
 
 export type BatchResult<T> =
   | { status: 'fulfilled'; value: T }
   | { status: 'rejected'; reason: unknown };
 
+/** Default concurrency cap for {@link batchRequest} and {@link batchCall}. */
+export const DEFAULT_BATCH_CONCURRENCY = 5;
+
+function resolveConcurrency(concurrency: number | undefined): number {
+  if (concurrency === undefined) return DEFAULT_BATCH_CONCURRENCY;
+  if (!Number.isInteger(concurrency) || concurrency < 1) {
+    throw new RangeError(`concurrency must be an integer >= 1, got ${concurrency}`);
+  }
+  return concurrency;
+}
+
 /**
  * Run `tasks` with at most `options.concurrency` running in parallel.
  *
  * @param tasks  - Array of zero-argument async factory functions.
- * @param options - Optional configuration (concurrency limit).
+ * @param options - Optional configuration (concurrency limit, per-task timeout).
  * @returns Array of `BatchResult` objects in input order.
  *
  * @example
  * const results = await batchRequest(
  *   tokens.map(t => () => fetchPrice(t)),
- *   { concurrency: 5 },
+ *   { concurrency: 5, taskTimeoutMs: 5000 },
  * );
  * results.forEach((r, i) => {
  *   if (r.status === 'fulfilled') console.log(tokens[i], r.value);
@@ -40,16 +58,32 @@ export async function batchRequest<T>(
   tasks: Array<() => Promise<T>>,
   options: BatchRequestOptions = {},
 ): Promise<BatchResult<T>[]> {
-  const concurrency = Math.max(1, options.concurrency ?? (tasks.length || 1));
+  const concurrency = resolveConcurrency(options.concurrency);
   const results: BatchResult<T>[] = new Array(tasks.length);
 
   let nextIndex = 0;
+
+  async function executeTask(task: () => Promise<T>): Promise<T> {
+    if (!options.taskTimeoutMs) {
+      return task();
+    }
+
+    return Promise.race([
+      task(),
+      new Promise<T>((_, reject) =>
+        setTimeout(
+          () => reject(new Error(`Task timeout after ${options.taskTimeoutMs}ms`)),
+          options.taskTimeoutMs,
+        ),
+      ),
+    ]);
+  }
 
   async function worker(): Promise<void> {
     while (nextIndex < tasks.length) {
       const index = nextIndex++;
       try {
-        results[index] = { status: 'fulfilled', value: await tasks[index]() };
+        results[index] = { status: 'fulfilled', value: await executeTask(tasks[index]) };
       } catch (err) {
         results[index] = { status: 'rejected', reason: err };
       }
@@ -88,9 +122,6 @@ export async function batchRequestOrThrow<T>(
 
   return results.map((r) => (r as Extract<BatchResult<T>, { status: 'fulfilled' }>).value);
 }
-
-/** Default concurrency for {@link batchCall}. */
-export const DEFAULT_BATCH_CONCURRENCY = 5;
 
 /**
  * Execute `calls` in parallel with a default concurrency of 5.

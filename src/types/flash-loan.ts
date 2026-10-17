@@ -1,3 +1,5 @@
+import { EventDecodeStatus } from './events';
+
 /**
  * Flash loan request parameters.
  */
@@ -23,6 +25,8 @@ export interface FlashLoanExecutedEvent {
   feePaid: bigint;
   callbackAddress: string;
   token: string;
+  /** Status indicating whether the event was completely decoded without fabrication or partially synthesized */
+  decodeStatus?: EventDecodeStatus;
 }
 
 /**
@@ -33,6 +37,8 @@ export interface FlashLoanFailedEvent {
   borrowedAmount: bigint;
   token: string;
   reason: string;
+  /** Status indicating whether the event was completely decoded without fabrication or partially synthesized */
+  decodeStatus?: EventDecodeStatus;
 }
 
 /**
@@ -72,6 +78,22 @@ export interface FlashLoanFeeEstimate {
   feeAmount: bigint;
   /** Minimum fee floor in basis points */
   feeFloor: number;
+}
+
+/**
+ * Result of comparing a flash loan fee against a regular swap fee
+ * for the same pair and amount.
+ *
+ * Both fees are expressed as absolute token amounts (not basis points),
+ * computed as `(amount * feeBps) / 10000n`.
+ */
+export interface FlashLoanFeeComparison {
+  /** Effective flash loan fee for the requested amount. */
+  flashLoanFee: bigint;
+  /** Effective dynamic swap fee for the requested amount. */
+  swapFee: bigint;
+  /** Which option is cheaper for the caller, or `'equal'` when identical. */
+  cheaperOption: 'flashLoan' | 'swap' | 'equal';
 }
 
 /**

@@ -60,9 +60,14 @@ describe("Staging Network Configuration", () => {
     expect(NETWORK_CONFIGS).toHaveProperty(Network.STAGING);
   });
 
-  it("STAGING uses the testnet passphrase (staging runs on testnet)", () => {
+  it("STAGING uses a distinct Stellar Futurenet configuration", () => {
     const staging = NETWORK_CONFIGS[Network.STAGING];
     const testnet = NETWORK_CONFIGS[Network.TESTNET];
-    expect(staging.networkPassphrase).toBe(testnet.networkPassphrase);
+    expect(staging.rpcUrl).toBe("https://rpc-futurenet.stellar.org");
+    expect(staging.networkPassphrase).toBe("Test SDF Future Network ; October 2022");
+    expect(staging.rpcUrl).not.toBe(testnet.rpcUrl);
+    expect(staging.networkPassphrase).not.toBe(testnet.networkPassphrase);
+    expect(staging.factoryAddress).toBe("");
+    expect(staging.routerAddress).toBe("");
   });
 });

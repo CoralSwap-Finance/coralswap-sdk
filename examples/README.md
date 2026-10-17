@@ -10,6 +10,24 @@ cp .env.example .env   # then edit .env with your keys and addresses
 
 ## Examples
 
+### `signer.ts`
+
+**Run:** `npm run examples:signer`
+
+Shows the recommended `KeypairSigner` wiring for a Stellar Testnet client. The example derives the public key from the signer, uses the network's exact passphrase, and fails early with an actionable message when a passphrase for another network is configured. It performs a harmless Soroban RPC health check by default.
+
+When an application has multiple transactions to submit, use the exported `submitSequentially(client, operations)` helper. It awaits each confirmation before starting the next transaction. `CoralSwapClient.submitTransaction` also serializes its complete account sequence lifecycle internally, so concurrent callers cannot build transactions with the same nonce.
+
+Required environment variable:
+
+```bash
+CORALSWAP_SECRET_KEY=S... npm run examples:signer
+```
+
+Optional variables are `CORALSWAP_NETWORK` (`testnet` by default), `CORALSWAP_RPC_URL`, and `CORALSWAP_NETWORK_PASSPHRASE` (which must match the selected network).
+
+---
+
 ### `simple-swap.ts`
 
 **Run:** `npm run examples:simple-swap`
@@ -132,6 +150,76 @@ Demonstrates how to fetch a RedStone price attestation using a custom `price-fee
 3. **Attach & Submit**: If the price is within the acceptable threshold, it attaches the payload and submits the guarded swap to the Stellar Testnet.
 
 The example simulates both a happy path (within deviation) and a failure case (simulated bad price).
+
+---
+
+### `tax-reporting.ts` ← **New**
+
+**Run:** `npm run examples:tax-reporting`
+
+Demonstrates a portfolio reconciliation workflow that ingests a fixture history, groups trades by month, and produces a tax summary per period with pagination-friendly export rows. The example stays fully offline so it can run in CI without requiring a live Stellar RPC endpoint.
+
+---
+
+### `alert-setup.ts` ← **New**
+
+**Run:** `npm run examples:alert-setup`
+
+End-to-end reference for builders wiring up off-chain monitoring on top of CoralSwap: define price and impermanent-loss alert rules, register a signed delivery webhook, and verify the full trigger → dispatch → acknowledgement pipeline.
+
+**Flow:**
+1. **SDK bootstrap** — initialise the `CoralSwapClient` against Stellar Testnet and resolve a pair address (degrades gracefully to a synthetic address if RPC is unreachable).
+2. **Local webhook receiver** — start a Node `http` server bound to an ephemeral port. Every inbound `POST /alerts` is HMAC-SHA256 verified.
+3. **Price alert** — fires when the pool-implied price for `deJTRSY` crosses above $1.10 (≈ +5 % vs. a $1.052 baseline NAV). Inline comments walk through the threshold rationale for stable/stable vs. stable/volatile vs. volatile/volatile pairs.
+4. **IL alert** — fires when an LP position's constant-product impermanent loss exceeds 3.00 % (≈ ±75 % price drift). Inline comments table the IL magnitude at common price-ratio values.
+5. **Trigger observations** — synthetic price and reserve shifts fan out via the `AlertService` dispatcher.
+6. **Verification log** — both the outbound delivery log (from the alert service) and the inbound receiver log (from the HTTP server) are printed, and the script exits non-zero if any signature is invalid.
+
+The webhook signing scheme (`X-CoralSwap-Signature` HMAC header, JSON body) matches the conventions an external Slack/Discord/PagerDuty adapter would expect, so the example can be lifted into a production observer without re-wiring.
+
+**Required environment variables**
+
+None — the webhook receiver is in-process so the script runs end-to-end with `npx ts-node examples/alert-setup.ts`. Optional vars (matching `simple-swap.ts`):
+
+| Variable | Description | Default |
+|---|---|---|
+| `CORALSWAP_RPC_URL` | Soroban RPC endpoint | testnet default |
+| `CORALSWAP_NETWORK` | `testnet` or `mainnet` | `testnet` |
+| `CORALSWAP_TOKEN_A` | First token address for real pair lookup | testnet USDC |
+| `CORALSWAP_TOKEN_B` | Second token address for real pair lookup | testnet deJTRSY |
+
+---
+
+### `serialized-submission-bot.ts` ← **New**
+
+**Run:** `npm run examples:serialized-submission-bot`
+
+A canonical long-running bot that submits CoralSwap swaps safely. It demonstrates the three guardrails every production bot should inherit:
+
+1. **Quota-limited** — a sliding-window limiter caps submissions (including retries) per minute so the bot never floods the RPC endpoint.
+2. **Sequence-serialized** — a per-account async mutex (the *sequence mutex*) guarantees only one `submitTransaction()` is in flight at a time. Each submission re-reads the account sequence number, so concurrent submissions can never race on the same sequence and get rejected with `tx_bad_seq`.
+3. **Retry-with-status-check loop** — after each submission the bot probes the transaction status on-chain before deciding what to do. A locally timed-out transaction that already landed is *not* re-submitted (which would double-execute); safe retries rebuild the transaction and naturally pick up a fresh sequence number.
+
+The bot dispatches `N` swap jobs concurrently to show the mutex in action: all jobs race, but submissions are serialized per account. By default it runs against **testnet**; set `CORALSWAP_BOT_DRY_RUN=true` to only simulate.
+
+**Configuration**
+
+| Variable | Description | Default |
+|---|---|---|
+| `CORALSWAP_SECRET_KEY` | Stellar secret key (`S...`) for the bot account | — |
+| `CORALSWAP_PUBLIC_KEY` | Public key of the bot account (`G...`) | — |
+| `CORALSWAP_RPC_URL` | Custom Soroban RPC URL (optional) | testnet default |
+| `CORALSWAP_NETWORK` | `testnet` (default) or `mainnet` | `testnet` |
+| `CORALSWAP_FACTORY_ADDRESS` | CoralSwap factory contract address | — |
+| `CORALSWAP_ROUTER_ADDRESS` | CoralSwap router contract address | — |
+| `CORALSWAP_TOKEN_A` | Input token contract address | USDC (testnet) |
+| `CORALSWAP_TOKEN_B` | Output token contract address | deJTRSY (testnet) |
+| `CORALSWAP_SWAP_AMOUNT` | Swap amount in token units (7 dp) | `100000000` (10 USDC) |
+| `CORALSWAP_BOT_ITERATIONS` | Number of swap jobs to dispatch | `3` |
+| `CORALSWAP_BOT_MAX_PER_MINUTE` | Submission quota per minute (incl. retries) | `4` |
+| `CORALSWAP_BOT_MAX_RETRIES` | Max retry attempts per job | `3` |
+| `CORALSWAP_BOT_RETRY_BACKOFF_MS` | Base backoff between retries | `5000` |
+| `CORALSWAP_BOT_DRY_RUN` | Simulate jobs instead of submitting | `false` |
 
 ---
 
