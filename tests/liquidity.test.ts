@@ -23,6 +23,7 @@ function createMockClient(
     token0?: string;
     token1?: string;
     totalSupply?: bigint;
+    lpTokenAddress?: string;
   } = {},
 ): CoralSwapClient {
   const {
@@ -32,6 +33,7 @@ function createMockClient(
     token0 = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
     token1 = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4",
     totalSupply = 0n,
+    lpTokenAddress = "CLPTOKENAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
   } = overrides;
 
   return {
@@ -39,6 +41,7 @@ function createMockClient(
     pair: jest.fn().mockReturnValue({
       getReserves: jest.fn().mockResolvedValue({ reserve0, reserve1 }),
       getTokens: jest.fn().mockResolvedValue({ token0, token1 }),
+      getLPTokenAddress: jest.fn().mockResolvedValue(lpTokenAddress),
     }),
     lpToken: jest.fn().mockReturnValue({
       totalSupply: jest.fn().mockResolvedValue(totalSupply),
@@ -276,6 +279,45 @@ describe("LiquidityModule", () => {
         expect(quote.shareOfPool).toBe(expectedShare);
         expect(quote.shareOfPool).toBeGreaterThan(0);
         expect(quote.shareOfPool).toBeLessThan(1);
+      });
+
+      it("resolves LP token via getLPTokenAddress and computes shareOfPool < 1 for an existing pool (issue #630)", async () => {
+        const lpTokenAddress = "CLPTOKEN111111111111111111111111111111111111111111111";
+        const totalSupply = 10_000n;
+        const reserveA = 100_000n;
+        const reserveB = 100_000n;
+
+        const lpTokenMock = jest.fn().mockImplementation((addr: string) => {
+          if (addr === lpTokenAddress) {
+            return {
+              totalSupply: jest.fn().mockResolvedValue(totalSupply),
+              balance: jest.fn().mockResolvedValue(0n),
+            };
+          }
+          // If pairAddress is passed erroneously, return 0n (or throw)
+          return {
+            totalSupply: jest.fn().mockResolvedValue(0n),
+            balance: jest.fn().mockResolvedValue(0n),
+          };
+        });
+
+        const client = {
+          getPairAddress: jest.fn().mockResolvedValue(PAIR_ADDRESS),
+          pair: jest.fn().mockReturnValue({
+            getReserves: jest.fn().mockResolvedValue({ reserve0: reserveA, reserve1: reserveB }),
+            getTokens: jest.fn().mockResolvedValue({ token0: TOKEN_A, token1: TOKEN_B }),
+            getLPTokenAddress: jest.fn().mockResolvedValue(lpTokenAddress),
+          }),
+          lpToken: lpTokenMock,
+        } as unknown as CoralSwapClient;
+
+        const module = new LiquidityModule(client);
+        const quote = await module.getAddLiquidityQuote(TOKEN_A, TOKEN_B, 1_000n);
+
+        expect(client.pair).toHaveBeenCalledWith(PAIR_ADDRESS);
+        expect(lpTokenMock).toHaveBeenCalledWith(lpTokenAddress);
+        expect(quote.shareOfPool).toBeLessThan(1.0);
+        expect(quote.shareOfPool).toBeGreaterThan(0);
       });
 
       it("computes correct price ratios using PRICE_SCALE", async () => {

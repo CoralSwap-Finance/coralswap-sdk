@@ -1,4 +1,5 @@
 import { CoralSwapClient } from '@/client';
+import { Address, Contract, nativeToScVal, scValToNative, xdr } from '@stellar/stellar-sdk';
 import {
   ValidationError,
   CoralSwapSDKError,
@@ -1039,14 +1040,25 @@ export class AlertModule {
    * Check all threshold price alerts and trigger those that meet their conditions.
    * Implements hysteresis: alerts only trigger once per price crossing.
    *
+   * @param inputPricesUSD - Optional map or dictionary of token address to USD price (scaled by 10^8)
    * @returns Array of triggered alert IDs
    */
-  async checkThresholdPriceAlerts(): Promise<string[]> {
+  async checkThresholdPriceAlerts(
+    inputPricesUSD?: Map<string, bigint> | Record<string, bigint>,
+  ): Promise<string[]> {
     const triggered: string[] = [];
 
     for (const [id, alert] of this.thresholdPriceAlerts) {
       try {
-        const currentPrice = await this.getTokenPriceUSD(alert.tokenAddress, alert.pairAddress);
+        const inputPrice = inputPricesUSD instanceof Map
+          ? inputPricesUSD.get(alert.tokenAddress)
+          : inputPricesUSD?.[alert.tokenAddress];
+
+        const currentPrice = await this.getTokenPriceUSD(
+          alert.tokenAddress,
+          alert.pairAddress,
+          inputPrice,
+        );
         
         const shouldTrigger = this.evaluateThresholdCondition(
           currentPrice,
@@ -1130,24 +1142,31 @@ export class AlertModule {
 
   /**
    * Fetch the current USD price for a token using RedStone oracle.
-   * Falls back to pair spot price if oracle is unavailable and pairAddress is provided.
+   * If inputPriceUSD is provided, uses that directly.
+   * If oracle is configured, calls the RedStone oracle and throws on failure (never silently substituting a ratio for USD).
    *
    * @param tokenAddress - Token address to fetch price for
    * @param pairAddress - Optional pair address for spot price fallback
+   * @param inputPriceUSD - Optional direct USD price input
    * @returns Current price in USD (scaled by 10^8)
    * @throws {ValidationError} If price cannot be fetched from any source
    */
-  private async getTokenPriceUSD(tokenAddress: string, pairAddress?: string): Promise<bigint> {
-    // Try RedStone oracle first if available
-    if (this.oracleAddress) {
-      try {
-        return await this.fetchRedStonePrice(tokenAddress);
-      } catch {
-        // Fall through to spot price if oracle fails
-      }
+  private async getTokenPriceUSD(
+    tokenAddress: string,
+    pairAddress?: string,
+    inputPriceUSD?: bigint,
+  ): Promise<bigint> {
+    if (inputPriceUSD !== undefined) {
+      return inputPriceUSD;
     }
 
-    // Fall back to spot price from pair if available
+    // Try RedStone oracle first if available.
+    // Never substitute a pair ratio for USD silently when an oracle is configured.
+    if (this.oracleAddress) {
+      return await this.fetchRedStonePrice(tokenAddress);
+    }
+
+    // Fall back to spot price from pair only when no oracle is configured
     if (pairAddress) {
       return await this.fetchSpotPriceFromPair(pairAddress, tokenAddress);
     }
@@ -1160,10 +1179,8 @@ export class AlertModule {
 
   /**
    * Fetch price from RedStone oracle contract.
-   * This is a simplified implementation - in production you would need to
-   * implement the actual RedStone contract call similar to StopLossModule.
    *
-   * @param tokenAddress - Token address to fetch price for
+   * @param tokenAddress - Token address or symbol to fetch price for
    * @returns Price in USD (scaled by 10^8)
    */
   private async fetchRedStonePrice(tokenAddress: string): Promise<bigint> {
@@ -1171,13 +1188,62 @@ export class AlertModule {
       throw new ValidationError('RedStone oracle address not configured');
     }
 
-    // TODO: Implement actual RedStone oracle contract call
-    // This would be similar to StopLossModule.getOraclePrice
-    // For now, throw error to indicate oracle needs to be properly integrated
-    throw new ValidationError(
-      'RedStone oracle integration not fully implemented - requires oracle contract address and asset symbol mapping',
-      { tokenAddress, oracleAddress: this.oracleAddress },
-    );
+    let oracle: Contract;
+    try {
+      oracle = new Contract(this.oracleAddress);
+    } catch (err) {
+      throw new ValidationError(
+        `Invalid RedStone oracle address: ${this.oracleAddress}`,
+        { oracleAddress: this.oracleAddress, error: (err as Error).message },
+      );
+    }
+    let op: xdr.Operation;
+    try {
+      op = oracle.call(
+        'get_price',
+        nativeToScVal(Address.fromString(tokenAddress), { type: 'address' }),
+      );
+    } catch {
+      op = oracle.call(
+        'get_price',
+        nativeToScVal(tokenAddress, { type: 'symbol' }),
+      );
+    }
+
+    let sim = await this.client.simulateTransaction([op], {});
+    if (!sim.success || !sim.returnValue) {
+      try {
+        const symOp = oracle.call(
+          'get_price',
+          nativeToScVal(tokenAddress, { type: 'symbol' }),
+        );
+        const symSim = await this.client.simulateTransaction([symOp], {});
+        if (symSim.success && symSim.returnValue) {
+          sim = symSim;
+        }
+      } catch {
+        // Fallback error ignored
+      }
+    }
+
+    if (!sim.success || !sim.returnValue) {
+      throw new ValidationError(
+        `RedStone oracle returned no price for ${tokenAddress}`,
+        { tokenAddress, oracleAddress: this.oracleAddress },
+      );
+    }
+
+    const native = scValToNative(sim.returnValue);
+    if (
+      native &&
+      typeof native === 'object' &&
+      'price' in (native as Record<string, unknown>)
+    ) {
+      const record = native as Record<string, unknown>;
+      return BigInt(String(record['price'] ?? '0'));
+    }
+
+    return BigInt(String(native));
   }
 
   /**

@@ -280,6 +280,7 @@ export class PortfolioModule extends TreasuryModule {
         token0Amount: pos.token0Amount,
         token1Amount: pos.token1Amount,
         reason,
+        flagged: true,
       });
 
       const price0 = priceMap.get(pos.token0);
@@ -730,11 +731,16 @@ export class PortfolioModule extends TreasuryModule {
     const prices = new Map<string, number>();
     const missingTokens: string[] = [];
 
-    for (const addr of this.stableAddresses) {
+    let effectiveStables = new Set(this.stableAddresses);
+    if (effectiveStables.size === 0) {
+      effectiveStables = await this.discoverDefaultStableAddresses(allPairs);
+    }
+
+    for (const addr of effectiveStables) {
       prices.set(addr, 1.0);
     }
 
-    if (this.stableAddresses.size > 0) {
+    if (effectiveStables.size > 0) {
       for (const pairAddress of allPairs) {
         try {
           const pair = this.portfolioClient.pair(pairAddress);
@@ -743,9 +749,9 @@ export class PortfolioModule extends TreasuryModule {
 
           if (reserve0 === 0n || reserve1 === 0n) continue;
 
-          if (this.stableAddresses.has(token0) && !prices.has(token1)) {
+          if (effectiveStables.has(token0) && !prices.has(token1)) {
             prices.set(token1, Number(reserve0) / Number(reserve1));
-          } else if (this.stableAddresses.has(token1) && !prices.has(token0)) {
+          } else if (effectiveStables.has(token1) && !prices.has(token0)) {
             prices.set(token0, Number(reserve1) / Number(reserve0));
           }
         } catch {
@@ -774,6 +780,69 @@ export class PortfolioModule extends TreasuryModule {
     }
 
     return { priceMap: prices, missingTokens };
+  }
+
+  /**
+   * Discover default stablecoin addresses from on-chain / factory pairs.
+   *
+   * When no stableAddresses are passed to PortfolioModule, this inspects
+   * factory pairs to identify stablecoin tokens based on token address heuristics
+   * or SEP-41 symbol reads.
+   */
+  private async discoverDefaultStableAddresses(allPairs: string[]): Promise<Set<string>> {
+    const stables = new Set<string>();
+
+    const testnetUsdc = "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA";
+    const mainnetUsdc = "CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75";
+    stables.add(testnetUsdc);
+    stables.add(mainnetUsdc);
+
+    for (const pairAddress of allPairs) {
+      try {
+        const pair = this.portfolioClient.pair(pairAddress);
+        const { token0, token1 } = await pair.getTokens();
+
+        for (const tokenAddr of [token0, token1]) {
+          if (stables.has(tokenAddr)) continue;
+
+          const addrUpper = tokenAddr.toUpperCase();
+          if (
+            addrUpper.includes("USDC") ||
+            addrUpper.includes("USDT") ||
+            addrUpper.includes("STABLE") ||
+            addrUpper.includes("USD")
+          ) {
+            stables.add(tokenAddr);
+            continue;
+          }
+
+          if (typeof this.portfolioClient.simulateTransaction === "function") {
+            try {
+              const tokenContract = new Contract(tokenAddr);
+              const op = tokenContract.call("symbol");
+              const sim = await this.portfolioClient.simulateTransaction([op], {});
+              if (sim && sim.success && sim.returnValue) {
+                const symNative = scValToNative(sim.returnValue);
+                const symStr = String(symNative ?? "").toUpperCase();
+                if (
+                  /^(USDC|USDT|USD|DAI|USDS|EURC)$/i.test(symStr) ||
+                  symStr.includes("USD") ||
+                  symStr.includes("STABLE")
+                ) {
+                  stables.add(tokenAddr);
+                }
+              }
+            } catch {
+              // Ignore token read error
+            }
+          }
+        }
+      } catch {
+        // Ignore pair read error
+      }
+    }
+
+    return stables;
   }
 }
 

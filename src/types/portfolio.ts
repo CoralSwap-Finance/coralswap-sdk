@@ -123,6 +123,8 @@ export interface UnavailablePortfolioPosition {
   token1Amount: bigint;
   /** Human-readable explanation of why this position could not be valued */
   reason: string;
+  /** True when the position could not be priced and is flagged as unavailable */
+  flagged?: boolean;
 }
 
 /**
