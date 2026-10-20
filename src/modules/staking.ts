@@ -554,16 +554,15 @@ export class StakingModule {
     const result = await this.simulateRead(op);
 
     if (!result) {
-      return {
-        isInCooldown: false,
-        cooldownEnd: 0,
-        canWithdrawAt: new Date(0),
-      };
+      throw new StakingError("Failed to query cooldown status: simulation failed", {
+        address,
+        lpTokenAddress,
+      });
     }
 
     const fields = result.type === "scvMap" ? result.map : undefined;
     const cooldownEnd = this.extractU64(fields, "cooldown_end");
-    const nowSec = Math.floor(Date.now() / 1000);
+    const nowSec = await this.getLedgerTimestamp();
     const isInCooldown = cooldownEnd > nowSec;
 
     return {
@@ -619,7 +618,7 @@ export class StakingModule {
     // enforcement depends on the governance contract implementation.
     const settlementPeriodSec = 5;
     const eligibleAt = position.stakedAt + settlementPeriodSec;
-    const nowSec = Math.floor(Date.now() / 1000);
+    const nowSec = await this.getLedgerTimestamp();
     const isEligible = nowSec >= eligibleAt;
 
     return {
@@ -633,6 +632,30 @@ export class StakingModule {
   // ---------------------------------------------------------------------------
   // Private helpers
   // ---------------------------------------------------------------------------
+
+  /**
+   * Get current timestamp in Unix seconds derived from the latest ledger.
+   *
+   * Queries the latest ledger close time from the RPC server to maintain a
+   * consistent ledger-derived time model with contract timestamps.
+   * Falls back to wall-clock time if getLatestLedger is unavailable or throws.
+   */
+  private async getLedgerTimestamp(): Promise<number> {
+    try {
+      if (typeof this.client.server?.getLatestLedger === "function") {
+        const latest = await this.client.server.getLatestLedger();
+        if (latest && "closeTime" in latest && latest.closeTime !== undefined) {
+          const closeTime = Number(latest.closeTime);
+          if (!isNaN(closeTime) && closeTime > 0) {
+            return closeTime;
+          }
+        }
+      }
+    } catch {
+      // Fall through to wall-clock fallback
+    }
+    return Math.floor(Date.now() / 1000);
+  }
 
   /**
    * Simulate a read-only contract call and return the return value.

@@ -486,7 +486,13 @@ export class LiquidityModule {
    * Get the total supply of LP tokens for a pair.
    */
   private async getLPTotalSupply(pairAddress: string): Promise<bigint> {
-    const lpClient = this.client.lpToken(pairAddress);
+    let lpTokenAddress = this.lpTokenCache.get(pairAddress);
+    if (!lpTokenAddress) {
+      const pair = this.client.pair(pairAddress);
+      lpTokenAddress = await pair.getLPTokenAddress();
+      this.lpTokenCache.set(pairAddress, lpTokenAddress);
+    }
+    const lpClient = this.client.lpToken(lpTokenAddress);
     return lpClient.totalSupply();
   }
 

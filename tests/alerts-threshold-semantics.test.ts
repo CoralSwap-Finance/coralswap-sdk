@@ -9,6 +9,8 @@
  */
 import { AlertModule } from '../src/modules/alerts';
 import type { CoralSwapClient } from '../src/client';
+import { ValidationError } from '../src/errors';
+import { nativeToScVal } from '@stellar/stellar-sdk';
 
 const TOKEN_A = 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM';
 const TOKEN_B = 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4';
@@ -143,5 +145,115 @@ describe('threshold alert semantics (fixtures)', () => {
         pairAddress: PAIR,
       }),
     ).rejects.toThrow('direction must be "above" or "below"');
+  });
+
+  describe('RedStone oracle and inputPricesUSD semantics', () => {
+    const ORACLE_ADDR = 'CC4YVLFRDJB3I32FKEHLSP7ZUE5DP73QHB54SQIBO6MXBFP7FIMVTG2I';
+
+    it('queries RedStone oracle when oracleAddress is configured', async () => {
+      const client = makeClient({ reserve0: 100n, reserve1: 250n });
+      (client as any).simulateTransaction = jest.fn().mockResolvedValue({
+        success: true,
+        returnValue: nativeToScVal(300_000_000n, { type: 'i128' }),
+      });
+
+      const alerts = new AlertModule(client, ORACLE_ADDR);
+      const id = await alerts.createThresholdPriceAlert({
+        tokenAddress: TOKEN_A,
+        targetPriceUSD: 250_000_000n,
+        direction: 'above',
+      });
+
+      const triggered = await alerts.checkThresholdPriceAlerts();
+      expect(triggered).toEqual([id]);
+
+      const alert = alerts.getPriceAlert(id);
+      expect(alert?.status).toBe('triggered');
+      expect(alert?.lastKnownPrice).toBe(300_000_000n);
+      expect((client as any).simulateTransaction).toHaveBeenCalled();
+    });
+
+    it('supports oracle returning an object containing price', async () => {
+      const client = makeClient({ reserve0: 100n, reserve1: 250n });
+      (client as any).simulateTransaction = jest.fn().mockResolvedValue({
+        success: true,
+        returnValue: nativeToScVal({ price: 350_000_000n }),
+      });
+
+      const alerts = new AlertModule(client, ORACLE_ADDR);
+      const price = await alerts['getTokenPriceUSD'](TOKEN_A);
+      expect(price).toBe(350_000_000n);
+    });
+
+    it('throws ValidationError when oracle fails and does NOT fall back to pair ratio', async () => {
+      const client = makeClient({ reserve0: 100n, reserve1: 250n });
+      (client as any).simulateTransaction = jest.fn().mockResolvedValue({
+        success: false,
+      });
+
+      const alerts = new AlertModule(client, ORACLE_ADDR);
+      const id = await alerts.createThresholdPriceAlert({
+        tokenAddress: TOKEN_A,
+        targetPriceUSD: 200_000_000n, // would trigger under pair ratio (250_000_000n)
+        direction: 'above',
+        pairAddress: PAIR,
+      });
+
+      // Simulation fails, so getTokenPriceUSD throws; checkThresholdPriceAlerts catches and skips
+      const triggered = await alerts.checkThresholdPriceAlerts();
+      expect(triggered).toEqual([]);
+
+      const alert = alerts.getPriceAlert(id);
+      expect(alert?.status).toBe('active');
+      expect(alert?.lastKnownPrice).toBeUndefined();
+
+      // Directly calling getTokenPriceUSD throws ValidationError
+      await expect(
+        alerts['getTokenPriceUSD'](TOKEN_A, PAIR),
+      ).rejects.toThrow(ValidationError);
+    });
+
+    it('uses inputPricesUSD Map directly when provided', async () => {
+      const client = makeClient({ reserve0: 100n, reserve1: 250n });
+      const alerts = new AlertModule(client);
+      const id = await alerts.createThresholdPriceAlert({
+        tokenAddress: TOKEN_A,
+        targetPriceUSD: 500_000_000n,
+        direction: 'above',
+      });
+
+      const priceMap = new Map<string, bigint>([[TOKEN_A, 550_000_000n]]);
+      const triggered = await alerts.checkThresholdPriceAlerts(priceMap);
+      expect(triggered).toEqual([id]);
+
+      const alert = alerts.getPriceAlert(id);
+      expect(alert?.status).toBe('triggered');
+      expect(alert?.lastKnownPrice).toBe(550_000_000n);
+    });
+
+    it('uses inputPricesUSD Record directly when provided', async () => {
+      const client = makeClient({ reserve0: 100n, reserve1: 250n });
+      const alerts = new AlertModule(client);
+      const id = await alerts.createThresholdPriceAlert({
+        tokenAddress: TOKEN_A,
+        targetPriceUSD: 500_000_000n,
+        direction: 'above',
+      });
+
+      const triggered = await alerts.checkThresholdPriceAlerts({ [TOKEN_A]: 520_000_000n });
+      expect(triggered).toEqual([id]);
+
+      const alert = alerts.getPriceAlert(id);
+      expect(alert?.status).toBe('triggered');
+      expect(alert?.lastKnownPrice).toBe(520_000_000n);
+    });
+
+    it('throws ValidationError when neither oracle nor pairAddress is provided', async () => {
+      const client = makeClient({ reserve0: 100n, reserve1: 250n });
+      const alerts = new AlertModule(client); // no oracleAddress
+      await expect(alerts['getTokenPriceUSD'](TOKEN_A)).rejects.toThrow(
+        'Cannot fetch price: no oracle address or pair address provided',
+      );
+    });
   });
 });

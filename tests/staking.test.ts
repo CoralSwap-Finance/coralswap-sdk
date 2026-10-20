@@ -644,14 +644,30 @@ describe("StakingModule", () => {
   // getCooldownStatus()
   // -----------------------------------------------------------------------
   describe("getCooldownStatus()", () => {
-    it("should return not in cooldown when no data exists", async () => {
-      const client = createMockClient();
+    it("fails closed and throws StakingError on simulation failure", async () => {
+      const client = createMockClient({ simulationFail: true });
+      const module = new StakingModule(client);
+
+      await expect(
+        module.getCooldownStatus(MOCK_ADDRESS, MOCK_LP_TOKEN),
+      ).rejects.toThrow(StakingError);
+    });
+
+    it("uses ledger-derived timestamp when available", async () => {
+      const ledgerTimestamp = 1_700_000_000;
+      const cooldownEnd = 1_700_000_100; // 100 seconds after ledger time
+      const mockResult = createMockCooldownResult(cooldownEnd);
+      const client = createMockClient({ simulationResult: mockResult });
+      (client.server as any).getLatestLedger = jest.fn().mockResolvedValue({
+        sequence: 12345,
+        closeTime: String(ledgerTimestamp),
+      });
       const module = new StakingModule(client);
 
       const status = await module.getCooldownStatus(MOCK_ADDRESS, MOCK_LP_TOKEN);
-
-      expect(status.isInCooldown).toBe(false);
-      expect(status.cooldownEnd).toBe(0);
+      expect((client.server as any).getLatestLedger).toHaveBeenCalled();
+      expect(status.isInCooldown).toBe(true);
+      expect(status.cooldownEnd).toBe(cooldownEnd);
     });
 
     it("should detect active cooldown when end is in the future", async () => {

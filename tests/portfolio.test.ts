@@ -287,5 +287,70 @@ describe("PortfolioModule", () => {
       expect(result.unavailablePositions).toEqual([]);
       expect(result.totalValueUSD).toBe(0);
     });
+
+    it("derives default stable-pair set and prices held positions when constructed with no stableAddresses (issue #627)", async () => {
+      const STABLE_TOKEN = "CUSDC00000000000000000000000000000000000000000000000000";
+      const client = makeMockClient({
+        [PAIR_POSITION]: {
+          token0: STABLE_TOKEN,
+          token1: TOKEN_A,
+          reserve0: 1_000_000_000n,
+          reserve1: 2_000_000_000n,
+          balance: 1_000_000n,
+          totalSupply: 1_000_000n,
+        },
+      });
+
+      // Construct with NO stableAddresses option
+      const portfolio = new PortfolioModule(client as never);
+
+      const result = await portfolio.getPortfolio(OWNER, {
+        pairAddresses: [PAIR_POSITION],
+      });
+
+      expect(result.positions).toHaveLength(1);
+      expect(result.positions[0].pairAddress).toBe(PAIR_POSITION);
+      expect(result.positions[0].valueUSD).toBeCloseTo(200, 6);
+      expect(result.totalValueUSD).toBeCloseTo(200, 6);
+      expect(result.unavailablePositions).toHaveLength(0);
+    });
+
+    it("returns positions + flagged ones for a portfolio with mixed coverage without throwing (issue #627)", async () => {
+      const STABLE_TOKEN = "CUSDC00000000000000000000000000000000000000000000000000";
+      const client = makeMockClient({
+        [PAIR_POSITION]: {
+          token0: STABLE_TOKEN,
+          token1: TOKEN_A,
+          reserve0: 1_000_000_000n,
+          reserve1: 2_000_000_000n,
+          balance: 1_000_000n,
+          totalSupply: 1_000_000n,
+        },
+        [PAIR_UNPRICED]: {
+          token0: TOKEN_B,
+          token1: TOKEN_C,
+          reserve0: 500_000_000n,
+          reserve1: 700_000_000n,
+          balance: 1_000_000n,
+          totalSupply: 1_000_000n,
+        },
+      });
+
+      const portfolio = new PortfolioModule(client as never);
+
+      const result = await portfolio.getPortfolio(OWNER, {
+        pairAddresses: [PAIR_POSITION, PAIR_UNPRICED],
+      });
+
+      // Valued position returned
+      expect(result.positions).toHaveLength(1);
+      expect(result.positions[0].pairAddress).toBe(PAIR_POSITION);
+
+      // Unpriced position flagged and isolated
+      expect(result.unavailablePositions).toHaveLength(1);
+      expect(result.unavailablePositions[0].pairAddress).toBe(PAIR_UNPRICED);
+      expect(result.unavailablePositions[0].flagged).toBe(true);
+      expect(result.unavailablePositions[0].reason).toContain(TOKEN_B);
+    });
   });
 });
