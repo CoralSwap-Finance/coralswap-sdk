@@ -15,6 +15,7 @@
     "test:coverage": "jest --coverage",
     "test:memory": "node --expose-gc node_modules/.bin/jest --runInBand tests/memory/subscriptions.test.ts",
     "test:integration": "jest --config jest.integration.config.js",
+    "test:integration:dca": "jest --config jest.integration.config.js --testPathPatterns=dca.integration",
     "test:integration:rwa": "jest --config jest.integration.config.js tests/integration/rwa.integration.test.ts",
     "test:integration:portfolio": "jest --config jest.integration.config.js --testPathPatterns=portfolio.integration",
     "test:integration:limit-orders": "jest --config jest.integration.config.js --testPathPatterns=limit-orders.integration",

@@ -28,6 +28,9 @@ jobs:
           TEST_KEYPAIR: ${{ secrets.TEST_KEYPAIR }}
           TEST_TOKEN_A: ${{ secrets.TEST_TOKEN_A }}
           TEST_TOKEN_B: ${{ secrets.TEST_TOKEN_B }}
+          # Token pair and DCA scheduler fixtures used by the DCA suite.
+          TEST_PAIR_ADDRESS: ${{ secrets.TEST_PAIR_ADDRESS }}
+          TEST_DCA_CONTRACT: ${{ secrets.TEST_DCA_CONTRACT }}
           # Additional fixtures used by the portfolio / risk-metrics suites.
           TEST_TOKEN_C: ${{ secrets.TEST_TOKEN_C }}
           # RedStone oracle contract used by the price-feed suite.

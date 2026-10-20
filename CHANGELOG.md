@@ -24,6 +24,7 @@
 - Shared `getTokenDecimals(client, address)` util (SEP-41 `decimals()` with a per-address cache and a 7-decimal fallback), extracted from the leaderboard module where it was private
 - Acceptance coverage for undeployed-network access: `client.factory` / `client.router` on MAINNET and STAGING pinned for the `NotConfiguredError` class, the `NOT_CONFIGURED` code, `details.configKey`, the network and the actionable message, plus `NotConfiguredError` unit tests for the hint and the `configKey` mirror
 - Zod schemas for position entries (`EnrichedLPPositionSchema`, `PositionMathSchema`, `PositionSummarySchema`, exported from `@/schemas`) with a malformed/valid fixture suite (`tests/positions-schema.test.ts`): missing or empty fields, wrong primitive types, `NaN`/infinite/out-of-range `share`, fractional/negative/out-of-ceiling `feeBps`, non-bigint stroops, and summary-level failures — each pinned to a `ValidationError` naming the offending field
+- Testnet integration coverage for DCA schedule creation, exact refund-on-cancellation, and cleanup of leftover active schedules (`tests/integration/dca.integration.test.ts`), gated behind `STELLAR_TESTNET=true` and a funded Testnet fixture set (#DCA)
 
 ### Changed
 - Governance module validates `createProposal` and `castVote` inputs with zod schemas (`CreateProposalInputSchema`, `CastVoteInputSchema`), replacing the hand-written guards while keeping `ValidationError` as the thrown type (#488)
