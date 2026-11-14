@@ -6,9 +6,73 @@ import {
   Address,
   nativeToScVal,
 } from "@stellar/stellar-sdk";
+import { DecodeError, SimulationError } from "@/errors";
 import { withRetry, RetryOptions } from "@/utils/retry";
 import { decodeI128 } from "@/utils/scval";
+import { validateAddress } from "@/utils/validation";
 import { Logger } from "@/types/common";
+
+/** Maximum valid fee in basis points (100% = 10,000 bps). */
+const MAX_FEE_BPS = 10_000;
+
+/**
+ * Extract the ScVal arm name across both plain-property and accessor-method shapes.
+ */
+function getScValTypeName(val: xdr.ScVal): string {
+  const candidate = val as unknown as {
+    type?: unknown;
+    switch?: () => { name?: string } | string;
+  };
+  if (typeof candidate.type === "string" && candidate.type.length > 0) {
+    return candidate.type;
+  }
+  if (typeof candidate.switch === "function") {
+    const sw = candidate.switch();
+    if (typeof sw === "string") return sw;
+    if (sw && typeof sw.name === "string") return sw.name;
+  }
+  return typeof val;
+}
+
+/**
+ * Strictly decode a dynamic fee basis-point `u32` from a Soroban `ScVal`.
+ * Fails closed with {@link DecodeError} on non-`scvU32` or out-of-range values.
+ */
+function decodeDynamicFeeBps(
+  val: xdr.ScVal,
+  tokenA: string,
+  tokenB: string,
+): number {
+  const typeName = getScValTypeName(val);
+  let rawFee: unknown;
+
+  if (typeName === "scvU32") {
+    const candidate = val as unknown as { u32?: number | (() => number) };
+    rawFee =
+      typeof candidate.u32 === "function" ? candidate.u32() : candidate.u32;
+  } else {
+    throw new DecodeError(
+      "get_dynamic_fee",
+      `Expected scvU32 return value from get_dynamic_fee, got ${typeName}`,
+      { tokenA, tokenB, actualType: typeName },
+    );
+  }
+
+  if (
+    typeof rawFee !== "number" ||
+    !Number.isInteger(rawFee) ||
+    rawFee < 0 ||
+    rawFee > MAX_FEE_BPS
+  ) {
+    throw new DecodeError(
+      "get_dynamic_fee",
+      `Invalid dynamic fee basis points decoded from get_dynamic_fee: ${String(rawFee)}`,
+      { tokenA, tokenB, feeBps: rawFee },
+    );
+  }
+
+  return rawFee;
+}
 
 /**
  * Type-safe client for the CoralSwap Router contract.
@@ -219,19 +283,30 @@ export class RouterClient {
   /**
    * Query the current dynamic fee for a trading pair via the router.
    *
+   * Fails closed without any silent fallback fee if simulation fails, produces
+   * no return value, or returns a non-`u32` / out-of-range value.
+   *
    * @param tokenA - Address of the first token.
    * @param tokenB - Address of the second token.
    * @returns The current fee in basis points (e.g. `30` = 0.3%).
+   * @throws {ValidationError} If `tokenA` or `tokenB` is not a valid Stellar address.
+   * @throws {SimulationError} If the read simulation fails or returns no result.
+   * @throws {DecodeError} If the simulated return value is not a valid `u32` fee in `[0, 10000]`.
    */
   async getDynamicFee(tokenA: string, tokenB: string): Promise<number> {
+    validateAddress(tokenA, "tokenA");
+    validateAddress(tokenB, "tokenB");
+
     const op = this.contract.call(
       "get_dynamic_fee",
       nativeToScVal(Address.fromString(tokenA), { type: "address" }),
       nativeToScVal(Address.fromString(tokenB), { type: "address" }),
     );
-    const result = await this.simulateRead(op);
-    if (!result) return 30;
-    return result.type === "scvU32" ? result.u32 : 30;
+    const result = await this.simulateReadOrThrow(op, "get_dynamic_fee", {
+      tokenA,
+      tokenB,
+    });
+    return decodeDynamicFeeBps(result, tokenA, tokenB);
   }
 
   /**
@@ -282,6 +357,60 @@ export class RouterClient {
    * @returns The `ScVal` return value, or `null` if simulation produced no result.
    */
   private async simulateRead(op: xdr.Operation): Promise<xdr.ScVal | null> {
+    const sim = await this.executeReadSimulation(op);
+    if (rpc.Api.isSimulationSuccess(sim) && sim.result) {
+      return sim.result.retval;
+    }
+    return null;
+  }
+
+  /**
+   * Simulate a read-only contract call and fail closed with a typed
+   * {@link SimulationError} if simulation fails or returns no `retval`.
+   */
+  private async simulateReadOrThrow(
+    op: xdr.Operation,
+    method: string,
+    details: Record<string, unknown>,
+  ): Promise<xdr.ScVal> {
+    // Honour instance-level simulateRead test stubs if overridden on `this`.
+    if (this.simulateRead !== RouterClient.prototype.simulateRead) {
+      const overridden = await this.simulateRead(op);
+      if (!overridden) {
+        throw new SimulationError(
+          `RouterClient.${method} simulation returned no result`,
+          { method, reason: "missing_retval", ...details },
+        );
+      }
+      return overridden;
+    }
+
+    const sim = await this.executeReadSimulation(op);
+    if (!rpc.Api.isSimulationSuccess(sim)) {
+      const errorDetail =
+        "error" in sim && typeof sim.error === "string" && sim.error.length > 0
+          ? sim.error
+          : "Simulation failed";
+      throw new SimulationError(
+        `RouterClient.${method} simulation failed: ${errorDetail}`,
+        { method, simulationError: errorDetail, ...details },
+      );
+    }
+    if (!sim.result || !sim.result.retval) {
+      throw new SimulationError(
+        `RouterClient.${method} simulation returned no result`,
+        { method, reason: "missing_retval", ...details },
+      );
+    }
+    return sim.result.retval;
+  }
+
+  /**
+   * Execute the underlying zero-balance read simulation against Soroban RPC.
+   */
+  private async executeReadSimulation(
+    op: xdr.Operation,
+  ): Promise<rpc.Api.SimulateTransactionResponse> {
     const account = await withRetry(
       () =>
         this.server.getAccount(
@@ -299,15 +428,11 @@ export class RouterClient {
       .setTimeout(30)
       .build();
 
-    const sim = await withRetry(
+    return withRetry(
       () => this.server.simulateTransaction(tx),
       this.retryOptions,
       this.logger,
       "RouterClient_simulateTransaction",
     );
-    if (rpc.Api.isSimulationSuccess(sim) && sim.result) {
-      return sim.result.retval;
-    }
-    return null;
   }
 }
