@@ -72,9 +72,15 @@ export class FeeModule {
   /**
    * Get the fee for a specific token pair via the Router.
    *
+   * Fails closed if router simulation fails or returns a malformed payload —
+   * never falls back to a hardcoded fee.
+   *
    * @param tokenA - Address of the first token
    * @param tokenB - Address of the second token
    * @returns Current fee in basis points
+   * @throws {ValidationError} If `tokenA` or `tokenB` is not a valid Stellar address
+   * @throws {SimulationError} If router simulation fails or produces no return value
+   * @throws {DecodeError} If the router return value is not a valid `u32` basis-point fee
    * @example
    * const feeBps = await client.fees.getFeeForPair('C...', 'C...');
    */
