@@ -598,7 +598,7 @@ describe('CoralSwapClient', () => {
       expect(result.txHash).toBe('test-tx-hash');
     });
 
-    it('returns TX_TIMEOUT after max retries exhausted', async () => {
+    it('returns TX_NOT_CONFIRMED when polling exhausts NOT_FOUND responses', async () => {
       const client = new CoralSwapClient({
         network: Network.TESTNET,
         secretKey: TEST_SECRET,
@@ -631,8 +631,8 @@ describe('CoralSwapClient', () => {
       const result = await client.submitTransaction([mockOperation]);
 
       expect(result.success).toBe(false);
-      expect(result.error?.code).toBe('TX_TIMEOUT');
-      expect(result.error?.message).toContain('timed out');
+      expect(result.error?.code).toBe('TX_NOT_CONFIRMED');
+      expect(result.error?.message).toContain('not confirmed');
       expect(result.txHash).toBe('test-tx-hash');
     });
   });

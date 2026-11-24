@@ -356,3 +356,13 @@ export interface GetPortfolioOptions {
    */
   limit?: number;
 }
+
+/**
+ * Historical aggregated portfolio value and 24h performance change.
+ */
+export interface PortfolioValue {
+  totalUSD: number;
+  change24h: number;
+  change24hPercent: number;
+}
+

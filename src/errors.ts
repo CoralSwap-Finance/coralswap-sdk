@@ -88,6 +88,16 @@ export class NetworkError extends CoralSwapSDKError {
 }
 
 /**
+ * Connection pool has no healthy endpoints available.
+ */
+export class ConnectionPoolExhaustedError extends CoralSwapSDKError {
+  constructor(message: string, details?: Record<string, unknown>) {
+    super("CONNECTION_POOL_EXHAUSTED", message, details);
+    this.name = "ConnectionPoolExhaustedError";
+  }
+}
+
+/**
  * RPC endpoint errors (timeouts, rate limits).
  */
 export class RpcError extends CoralSwapSDKError {
@@ -126,14 +136,29 @@ export class TransactionError extends CoralSwapSDKError {
 }
 
 /**
- * Transaction deadline exceeded.
+ * Deadline exceeded — either a transaction deadline rejected by the contract
+ * or a retry deadline (`RetryOptions.deadlineMs`) reached by `withRetry`.
+ *
+ * This is the only `DeadlineError` class in the SDK; `@/utils/retry`
+ * re-exports it, so `instanceof DeadlineError` matches regardless of which
+ * module it was imported from.
  */
 export class DeadlineError extends CoralSwapSDKError {
-  constructor(deadline: number) {
+  /** The deadline that was exceeded. */
+  readonly deadlineMs: number;
+  /** Clock reading when the deadline was detected. */
+  readonly nowMs: number;
+  /** How far past the deadline `nowMs` was (never negative). */
+  readonly pastDeadlineMs: number;
+
+  constructor(deadline: number, nowMs: number = Date.now()) {
     super("DEADLINE_EXCEEDED", `Transaction deadline exceeded (deadline: ${deadline})`, {
       deadline,
     });
     this.name = "DeadlineError";
+    this.deadlineMs = deadline;
+    this.nowMs = nowMs;
+    this.pastDeadlineMs = Math.max(0, nowMs - deadline);
   }
 }
 

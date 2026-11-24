@@ -52,6 +52,10 @@ The SDK follows a consistent typed-error model instead of ad hoc string matching
 
 This means a module either returns a concrete value, returns a sentinel like `null`/`false` for a known unavailable condition, or throws a typed SDK error for a real failure. There is no hidden "best-effort" API layer silently rewriting the protocol state.
 
+## Transaction confirmation polling
+
+`client.poller().poll(hash, options)` checks Soroban RPC until a transaction is confirmed or the polling limit is reached. A confirmed transaction returns `success: true`. Otherwise `result.error.code` distinguishes `TX_FAILED` (on-chain failure), `TX_NOT_CONFIRMED` (the last RPC response was `NOT_FOUND` after all attempts), and `TX_TIMEOUT` (the last attempt failed at the RPC/network level, or three consecutive RPC errors occurred). Transient RPC failures are retried; a responding endpoint resets the consecutive-failure count. Existing `AbortSignal` cancellation between attempts is unchanged.
+
 ## Installation
 
 ```bash

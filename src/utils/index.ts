@@ -98,7 +98,7 @@ export type { BatchRequestOptions, BatchResult } from './batch-request';
 export { parseChangelog } from './changelog';
 export { RateLimiter, RateLimiterDestroyedError } from './rate-limiter';
 export type { RateLimiterOptions } from './rate-limiter';
-export { estimateGas } from './gas';
+export { estimateGas, parseStroops, formatStroopsAsXLM } from './gas';
 export type { SimulateFn } from './gas';
 
 export { waitNextLedger, ledgerToApproxTime, LEDGER_CLOSE_INTERVAL_SECONDS } from './ledger';
@@ -115,6 +115,7 @@ export type { DecodeEventsOptions } from './events';
 export { EventCursor, TypedEventCursor, decodeEventTopic, MIN_START_LEDGER, MAX_EVENT_LIMIT } from './event-cursor';
 export type { EventCursorOptions, TypedEventScanParams, PageInfo, ScanResult } from './event-cursor';
 export { ConnectionPool } from './connection-pool';
+
 
 export {
   getVotingPower,
@@ -175,3 +176,12 @@ export type { TransactionStatus, RetryDecision } from './idempotent-resubmission
  * `10 ** decimals` from here rather than by a hardcoded `1e7`.
  */
 export { getTokenDecimals, clearTokenDecimalsCache, FALLBACK_TOKEN_DECIMALS } from './token-decimals';
+
+// Landed-status lookup and the submitIdempotent helper (#464). The lookup is
+// exported under its own name: getTransactionStatus above already names the
+// idempotent-resubmission variant.
+export {
+  getTransactionStatus as getTransactionLandedStatus,
+  submitIdempotent,
+} from "./transactionStatus";
+export type { TransactionStatusResult, TxLandedStatus } from "./transactionStatus";

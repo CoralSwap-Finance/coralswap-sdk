@@ -65,12 +65,15 @@ module.exports = {
     '^@/(.*)$': '<rootDir>/src/$1',
   },
   transform: {
-    '^.+\\.tsx?$': [
+    '^.+\\.[jt]sx?$': [
       'ts-jest',
       {
         // Suppress pre-existing type errors in source files so tests can run.
         // Type-checking is enforced separately via `tsc --noEmit`.
         diagnostics: false,
+        tsconfig: {
+          allowJs: true,
+        },
       },
     ],
     '^.+\\.jsx?$': [

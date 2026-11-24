@@ -103,5 +103,31 @@ describe('idempotent-resubmission', () => {
       expect(decision.shouldRetry).toBe(false);
       expect(decision.reason).toContain('indeterminate');
     });
+
+    it("blocks on ERROR when onError is explicitly 'block'", () => {
+      const status: TransactionStatus = { status: 'ERROR', message: 'timeout' };
+      expect(shouldRetrySubmission(status, { onError: 'block' }).shouldRetry).toBe(false);
+    });
+
+    it("allows a retry on ERROR when onError is 'retry'", () => {
+      const status: TransactionStatus = { status: 'ERROR', message: 'timeout' };
+      const decision = shouldRetrySubmission(status, { onError: 'retry' });
+      expect(decision.shouldRetry).toBe(true);
+      expect(decision.reason).toContain('timeout');
+    });
+
+    it("never retries SUCCESS/FAILED even when onError is 'retry'", () => {
+      expect(
+        shouldRetrySubmission({ status: 'SUCCESS', ledger: 1, txHash: 'h' }, { onError: 'retry' }).shouldRetry,
+      ).toBe(false);
+      expect(shouldRetrySubmission({ status: 'FAILED' }, { onError: 'retry' }).shouldRetry).toBe(false);
+    });
+
+    it('rejects an invalid onError policy', () => {
+      const status: TransactionStatus = { status: 'ERROR', message: 'x' };
+      expect(() =>
+        shouldRetrySubmission(status, { onError: 'maybe' as unknown as 'retry' }),
+      ).toThrow(/Invalid onError policy/);
+    });
   });
 });

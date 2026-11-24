@@ -14,6 +14,7 @@ import { TransactionError, ValidationError } from "@/errors";
 import { isValidAddress } from "@/utils/addresses";
 import { validateWithSchema } from "@/schemas";
 import { estimateGas } from "@/utils/gas";
+import { submitIdempotent } from "@/utils/submit-idempotent";
 
 // ---------------------------------------------------------------------------
 // Input schemas
@@ -297,7 +298,12 @@ export class LiquidityModule {
       ? await this.client.simulateTransaction([op], {})
       : null;
 
-    const result = await this.client.submitTransaction([op]);
+    // Idempotent: a timed-out submission is checked on-chain before the
+    // caller retries, so a deposit or withdrawal that landed is not repeated.
+    const result = await submitIdempotent(
+      () => this.client.submitTransaction([op]),
+      this.client.server.getTransaction.bind(this.client.server),
+    );
 
     if (!result.success) {
       throw new TransactionError(
@@ -381,7 +387,12 @@ export class LiquidityModule {
       ? await this.client.simulateTransaction([op], {})
       : null;
 
-    const result = await this.client.submitTransaction([op]);
+    // Idempotent: a timed-out submission is checked on-chain before the
+    // caller retries, so a deposit or withdrawal that landed is not repeated.
+    const result = await submitIdempotent(
+      () => this.client.submitTransaction([op]),
+      this.client.server.getTransaction.bind(this.client.server),
+    );
 
     if (!result.success) {
       throw new TransactionError(

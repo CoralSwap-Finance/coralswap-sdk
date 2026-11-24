@@ -1,6 +1,43 @@
 import EventCursor from "../src/utils/event-cursor";
 
 describe("EventCursor - Timeline Continuity Suite (#657 / #29)", () => {
+  it("keeps same-ledger events when a page has no opaque cursor", async () => {
+    const pages = [
+      [0, 1].map((index) => ({
+        id: String(index),
+        ledger: 100,
+        indexWithinLedger: index,
+        txHash: `tx_${index}`,
+      })),
+      [2, 3].map((index) => ({
+        id: String(index),
+        ledger: 100,
+        indexWithinLedger: index,
+        txHash: `tx_${index}`,
+      })),
+      [],
+    ];
+    const requests: any[] = [];
+    const server: any = {
+      getLatestLedger: jest.fn().mockResolvedValue({ sequence: 500 }),
+      getEvents: jest.fn().mockImplementation(async (request: any) => {
+        requests.push(request);
+        return { events: pages.shift() ?? [], latestLedger: 500 };
+      }),
+    };
+
+    const cursor = new EventCursor(server);
+    const results = await cursor.scan({ fromLedger: 100, limit: 2 });
+
+    expect(results.map((event: any) => event.txHash)).toEqual([
+      "tx_0",
+      "tx_1",
+      "tx_2",
+      "tx_3",
+    ]);
+    expect(requests[1].startLedger).toBe(100);
+  });
+
   it("fetches > page-size event runs on a single ledger without skipping any events", async () => {
     // Generate 250 events all on ledger 100
     const TOTAL_EVENTS = 250;

@@ -367,4 +367,17 @@ describe('SwapModule.swapWithPriceGuard', () => {
     expect(() => swap.setPriceGuardConfig(100n, -1)).toThrow(ValidationError);
     expect(() => swap.setPriceGuardConfig(100n, 10001)).toThrow(ValidationError);
   });
+  it('execute respects request.quote without re-quoting (TOCTOU prevention)', async () => {
+    const swapInstance = new SwapModule(null as any);
+    const getQuoteSpy = jest.spyOn(swapInstance, 'getQuote');
+    const mockBuild = jest.spyOn(swapInstance as any, 'buildSwapOperation').mockReturnValue({} as any);
+    const mockSubmit = jest.spyOn(swapInstance as any, 'submitSwapWithIdempotentResubmission').mockResolvedValue({ txHash: 'RESOLVED_TX' });
+
+    const quote = { amountIn: 10_000_000n, amountOut: 1_000_000n, amountOutMin: 990_000n, deadline: 99999999 } as any;
+    const req = { tokenIn: 'AAA', tokenOut: 'BBB', amount: 10_000_000n, tradeType: 0, quote } as any;
+
+    const res = await swapInstance.execute(req);
+    expect(getQuoteSpy).not.toHaveBeenCalled();
+    expect(mockBuild).toHaveBeenCalledWith(req, quote);
+  });
 });

@@ -1,4 +1,4 @@
-import { estimateGas } from '../src/utils/gas';
+import { estimateGas, parseStroops, formatStroopsAsXLM } from '../src/utils/gas';
 import { SimulationError } from '../src/errors';
 import { SwapModule } from '../src/modules/swap';
 import { LiquidityModule } from '../src/modules/liquidity';
@@ -53,7 +53,7 @@ describe('estimateGas()', () => {
   it('returns fee and feeXLM from a successful simulation', async () => {
     const simulate = jest.fn().mockResolvedValue(makeSuccessSimResult('100'));
     const result = await estimateGas(simulate, []);
-    expect(result.fee).toBe(100);
+    expect(result.fee).toBe(100n);
     expect(result.feeXLM).toBe('0.00001 XLM');
     expect(result.feeUSD).toBeUndefined();
   });
@@ -61,14 +61,14 @@ describe('estimateGas()', () => {
   it('converts stroops to XLM correctly (7 decimal places)', async () => {
     const simulate = jest.fn().mockResolvedValue(makeSuccessSimResult('10000000'));
     const result = await estimateGas(simulate, []);
-    expect(result.fee).toBe(10_000_000);
+    expect(result.fee).toBe(10_000_000n);
     expect(result.feeXLM).toBe('1.00000 XLM');
   });
 
   it('handles fee of zero', async () => {
     const simulate = jest.fn().mockResolvedValue(makeSuccessSimResult('0'));
     const result = await estimateGas(simulate, []);
-    expect(result.fee).toBe(0);
+    expect(result.fee).toBe(0n);
     expect(result.feeXLM).toBe('0.00000 XLM');
   });
 
@@ -125,7 +125,7 @@ describe('SwapModule.execute({ estimateOnly: true })', () => {
       { tokenIn: TOKEN_A, tokenOut: TOKEN_B, amount: 1_000_000n, tradeType: TradeType.EXACT_IN },
       { estimateOnly: true },
     );
-    expect(gas.fee).toBe(200);
+    expect(gas.fee).toBe(200n);
     expect(gas.feeXLM).toBe('0.00002 XLM');
     expect((client.simulateTransaction as jest.Mock)).toHaveBeenCalled();
   });
@@ -182,7 +182,7 @@ describe('LiquidityModule.addLiquidity({ estimateOnly: true })', () => {
       },
       { estimateOnly: true },
     );
-    expect(gas.fee).toBe(300);
+    expect(gas.fee).toBe(300n);
     expect(gas.feeXLM).toBe('0.00003 XLM');
   });
 
@@ -216,7 +216,7 @@ describe('LiquidityModule.removeLiquidity({ estimateOnly: true })', () => {
       },
       { estimateOnly: true },
     );
-    expect(gas.fee).toBe(150);
+    expect(gas.fee).toBe(150n);
     expect(gas.feeXLM).toBe('0.00002 XLM');
   });
 });
@@ -256,7 +256,7 @@ describe('FlashLoanModule.execute({ estimateOnly: true })', () => {
       },
       { estimateOnly: true },
     );
-    expect(gas.fee).toBe(400);
+    expect(gas.fee).toBe(400n);
     expect(gas.feeXLM).toBe('0.00004 XLM');
   });
 
@@ -275,5 +275,32 @@ describe('FlashLoanModule.execute({ estimateOnly: true })', () => {
         { estimateOnly: true },
       ),
     ).rejects.toBeInstanceOf(SimulationError);
+  });
+});
+
+describe('estimateGas() precision', () => {
+  it('preserves fees above 2^53 exactly', async () => {
+    const huge = '9007199254740993123'; // > Number.MAX_SAFE_INTEGER
+    const simulate = jest.fn().mockResolvedValue(makeSuccessSimResult(huge));
+    const result = await estimateGas(simulate, []);
+    expect(result.fee).toBe(BigInt(huge));
+    expect(result.feeRaw).toBe(huge);
+    expect(BigInt(result.feeRaw)).toBe(result.fee);
+    expect(result.feeXLM).toBe('900719925474.09931 XLM');
+  });
+});
+
+describe('parseStroops / formatStroopsAsXLM', () => {
+  it('parses stroop strings without Number conversion', () => {
+    expect(parseStroops('12345678901234567890')).toBe(12345678901234567890n);
+    expect(parseStroops('')).toBe(0n);
+    expect(parseStroops('abc')).toBe(0n);
+  });
+
+  it('formats with 5 decimal places, rounding half-up', () => {
+    expect(formatStroopsAsXLM(100n)).toBe('0.00001 XLM');
+    expect(formatStroopsAsXLM(250n)).toBe('0.00003 XLM');
+    expect(formatStroopsAsXLM(10_000_000n)).toBe('1.00000 XLM');
+    expect(formatStroopsAsXLM(0n)).toBe('0.00000 XLM');
   });
 });

@@ -74,6 +74,8 @@ export interface PageInfo {
   startLedger?: number;
   /** Ledger sequence of the last event returned (or the scan end). */
   endLedger?: number;
+  /** Event position within `endLedger`, when supplied by the RPC response. */
+  endIndexWithinLedger?: number;
   /** Per-request page limit that was used. */
   limit?: number;
   /**
@@ -124,8 +126,10 @@ export type ScanResult<T> = T[] & {
  *   raw strings directly to RPC filters.
  * - Persists a cursor in-memory per-instance and advances it as scans
  *   progress.
- * - Handles pagination by looping while RPC responses are full (== limit)
- *   and advancing the start ledger to `lastEvent.ledger + 1`.
+ * - Handles pagination by preferring the RPC's opaque cursor. If a response
+ *   does not include one, the fallback resumes at the last event's ledger and
+ *   de-duplicates by its `(ledger,indexWithinLedger)` position instead of
+ *   skipping the remainder of a page-spanning ledger.
  *
  * Usage example:
  *
@@ -193,18 +197,11 @@ export class EventCursor {
     fromLedger?: number;
     toLedger?: number;
     limit?: number;
-<<<<<<< HEAD
-  } = {}): Promise<rpc.Api.EventResponse[]> {
-    if (params.fromLedger !== undefined) {
-      this.cursor = Math.max(MIN_START_LEDGER, params.fromLedger);
-    } else {
-      await this.anchorIfNeeded();
-    }
-=======
   } = {}): Promise<Array<rpc.Api.EventResponse> & {
     pageInfo?: {
       startLedger?: number;
       endLedger?: number;
+      endIndexWithinLedger?: number;
       limit?: number;
       hasMore?: boolean;
       nextCursor?: string | null;
@@ -212,8 +209,7 @@ export class EventCursor {
     };
     truncated?: boolean;
   }> {
-    await this.anchorIfNeeded();
->>>>>>> c9779862fa59d2d48796a9d4042fb9f9ed616e6e
+
 
     const limit = params.limit ?? this.defaultLimit;
     if (!Number.isInteger(limit) || limit < 1 || limit > MAX_EVENT_LIMIT) {
@@ -245,6 +241,20 @@ export class EventCursor {
     };
 
     let currentCursor: string | undefined = undefined;
+    // Keys of the last ledger's events from the previous page. Only set when
+    // that page had no cursor and the next request re-reads the same ledger;
+    // events with these keys were already returned and are skipped once.
+    let carriedKeys: Set<string> | null = null;
+
+    // The event id is unique per event on a real RPC; fixtures without one
+    // fall back to the in-ledger index, then to the position in the page.
+    const eventKey = (event: any, pageIndex: number): string => {
+      if (typeof event?.id === 'string' && event.id.length > 0) return `id:${event.id}`;
+      const indexWithinLedger = Number(event?.indexWithinLedger);
+      return Number.isFinite(indexWithinLedger)
+        ? `pos:${event?.ledger}:${indexWithinLedger}`
+        : `page:${event?.ledger}:${pageIndex}`;
+    };
 
     while (true) {
       // Soroban RPC rejects a request that carries both a cursor and a ledger
@@ -274,12 +284,24 @@ export class EventCursor {
         break;
       }
 
-      allEvents.push(...(events as rpc.Api.EventResponse[]));
+      const carried: Set<string> | null = carriedKeys;
+      // On a cursor-less re-read, skip what the previous page already returned:
+      // events before the re-read ledger (an RPC never sends them; adapters
+      // that ignore startLedger do) and the re-read ledger's carried events.
+      const newEvents = carried
+        ? (events as rpc.Api.EventResponse[]).filter(
+            (event, index) =>
+              !(typeof event?.ledger === 'number' && event.ledger < startLedger) &&
+              !carried.has(eventKey(event, index))
+          )
+        : (events as rpc.Api.EventResponse[]);
+      allEvents.push(...newEvents);
 
       const lastEvent = events[events.length - 1] as any;
       const lastLedger =
         lastEvent?.ledger ??
-        (typeof res.latestLedger === 'number' ? res.latestLedger : undefined);
+          (typeof res.latestLedger === 'number' ? res.latestLedger : undefined);
+      const lastIndexWithinLedger = Number(lastEvent?.indexWithinLedger);
 
       const resCursor =
         typeof res?.cursor === "string" && res.cursor.length > 0
@@ -292,6 +314,9 @@ export class EventCursor {
         pageInfo = {
           startLedger,
           endLedger: lastLedger,
+          endIndexWithinLedger: Number.isFinite(lastIndexWithinLedger)
+            ? lastIndexWithinLedger
+            : undefined,
           limit,
           hasMore: events.length >= limit,
           nextCursor: resCursor,
@@ -301,15 +326,27 @@ export class EventCursor {
       if (lastLedger === undefined) break;
 
       if (resCursor) {
+        // A cursor that does not advance would re-request the same page forever.
+        if (resCursor === currentCursor) break;
         currentCursor = resCursor;
         this.cursor = lastLedger;
+        carriedKeys = null;
       } else {
-        startLedger = lastLedger + 1;
+        // Do not advance to ledger + 1: the page may have ended halfway
+        // through a ledger. Re-requesting the same ledger and filtering by
+        // position preserves the remaining events in cursor-less fixtures and
+        // RPC adapters while still terminating on a repeated page.
+        startLedger = lastLedger;
         this.cursor = startLedger;
+        carriedKeys = new Set(
+          (events as any[])
+            .map((event, index) => (event?.ledger === lastLedger ? eventKey(event, index) : null))
+            .filter((key): key is string => key !== null)
+        );
       }
 
       if (toLedger !== undefined && lastLedger > toLedger) break;
-      if (events.length < limit) break;
+      if (events.length < limit || newEvents.length === 0) break;
     }
 
     const pagedEvents = allEvents as typeof allEvents & {

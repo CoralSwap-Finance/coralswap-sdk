@@ -1,3 +1,5 @@
+import { readFileSync } from 'fs';
+import { join } from 'path';
 import { parseChangelog } from '../src/utils/changelog';
 
 describe('Changelog Parser', () => {
@@ -126,5 +128,80 @@ describe('Changelog Parser', () => {
 `;
 
     expect(() => parseChangelog(invalidChangelog)).toThrow('invalid version header');
+  });
+
+  it('parses a [HEAD] entry without a date', () => {
+    const content = `# Changelog
+
+## [HEAD]
+
+### Added
+- Work in progress not yet cut as a release
+
+## [1.0.0] - 2026-01-01
+
+### Changed
+- First release
+`;
+
+    const entries = parseChangelog(content);
+    const head = entries.find((entry) => entry.version === 'HEAD');
+
+    expect(head).toBeDefined();
+    expect(head?.date).toBeUndefined();
+    expect(head?.changes).toEqual([
+      { type: 'added', description: 'Work in progress not yet cut as a release' },
+    ]);
+  });
+
+  it('parses both [Unreleased] and [HEAD] headers in the same changelog', () => {
+    const content = `# Changelog
+
+## [Unreleased]
+
+### Fixed
+- An unreleased fix
+
+## [HEAD]
+
+### Added
+- A head entry
+
+## [1.1.0] - 2026-02-17
+
+### Changed
+- A released change
+`;
+
+    const entries = parseChangelog(content);
+
+    expect(entries.map((entry) => entry.version)).toEqual(
+      expect.arrayContaining(['Unreleased', 'HEAD', '1.1.0']),
+    );
+
+    // Undated headers must not pick up a date from a neighbouring release.
+    expect(entries.find((e) => e.version === 'Unreleased')?.date).toBeUndefined();
+    expect(entries.find((e) => e.version === 'HEAD')?.date).toBeUndefined();
+    expect(entries.find((e) => e.version === '1.1.0')?.date).toBe('2026-02-17');
+  });
+
+  it("parses the repository's own CHANGELOG.md, which opens with [Unreleased]", () => {
+    const repoChangelog = readFileSync(join(__dirname, '..', 'CHANGELOG.md'), 'utf8');
+
+    const entries = parseChangelog(repoChangelog);
+
+    expect(entries.length).toBeGreaterThan(0);
+
+    const unreleased = entries.find((entry) => entry.version === 'Unreleased');
+    expect(unreleased).toBeDefined();
+    expect(unreleased?.date).toBeUndefined();
+    expect(unreleased!.changes.length).toBeGreaterThan(0);
+
+    // A dated release must still parse with its date intact.
+    const dated = entries.filter((entry) => entry.date !== undefined);
+    expect(dated.length).toBeGreaterThan(0);
+    for (const entry of dated) {
+      expect(entry.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    }
   });
 });
