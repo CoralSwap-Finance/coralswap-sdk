@@ -23,3 +23,6 @@ jobs:
 
       - name: Run ESLint
         run: npm run lint
+
+      - name: Check package metadata
+        run: npm run check:package

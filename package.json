@@ -1,6 +1,6 @@
 {
   "name": "@coralswap/sdk",
-  "version": "x.1.0",
+  "version": "2.0.0",
   "description": "TypeScript SDK for CoralSwap -- contract-first AMM on Stellar/Soroban",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -43,12 +43,14 @@
     "test:integration:treasury": "jest --config jest.integration.config.js --testPathPatterns=treasury.integration",
     "test:integration:squid": "jest --config jest.integration.config.js --testPathPatterns=squid.integration",
     "type-check:strict": "tsc --project smoke-test/tsconfig.strict.json",
+    "check:bundle-size": "node scripts/check-bundle-size.mjs",
     "lint": "eslint src/**/*.ts examples/**/*.ts",
     "check:bundle-size": "node scripts/check-bundle-size.mjs",
     "lint:fix": "eslint src/**/*.ts examples/**/*.ts --fix",
     "clean": "rimraf dist",
     "prepare": "npm run build",
-    "prepublishOnly": "npm test && npm run lint",
+    "check:package": "node scripts/check-package.mjs",
+    "prepublishOnly": "npm run clean && npm run build && npm test && npm run lint",
     "examples:simple-swap": "ts-node examples/simple-swap.ts",
     "examples:provide-liquidity": "ts-node examples/provide-liquidity.ts",
     "examples:read-reserves": "ts-node examples/read-reserves.ts",
@@ -78,6 +80,10 @@
   ],
   "author": "CoralSwap Finance",
   "license": "MIT",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/CoralSwap-Finance/coralswap-sdk.git"
