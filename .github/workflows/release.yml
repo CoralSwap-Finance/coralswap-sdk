@@ -24,6 +24,9 @@ permissions:
 jobs:
   release-please:
     runs-on: ubuntu-latest
+    outputs:
+      releases_created: ${{ steps.release.outputs.releases_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
     steps:
       - name: Run release-please
         uses: googleapis/release-please-action@v5
@@ -40,3 +43,40 @@ jobs:
           echo "🚀 Release created!"
           echo "  Tag: ${{ steps.release.outputs.tag_name }}"
           echo "  Version: ${{ steps.release.outputs.version }}"
+
+  publish:
+    name: Publish to npm
+    needs: release-please
+    if: ${{ needs.release-please.outputs.releases_created == 'true' }}
+    runs-on: ubuntu-latest
+    # Least privilege: read the repo and mint an OIDC token for npm trusted
+    # publishing. No npm token is stored.
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          cache: npm
+
+      - name: Install dependencies (no lifecycle scripts)
+        run: npm ci --ignore-scripts
+
+      - name: Check package metadata
+        run: npm run check:package
+
+      - name: Clean build
+        run: npm run clean && npm run build
+
+      - name: Test
+        run: npm test
+
+      - name: Publish with provenance
+        run: npm publish --provenance --access public --ignore-scripts
