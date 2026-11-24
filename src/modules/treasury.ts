@@ -11,6 +11,7 @@ import {
   PoolRevenue,
   RevenueData,
 } from "@/types/treasury";
+import { defaultDecimalsResolver } from "@/utils/index";
 
 const LEDGERS_PER_30_DAYS = 518_400; // 30 days × 86 400 s/day ÷ 5 s/ledger
 
@@ -461,8 +462,14 @@ export class TreasuryModule {
 
         const price0 = priceMap.get(token0) ?? 0;
         const price1 = priceMap.get(token1) ?? 0;
+        
+        const [dec0, dec1] = await Promise.all([
+          defaultDecimalsResolver.resolveDecimals(this.client, token0),
+          defaultDecimalsResolver.resolveDecimals(this.client, token1),
+        ]);
+        
         const poolValueUSD =
-          (Number(reserve0) / 1e7) * price0 + (Number(reserve1) / 1e7) * price1;
+          (Number(reserve0) / (10 ** dec0)) * price0 + (Number(reserve1) / (10 ** dec1)) * price1;
         const shareRatio = Number(lpBalance) / Number(totalSupply);
 
         holdings.push({

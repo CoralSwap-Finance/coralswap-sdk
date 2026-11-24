@@ -26,6 +26,7 @@ import {
 } from '@/types/monitoring';
 import { SyncEvent, SwapEvent } from '@/types/events';
 import { ValidationError } from '@/errors';
+import { defaultDecimalsResolver } from "@/utils/index";
 import { validateAddress } from '@/utils/validation';
 import { LEDGER_CLOSE_INTERVAL_SECONDS } from '@/utils/ledger';
 import { TypedEventCursor, MIN_START_LEDGER } from '@/utils/event-cursor';
@@ -33,7 +34,7 @@ import { MonitoringPeriodSchema, validateWithSchema } from '@/schemas';
 import { TreasuryModule, TreasuryModuleOptions } from '@/modules/treasury';
 import { SwapModule } from '@/modules/swap';
 
-const STROOP = 1e7;
+
 /** Cache TTL for getProtocolMetrics()/getPoolMetrics(), per acceptance criteria. */
 const METRICS_CACHE_TTL_MS = 60_000;
 /** Approximate ledger count for a 24h window, derived from the shared ledger close interval. */
@@ -270,7 +271,12 @@ export class MonitoringModule {
           activePools++;
           const price0 = priceMap.get(token0) ?? 0;
           const price1 = priceMap.get(token1) ?? 0;
-          tvlUSD += (Number(reserve0) / STROOP) * price0 + (Number(reserve1) / STROOP) * price1;
+          const [dec0, dec1] = await Promise.all([
+            defaultDecimalsResolver.resolveDecimals(this.client, token0),
+            defaultDecimalsResolver.resolveDecimals(this.client, token1),
+          ]);
+          
+          tvlUSD += (Number(reserve0) / (10 ** dec0)) * price0 + (Number(reserve1) / (10 ** dec1)) * price1;
         } catch {
           // Skip pools we can't read; don't fail the whole aggregate.
         }
@@ -287,10 +293,18 @@ export class MonitoringModule {
 
     const totalSwaps24h = events.length;
     const uniqueUsers24h = new Set(events.map((e) => e.sender)).size;
-    const volume24hUSD = events.reduce((sum, e) => {
+    
+    const eventDecimals = await Promise.all(
+      events.map(e => defaultDecimalsResolver.resolveDecimals(this.client, e.tokenIn))
+    );
+    
+    let volume24hUSD = 0;
+    for (let i = 0; i < events.length; i++) {
+      const e = events[i];
       const price = priceMap.get(e.tokenIn) ?? 0;
-      return sum + (Number(e.amountIn) / STROOP) * price;
-    }, 0);
+      volume24hUSD += (Number(e.amountIn) / (10 ** eventDecimals[i])) * price;
+    }
+    
     const avgSwapSizeUSD = totalSwaps24h > 0 ? volume24hUSD / totalSwaps24h : 0;
 
     const result: ProtocolMetrics = {
@@ -330,7 +344,12 @@ export class MonitoringModule {
 
     const price0 = priceMap.get(token0) ?? 0;
     const price1 = priceMap.get(token1) ?? 0;
-    const tvlUSD = (Number(reserve0) / STROOP) * price0 + (Number(reserve1) / STROOP) * price1;
+    const [dec0, dec1] = await Promise.all([
+      defaultDecimalsResolver.resolveDecimals(this.client, token0),
+      defaultDecimalsResolver.resolveDecimals(this.client, token1),
+    ]);
+    
+    const tvlUSD = (Number(reserve0) / (10 ** dec0)) * price0 + (Number(reserve1) / (10 ** dec1)) * price1;
 
     const { volume24hUSD, totalSwaps24h, uniqueUsers24h } = await this.fetchPairSwapTotals(
       pairAddress,
@@ -890,7 +909,18 @@ export class MonitoringModule {
   }
 
   private async fetchLiquidityValue(_address: string): Promise<number> {
-    try { const r = await this.client.pair(_address).getReserves(); return Number(r.reserve0 + r.reserve1) / 1e7; }
+    try {
+      const pair = this.client.pair(_address);
+      const [r, { token0, token1 }] = await Promise.all([
+        pair.getReserves(),
+        pair.getTokens()
+      ]);
+      const [dec0, dec1] = await Promise.all([
+        defaultDecimalsResolver.resolveDecimals(this.client, token0),
+        defaultDecimalsResolver.resolveDecimals(this.client, token1)
+      ]);
+      return Number(r.reserve0) / (10 ** dec0) + Number(r.reserve1) / (10 ** dec1);
+    }
     catch { return 0; }
   }
 

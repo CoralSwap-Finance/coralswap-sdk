@@ -211,6 +211,20 @@ describe('StopLossModule', () => {
       ).rejects.toThrow(ValidationError);
     });
 
+    it('preserves the first legacy validation message and keeps all zod issues', async () => {
+      const err = await stopLoss
+        .createStopLoss(makeParams({ tokenIn: '', amount: 0n, tokenOut: 'bad' }), mockSigner)
+        .catch((e) => e);
+
+      expect(err).toBeInstanceOf(ValidationError);
+      expect(err.message).toBe('tokenIn must not be empty');
+      expect(err.details?.zodErrors.map((issue: { message: string }) => issue.message)).toEqual([
+        'tokenIn must not be empty',
+        'tokenOut is not a valid Stellar address: bad',
+        'amount must be greater than 0, got 0',
+      ]);
+    });
+
     it('throws ValidationError when token addresses are identical', async () => {
       await expect(
         stopLoss.createStopLoss(
