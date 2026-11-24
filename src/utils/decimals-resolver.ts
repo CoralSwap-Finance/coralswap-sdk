@@ -28,6 +28,7 @@
  */
 
 import type { CoralSwapClient } from "@/client";
+import { validateTokenDecimals, type DecimalsResult } from "@/utils/validate-decimals";
 
 /** Default maximum number of token addresses to keep in the cache. */
 export const DEFAULT_DECIMALS_CACHE_CAPACITY = 512;
@@ -127,7 +128,43 @@ export class DecimalsResolver {
   // ---------------------------------------------------------------------------
 
   /**
+   * Resolve the decimal count for `address` with source tracking.
+   *
+   * Returns the cached value when it is still valid.  On a cache miss (or
+   * TTL expiry) the method fetches fresh metadata from the chain via
+   * `client.lpToken(address).metadata()` and stores the result.
+   *
+   * @param client  - A live {@link CoralSwapClient} instance used for on-chain
+   *                  metadata fetches.
+   * @param address - The Stellar/Soroban contract address of the token.
+   * @returns Object with decimals and source indicator
+   * @throws {InvalidTokenMetadataError} If the on-chain decimals value is out of valid range
+   */
+  async resolveWithSource(client: CoralSwapClient, address: string): Promise<DecimalsResult> {
+    const cached = this.get(address);
+    if (cached !== undefined) {
+      return { decimals: cached, source: 'contract' };
+    }
+
+    try {
+      const meta = await client.lpToken(address).metadata();
+      const validated = validateTokenDecimals(meta.decimals, address);
+      this.set(address, validated);
+      return { decimals: validated, source: 'contract' };
+    } catch (error) {
+      // Rethrow validation errors
+      if (error instanceof Error && error.name === 'InvalidTokenMetadataError') {
+        throw error;
+      }
+      // RPC/network errors: return fallback without caching
+      return { decimals: 7, source: 'fallback' };
+    }
+  }
+
+  /**
    * Resolve the decimal count for `address`.
+   *
+   * @deprecated Use {@link resolveWithSource} to distinguish contract vs fallback values.
    *
    * Returns the cached value when it is still valid.  On a cache miss (or
    * TTL expiry) the method fetches fresh metadata from the chain via
@@ -142,20 +179,8 @@ export class DecimalsResolver {
    * @returns The token's decimal precision (e.g. `7`).
    */
   async resolve(client: CoralSwapClient, address: string): Promise<number> {
-    const cached = this.get(address);
-    if (cached !== undefined) {
-      return cached;
-    }
-
-    try {
-      const meta = await client.lpToken(address).metadata();
-      this.set(address, meta.decimals);
-      return meta.decimals;
-    } catch {
-      // Standard Soroban fallback — do NOT cache the fallback so that a
-      // transient RPC error does not permanently poison the entry.
-      return 7;
-    }
+    const result = await this.resolveWithSource(client, address);
+    return result.decimals;
   }
 
   /**

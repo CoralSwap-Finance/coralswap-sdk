@@ -4,11 +4,24 @@
   "description": "TypeScript SDK for CoralSwap -- contract-first AMM on Stellar/Soroban",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "require": "./dist/index.js",
+      "import": "./dist/index.js"
+    },
+    "./rwa": {
+      "types": "./dist/rwa.d.ts",
+      "require": "./dist/rwa.js",
+      "import": "./dist/rwa.js"
+    }
+  },
   "files": [
-    "dist/**/*"
+    "dist/**/*",
+    "!dist/test/**/*"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsc --project tsconfig.build.json && node scripts/rewrite-imports.mjs",
     "build:watch": "tsc --watch",
     "test": "jest",
     "test:watch": "jest --watch",
@@ -30,10 +43,8 @@
     "test:integration:treasury": "jest --config jest.integration.config.js --testPathPatterns=treasury.integration",
     "test:integration:squid": "jest --config jest.integration.config.js --testPathPatterns=squid.integration",
     "type-check:strict": "tsc --project smoke-test/tsconfig.strict.json",
-    "lint": "eslint src/**/*.ts",
-    "check:bundle-size": "node scripts/check-bundle-size.mjs",
-    "lint:fix": "eslint src/**/*.ts --fix",
     "lint": "eslint src/**/*.ts examples/**/*.ts",
+    "check:bundle-size": "node scripts/check-bundle-size.mjs",
     "lint:fix": "eslint src/**/*.ts examples/**/*.ts --fix",
     "clean": "rimraf dist",
     "prepare": "npm run build",
@@ -53,7 +64,6 @@
     "check:changelog": "ts-node --transpile-only scripts/check-changelog.ts",
     "examples:signer": "ts-node examples/signer.ts",
     "examples:serialized-submission-bot": "ts-node examples/serialized-submission-bot.ts",
-    "examples:tax-reporting": "ts-node examples/tax-reporting.ts",
     "docs:errors": "ts-node scripts/generate-error-doc.ts"
   },
   "keywords": [
@@ -84,13 +94,13 @@
     "@typescript/native": "npm:typescript@^7.0.2",
     "dotenv": "^18.0.7",
     "esbuild": "^0.28.2",
-    "eslint": "^10.8.0",
     "eslint": "^10.12.0",
     "fast-check": "^4.10.2",
     "jest": "^30.5.2",
     "rimraf": "^6.0.0",
     "ts-jest": "^29.4.14",
     "ts-node": "^10.9.2",
+    "tsc-alias": "^1.9.10",
     "tsconfig-paths": "^4.2.0",
     "typedoc": "^0.28.20",
     "typescript": "npm:@typescript/typescript6@^6.0.2"
