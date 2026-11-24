@@ -42,8 +42,39 @@
  * is no silent `0`/full-slippage default: `placeLimitOrder` rejects a missing
  * or non-positive `targetPrice` before any transaction is built.
  *
+ * ## Price unit, scale and decimals
+ *
+ * A price is `tokenOut` **human units per `tokenIn` human unit**. It is encoded
+ * on-chain as an `i128` fixed-point integer with scale `PRICE_SCALE = 1e9`
+ * (nine decimals), never as a JavaScript `number` string: `0.0000005` becomes
+ * `500n`, and `0.1 + 0.2` is rounded to `300000000n` rather than sending
+ * `0.30000000000000004`. The canonical `targetPrice` type is therefore a
+ * scaled `bigint`; the legacy `number` overload is deprecated, rounds
+ * explicitly to nine decimals and rejects exponent-form numbers such as
+ * `5e-7`.
+ *
+ * Token decimals are not part of the price unit: callers convert their
+ * base-unit `amountIn`/`amountOut` with each token's own decimals before
+ * comparing with a limit bound. Reads expose the exact integer as
+ * `OrderStatus.executionPriceScaled`; `executionPrice` is a display-only
+ * `number` derived from it via {@link priceToNumber}, and `formatPrice`
+ * renders the exact decimal string. Legacy `u32`/`u64`/`i32`/`i64` prices are
+ * interpreted as whole human units and scaled on read; `i128` and legacy
+ * decimal strings are already at `PRICE_SCALE`.
+ *
  * @example
- * // Place a limit order and poll until filled
+ * // Preferred: exact fixed-point bound (0.0000005 tokenOut per tokenIn)
+ * await limit.placeLimitOrder({
+ *   tokenIn: 'CA...',
+ *   tokenOut: 'CB...',
+ *   amountIn: 100_000_000n,
+ *   targetPrice: 500n,
+ *   expiry: Math.floor(Date.now() / 1000) + 86400,
+ *   pairAddress: 'CP...',
+ * });
+ *
+ * @example
+ * // Place a limit order and poll until filled (legacy number form)
  * const sdk = new CoralSwapSDK({ ... });
  * const limit = sdk.modules.limitOrders;
  *
@@ -100,6 +131,13 @@ import {
 import { OrderNotFoundError, InvalidOperationError, ValidationError } from '@/errors';
 import { validateAddress, validatePositiveAmount, validateDistinctTokens } from '@/utils/validation';
 import { decodeI128 } from '@/utils/numeric';
+import {
+  encodeTargetPrice,
+  formatPrice,
+  parsePriceDecimal,
+  priceToNumber,
+  PRICE_SCALE,
+} from '@/utils/price';
 
 /**
  * Extract a string from an `xdr.ScVal`.
@@ -182,6 +220,38 @@ export function scValToBigInt(val: xdr.ScVal | undefined): bigint {
   throw new CoralSwapSDKError("PARSING_ERROR", `Expected bigint type, got ${tag}`);
 }
 
+/**
+ * Decode a price ScVal into the exact fixed-point integer at {@link PRICE_SCALE}.
+ *
+ * `i128` values (the new `placeLimitOrder` encoding) and legacy string values
+ * are already scaled. Legacy `u32`/`u64`/`i32`/`i64` values are whole human
+ * units and are multiplied by the scale. Void/missing values decode to
+ * `undefined`.
+ *
+ * @param val - Price ScVal returned by the contract.
+ * @returns The exact scaled price, or `undefined` when absent.
+ * @throws {@link CoralSwapSDKError} with code `PARSING_ERROR` for bad values.
+ */
+export function decodeScaledPrice(val: xdr.ScVal | undefined): bigint | undefined {
+  if (!val || val.type === 'scvVoid') return undefined;
+  const tag = val.type;
+  if (tag === 'scvString' || tag === 'scvSymbol' || tag === 'scvBytes') {
+    try {
+      return parsePriceDecimal(scValToString(val));
+    } catch (err) {
+      throw new CoralSwapSDKError("PARSING_ERROR", `Invalid price: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  const raw = scValToBigInt(val);
+  return tag === 'scvI128' ? raw : raw * PRICE_SCALE;
+}
+
+/** Exact decimal string for a scaled price; never uses exponent notation. */
+export { formatPrice };
+
+/** Display-only number for a scaled price; use {@link formatPrice} for exact output. */
+export { priceToNumber };
+
 function scMapToRecord(map: xdr.ScMapEntry[]): Record<string, xdr.ScVal> {
   const fields: Record<string, xdr.ScVal> = {};
   for (const entry of map) {
@@ -229,7 +299,8 @@ export function parseCancelResult(result: xdr.ScVal): { refundedAmount: bigint; 
  * Expects an `scvMap` with these keys (snake_case or camelCase):
  * - `state` → string
  * - `fill_percent` / `fillPercent` → number (validated 0–100)
- * - `execution_price` / `executionPrice` → optional number
+ * - `execution_price` / `executionPrice` → optional fixed-point price (`i128`,
+ *   legacy integer, or legacy decimal string)
  * - `filled_at` / `filledAt` → optional number
  *
  * @param result - The returned ScVal from the contract.
@@ -256,13 +327,20 @@ export function parseOrderStatus(result: xdr.ScVal): OrderStatus {
     throw new CoralSwapSDKError("PARSING_ERROR", `Invalid fillPercent: ${fillPercent}`);
   }
 
-  const executionPrice = scValToOptionalNumber(fields['execution_price'] ?? fields['executionPrice']);
+  // Decode losslessly first; `executionPrice` is only a display helper.
+  const executionPriceScaled = decodeScaledPrice(
+    fields['execution_price'] ?? fields['executionPrice'],
+  );
+  const executionPrice = executionPriceScaled === undefined
+    ? undefined
+    : priceToNumber(executionPriceScaled);
   const filledAt = scValToOptionalNumber(fields['filled_at'] ?? fields['filledAt']);
 
   return {
     state: stateStr as LimitOrderState,
     fillPercent,
     executionPrice,
+    executionPriceScaled,
     filledAt,
   };
 }
@@ -317,7 +395,12 @@ export function parseOrderDetails(result: xdr.ScVal): LimitOrderDetails {
     throw new CoralSwapSDKError("PARSING_ERROR", `Invalid fillPercent: ${fillPercent}`);
   }
 
-  const executionPrice = scValToOptionalNumber(fields['execution_price'] ?? fields['executionPrice']);
+  const executionPriceScaled = decodeScaledPrice(
+    fields['execution_price'] ?? fields['executionPrice'],
+  );
+  const executionPrice = executionPriceScaled === undefined
+    ? undefined
+    : priceToNumber(executionPriceScaled);
   const filledAt = scValToOptionalNumber(fields['filled_at'] ?? fields['filledAt']);
   const amountFilled = scValToBigInt(fields['amount_filled'] ?? fields['amountFilled']);
   const amountRemaining = scValToBigInt(fields['amount_remaining'] ?? fields['amountRemaining']);
@@ -329,6 +412,7 @@ export function parseOrderDetails(result: xdr.ScVal): LimitOrderDetails {
       state: stateStr as LimitOrderState,
       fillPercent,
       executionPrice,
+      executionPriceScaled,
       filledAt,
     },
     amountFilled,
@@ -423,11 +507,29 @@ const IntervalMsSchema = z
  */
 const LimitOrderParamsSchema = z
   .object({
+    // Canonical input is a scaled bigint. The number form is deprecated and is
+    // normalised here with explicit rounding; exponent-form numbers are
+    // rejected by encodeTargetPrice rather than emitted as "5e-7".
     targetPrice: z
-      .number({ error: 'targetPrice must be positive' })
-      .finite('targetPrice must be positive')
-      .positive('targetPrice must be positive')
-      .max(MAX_TARGET_PRICE, 'targetPrice exceeds maximum allowed range (1,000,000)'),
+      .union([
+        z.bigint({ error: 'targetPrice must be positive' }),
+        z
+          .number({ error: 'targetPrice must be positive' })
+          .finite('targetPrice must be positive')
+          .positive('targetPrice must be positive')
+          .max(MAX_TARGET_PRICE, 'targetPrice exceeds maximum allowed range (1,000,000)'),
+      ])
+      .superRefine((value, ctx) => {
+        try {
+          encodeTargetPrice(value);
+        } catch (err) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: err instanceof Error ? err.message : 'targetPrice must be positive',
+          });
+        }
+      })
+      .transform((value) => encodeTargetPrice(value)),
     expiry: z
       .number({ error: 'expiry must be a Unix timestamp in the future' })
       .refine((value) => value > Math.floor(Date.now() / 1000), {
@@ -875,7 +977,9 @@ export class LimitOrderModule {
       nativeToScVal(params.tokenIn, { type: 'address' }),
       nativeToScVal(params.tokenOut, { type: 'address' }),
       nativeToScVal(params.amountIn, { type: 'i128' }),
-      xdr.ScVal.scvString(String(params.targetPrice)),
+      // Single encode path shared by place and cancel-and-replace: an i128 at
+      // PRICE_SCALE, never String(number) which can emit "5e-7" or float noise.
+      nativeToScVal(encodeTargetPrice(params.targetPrice as bigint | number), { type: 'i128' }),
       nativeToScVal(params.expiry, { type: 'u64' }),
       nativeToScVal(params.pairAddress, { type: 'address' }),
       nativeToScVal(orderSigner, { type: 'address' }),

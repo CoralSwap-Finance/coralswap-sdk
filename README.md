@@ -52,6 +52,23 @@ The SDK follows a consistent typed-error model instead of ad hoc string matching
 
 This means a module either returns a concrete value, returns a sentinel like `null`/`false` for a known unavailable condition, or throws a typed SDK error for a real failure. There is no hidden "best-effort" API layer silently rewriting the protocol state.
 
+## Limit order prices
+
+`LimitOrderModule.placeLimitOrder` takes an exact, required execution bound. The price unit is **tokenOut human units per tokenIn human unit**; it is stored on-chain as an `i128` fixed-point integer at scale `1e9` (nine decimals), never as a JavaScript number string. Token decimals are not baked into the price: convert base-unit amounts with each token's own decimals before comparing them with the bound.
+
+```typescript
+const { orderId } = await limit.placeLimitOrder({
+  tokenIn: 'CA...',
+  tokenOut: 'CB...',
+  amountIn: 100_000_000n,
+  targetPrice: 500n, // 0.0000005 tokenOut per tokenIn, exactly
+  expiry: Math.floor(Date.now() / 1000) + 86400,
+  pairAddress: 'CP...',
+});
+```
+
+The `number` overload (`targetPrice: 0.5`) is deprecated: it is rounded explicitly to nine decimals and exponent-form numbers such as `5e-7` are rejected, because `String(5e-7)` emits `"5e-7"`. Use the scaled bigint for any price below `0.000001`. Reads return the exact integer in `status.executionPriceScaled`; `status.executionPrice` is a display-only `number`, and `formatPrice(scaled)` renders the exact decimal string without exponent notation. Legacy integer prices returned by the contract are treated as whole human units and scaled on read.
+
 ## Transaction confirmation polling
 
 `client.poller().poll(hash, options)` checks Soroban RPC until a transaction is confirmed or the polling limit is reached. A confirmed transaction returns `success: true`. Otherwise `result.error.code` distinguishes `TX_FAILED` (on-chain failure), `TX_NOT_CONFIRMED` (the last RPC response was `NOT_FOUND` after all attempts), and `TX_TIMEOUT` (the last attempt failed at the RPC/network level, or three consecutive RPC errors occurred). Transient RPC failures are retried; a responding endpoint resets the consecutive-failure count. Existing `AbortSignal` cancellation between attempts is unchanged.
