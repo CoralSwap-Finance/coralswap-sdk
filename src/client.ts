@@ -285,7 +285,7 @@ export class CoralSwapClient {
       }
       this._factory = new FactoryClient(
           this.networkConfig.factoryAddress,
-          this.server,
+          () => this.server,
           this.networkConfig.networkPassphrase,
           this.getRetryOptions(),
           this.logger,
@@ -314,7 +314,7 @@ export class CoralSwapClient {
       }
       this._router = new RouterClient(
           this.networkConfig.routerAddress,
-          this.server,
+          () => this.server,
           this.networkConfig.networkPassphrase,
           this.getRetryOptions(),
           this.logger,
