@@ -1,4 +1,5 @@
 import { Address, Asset, StrKey, hash, xdr } from "@stellar/stellar-sdk";
+import { ValidationError } from "@/errors";
 
 /**
  * Address utilities for Stellar/Soroban address handling.
@@ -119,8 +120,20 @@ export function isNativeToken(identifier: string): boolean {
  * deployed by the network).
  */
 export function getNativeAssetContractAddress(networkPassphrase: string): string {
-  const native = Asset.native();
-  return native.contractId(networkPassphrase);
+  if (typeof networkPassphrase !== "string" || !networkPassphrase.trim()) {
+    throw new ValidationError("Network passphrase must not be empty", {
+      networkPassphrase,
+    });
+  }
+
+  try {
+    return Asset.native().contractId(networkPassphrase);
+  } catch (error) {
+    throw new ValidationError("Failed to derive the native asset contract address", {
+      networkPassphrase,
+      cause: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
 
 /**
@@ -160,7 +173,12 @@ export function resolveTokenIdentifier(
  * ```
  */
 export function sortTokens(tokenA: string, tokenB: string): [string, string] {
-  if (tokenA === tokenB) throw new Error("Identical tokens");
+  if (tokenA === tokenB) {
+    throw new ValidationError("Identical tokens cannot be sorted", {
+      tokenA,
+      tokenB,
+    });
+  }
   return tokenA < tokenB ? [tokenA, tokenB] : [tokenB, tokenA];
 }
 
@@ -212,7 +230,18 @@ export function truncateAddress(address: string, chars: number = 4): string {
  * ```
  */
 export function toScAddress(address: string): Address {
-  return Address.fromString(address);
+  if (!isValidAddress(address)) {
+    throw new ValidationError(`Invalid Stellar address: ${address}`, { address });
+  }
+
+  try {
+    return Address.fromString(address);
+  } catch (error) {
+    throw new ValidationError(`Failed to convert Stellar address: ${address}`, {
+      address,
+      cause: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
 
 /**
@@ -255,28 +284,56 @@ export function getPairAddress(
   tokenB: string,
   networkPassphrase: string,
 ): string {
+  if (!isValidAddress(factoryAddress)) {
+    throw new ValidationError(`Invalid factory address: ${factoryAddress}`, {
+      factoryAddress,
+    });
+  }
+  if (!isValidAddress(tokenA)) {
+    throw new ValidationError(`Invalid token address: ${tokenA}`, { tokenA });
+  }
+  if (!isValidAddress(tokenB)) {
+    throw new ValidationError(`Invalid token address: ${tokenB}`, { tokenB });
+  }
+  if (typeof networkPassphrase !== "string" || !networkPassphrase.trim()) {
+    throw new ValidationError("Network passphrase must not be empty", {
+      networkPassphrase,
+    });
+  }
+
   const [token0, token1] = sortTokens(tokenA, tokenB);
 
-  const salt = hash(
-    Buffer.concat([
-      Address.fromString(token0).toBuffer(),
-      Address.fromString(token1).toBuffer(),
-    ]),
-  );
+  try {
+    const salt = hash(
+      Buffer.concat([
+        Address.fromString(token0).toBuffer(),
+        Address.fromString(token1).toBuffer(),
+      ]),
+    );
 
-  const networkId = hash(Buffer.from(networkPassphrase));
+    const networkId = hash(Buffer.from(networkPassphrase));
 
-  const preimage = xdr.HashIdPreimage.envelopeTypeContractId(
-    new xdr.HashIdPreimageContractId({
-      networkId,
-      contractIdPreimage: xdr.ContractIdPreimage.contractIdPreimageFromAddress(
-        new xdr.ContractIdPreimageFromAddress({
-          address: Address.fromString(factoryAddress).toScAddress(),
-          salt,
-        }),
-      ),
-    }),
-  );
+    const preimage = xdr.HashIdPreimage.envelopeTypeContractId(
+      new xdr.HashIdPreimageContractId({
+        networkId,
+        contractIdPreimage: xdr.ContractIdPreimage.contractIdPreimageFromAddress(
+          new xdr.ContractIdPreimageFromAddress({
+            address: Address.fromString(factoryAddress).toScAddress(),
+            salt,
+          }),
+        ),
+      }),
+    );
 
-  return StrKey.encodeContract(hash(preimage.toXdr()));
+    return StrKey.encodeContract(hash(preimage.toXdr()));
+  } catch (error) {
+    if (error instanceof ValidationError) throw error;
+    throw new ValidationError("Failed to derive pair contract address", {
+      factoryAddress,
+      tokenA,
+      tokenB,
+      networkPassphrase,
+      cause: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
