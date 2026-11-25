@@ -2,6 +2,7 @@ import { xdr, rpc } from "@stellar/stellar-sdk";
 import { ValidationError } from "@/errors";
 import { EventParser } from "./events";
 import { CoralSwapEvent } from "@/types/events";
+import { buildEventFilters } from "./event-filters";
 
 /**
  * Lowest ledger sequence that can legally be passed as `startLedger`.
@@ -180,27 +181,21 @@ export class EventCursor {
   }
 
   /**
-   * Scan events using the server.getEvents API, handling cursor anchoring,
-   * topic encoding, persistence, and simple pagination.
+   * Page over `getEvents` results one RPC page at a time. Consumers can stop
+   * as soon as they have enough matching events, leaving the cursor at the
+   * last page actually consumed. This is what lets reports apply their own
+   * filters and limit *before* the scan stops.
    */
-  async scan(params: {
+  async *scanPages(params: {
     contractIds?: string[];
     topics?: string[];
     fromLedger?: number;
     toLedger?: number;
     limit?: number;
-  } = {}): Promise<Array<rpc.Api.EventResponse> & {
-    pageInfo?: {
-      startLedger?: number;
-      endLedger?: number;
-      endIndexWithinLedger?: number;
-      limit?: number;
-      hasMore?: boolean;
-      nextCursor?: string | null;
-      [key: string]: unknown;
-    };
-    truncated?: boolean;
-  }> {
+  } = {}): AsyncGenerator<{
+    events: rpc.Api.EventResponse[];
+    pageInfo: PageInfo;
+  }, void, unknown> {
     // The anchor only supplies a default start; an explicit fromLedger needs no
     // round-trip to the network tip.
     if (params.fromLedger === undefined) await this.anchorIfNeeded();
@@ -212,27 +207,12 @@ export class EventCursor {
         { field: "limit", constraint: `integer 1-${MAX_EVENT_LIMIT}`, actual: limit },
       );
     }
-    const toLedger = params.toLedger; // may be undefined -> will be treated as open
+    const toLedger = params.toLedger; // may be undefined -> treated as open-ended
 
     let startLedger = params.fromLedger ?? this.cursor!;
-    const contractIds = params.contractIds ?? [];
     const topics = this.encodeTopics(params.topics);
-
-    const allEvents: rpc.Api.EventResponse[] = [];
-    let pageInfo: {
-      startLedger?: number;
-      endLedger?: number;
-      limit?: number;
-      hasMore?: boolean;
-      nextCursor?: string | null;
-      [key: string]: unknown;
-    } = {
-      startLedger,
-      endLedger: startLedger,
-      limit,
-      hasMore: false,
-      nextCursor: null,
-    };
+    // Split the registry across RPC-legal filters (5 IDs/filter, 5 filters).
+    const filters = buildEventFilters(params.contractIds, topics ?? []);
 
     let currentCursor: string | undefined = undefined;
     // Keys of the last ledger's events from the previous page. Only set when
@@ -257,13 +237,7 @@ export class EventCursor {
       // beyond the page limit inside a single ledger are never skipped.
       const request: Record<string, unknown> = {
         ...(currentCursor ? {} : { startLedger }),
-        filters: [
-          {
-            type: 'contract',
-            contractIds,
-            topics: topics ?? [],
-          },
-        ],
+        filters,
         limit,
       };
 
@@ -275,7 +249,7 @@ export class EventCursor {
       const events = Array.isArray(res?.events) ? res.events : [];
       if (events.length === 0) {
         if (typeof res?.latestLedger === 'number') this.cursor = res.latestLedger;
-        break;
+        return;
       }
 
       const carried: Set<string> | null = carriedKeys;
@@ -289,7 +263,6 @@ export class EventCursor {
               !carried.has(eventKey(event, index))
           )
         : (events as rpc.Api.EventResponse[]);
-      allEvents.push(...newEvents);
 
       const lastEvent = events[events.length - 1] as any;
       const lastLedger =
@@ -304,51 +277,85 @@ export class EventCursor {
           ? lastEvent.pagingToken
           : null;
 
-      if (lastLedger !== undefined) {
-        pageInfo = {
-          startLedger,
-          endLedger: lastLedger,
-          endIndexWithinLedger: Number.isFinite(lastIndexWithinLedger)
-            ? lastIndexWithinLedger
-            : undefined,
-          limit,
-          hasMore: events.length >= limit,
-          nextCursor: resCursor,
-        };
-      }
+      const pageInfo: PageInfo = {
+        startLedger,
+        endLedger: lastLedger,
+        endIndexWithinLedger: Number.isFinite(lastIndexWithinLedger)
+          ? lastIndexWithinLedger
+          : undefined,
+        limit,
+        hasMore: events.length >= limit,
+        nextCursor: resCursor,
+      };
 
-      if (lastLedger === undefined) break;
+      if (lastLedger === undefined) {
+        if (newEvents.length > 0) yield { events: newEvents, pageInfo };
+        return;
+      }
 
       if (resCursor) {
         // A cursor that does not advance would re-request the same page forever.
-        if (resCursor === currentCursor) break;
+        if (resCursor === currentCursor) {
+          if (newEvents.length > 0) yield { events: newEvents, pageInfo };
+          return;
+        }
         currentCursor = resCursor;
-        this.cursor = lastLedger;
-        carriedKeys = null;
       } else {
         // Do not advance to ledger + 1: the page may have ended halfway
         // through a ledger. Re-requesting the same ledger and filtering by
         // position preserves the remaining events in cursor-less fixtures and
         // RPC adapters while still terminating on a repeated page.
         startLedger = lastLedger;
-        this.cursor = startLedger;
         carriedKeys = new Set(
           (events as any[])
             .map((event, index) => (event?.ledger === lastLedger ? eventKey(event, index) : null))
             .filter((key): key is string => key !== null)
         );
       }
+      this.cursor = lastLedger;
 
-      if (toLedger !== undefined && lastLedger > toLedger) break;
-      if (events.length < limit || newEvents.length === 0) break;
+      if (newEvents.length > 0) yield { events: newEvents, pageInfo };
+
+      if (toLedger !== undefined && lastLedger > toLedger) return;
+      if (events.length < limit || newEvents.length === 0) return;
+    }
+  }
+
+  /**
+   * Scan events using the server.getEvents API, handling cursor anchoring,
+   * topic encoding, persistence, and simple pagination.
+   */
+  async scan(params: {
+    contractIds?: string[];
+    topics?: string[];
+    fromLedger?: number;
+    toLedger?: number;
+    limit?: number;
+  } = {}): Promise<Array<rpc.Api.EventResponse> & {
+    pageInfo?: PageInfo;
+    truncated?: boolean;
+  }> {
+    const limit = params.limit ?? this.defaultLimit;
+    const allEvents: rpc.Api.EventResponse[] = [];
+    let lastPage: PageInfo = {
+      startLedger: params.fromLedger ?? this.cursor,
+      endLedger: params.fromLedger ?? this.cursor,
+      limit,
+      hasMore: false,
+      nextCursor: null,
+    };
+
+    for await (const page of this.scanPages(params)) {
+      allEvents.push(...page.events);
+      lastPage = page.pageInfo;
     }
 
     const pagedEvents = allEvents as typeof allEvents & {
-      pageInfo?: typeof pageInfo;
+      pageInfo?: PageInfo;
       truncated?: boolean;
     };
-    pagedEvents.pageInfo = pageInfo;
-    pagedEvents.truncated = (pageInfo.hasMore ?? false) || allEvents.length >= limit;
+    pagedEvents.pageInfo = lastPage;
+    pagedEvents.truncated = (lastPage.hasMore ?? false) || allEvents.length >= limit;
     return pagedEvents;
   }
 }
@@ -412,7 +419,12 @@ export class TypedEventCursor {
     opts: EventCursorOptions = {},
   ) {
     this.cursor = new EventCursor(server, opts);
-    this.parser = new EventParser(contractId ? [contractId] : []);
+    // An unscoped all-events stream is the deliberate opt-in to decoding
+    // events from any contract; a scoped stream is always allow-listed.
+    this.parser = new EventParser({
+      contractIds: contractId ? [contractId] : [],
+      acceptAnyContract: !contractId,
+    });
     this.contractId = contractId;
     this.topicFilters = filters;
   }

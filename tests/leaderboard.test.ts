@@ -130,6 +130,9 @@ describe("LeaderboardModule.getLeaderboard()", () => {
 
     leaderboard = new LeaderboardModule(client);
 
+    // Only registered CoralSwap pairs are trusted event sources (#883).
+    jest.spyOn(client.factory, "getAllPairs").mockResolvedValue([PAIR_A, PAIR_B]);
+
     // Default current ledger: 50000
     jest.spyOn(client, "getCurrentLedger").mockResolvedValue(50000);
 
@@ -529,6 +532,7 @@ describe("LeaderboardModule getEvents encoding", () => {
   beforeEach(() => {
     client = new CoralSwapClient({ network: Network.TESTNET, secretKey: TEST_SECRET });
     leaderboard = new LeaderboardModule(client);
+    jest.spyOn(client.factory, "getAllPairs").mockResolvedValue([PAIR_A, PAIR_B]);
     jest.spyOn(client, "getCurrentLedger").mockResolvedValue(50000);
 
     // EventCursor.anchorIfNeeded() reads the chain tip straight off the server.
@@ -543,6 +547,19 @@ describe("LeaderboardModule getEvents encoding", () => {
 
   afterEach(() => jest.restoreAllMocks());
 
+  /** The registry refresh adds its own getEvents call; select the report scan. */
+  function requestForTopic(
+    spy: jest.SpyInstance,
+    topic: string,
+  ): SorobanRpc.Server.GetEventsRequest {
+    const call = spy.mock.calls.find(
+      ([req]: [SorobanRpc.Server.GetEventsRequest]) =>
+        decodeTopicFilter(req.filters![0].topics![0][0]) === topic,
+    );
+    expect(call).toBeDefined();
+    return call![0];
+  }
+
   it("encodes the swap topic as a base64 XDR ScVal symbol", async () => {
     const spy = jest
       .spyOn(client.server, "getEvents")
@@ -550,8 +567,8 @@ describe("LeaderboardModule getEvents encoding", () => {
 
     await leaderboard.getLeaderboard("trader", { period: "24h" });
 
-    const request = spy.mock.calls[0][0];
-    const [segment] = request.filters[0].topics![0];
+    const request = requestForTopic(spy, "swap");
+    const [segment] = request.filters![0].topics![0];
     expect(segment).toBe(xdr.ScVal.scvSymbol("swap").toXdr("base64"));
     expect(decodeTopicFilter(segment)).toBe("swap");
   });
@@ -563,7 +580,7 @@ describe("LeaderboardModule getEvents encoding", () => {
 
     await leaderboard.getLeaderboard("lp", { period: "7d" });
 
-    const segment = spy.mock.calls[0][0].filters[0].topics![0][0];
+    const segment = requestForTopic(spy, "add_liquidity").filters![0].topics![0][0];
     expect(decodeTopicFilter(segment)).toBe("add_liquidity");
   });
 

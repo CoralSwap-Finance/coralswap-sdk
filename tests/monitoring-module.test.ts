@@ -120,7 +120,8 @@ describe('MonitoringModule', () => {
       const { client } = createMockClient({
         pairs: [PAIR_ADDR_1],
         pairSpecs: { [PAIR_ADDR_1]: { token0: STABLE_ADDR, token1: TOKEN_A } },
-        eventsByContractId: { '': events }, // protocol-wide query has no contractId filter
+        // Protocol-wide queries are now scoped to the registered pair set.
+        eventsByContractId: { [PAIR_ADDR_1]: events },
       });
       const monitor = new MonitoringModule(client, { stableAddresses: [STABLE_ADDR] });
 

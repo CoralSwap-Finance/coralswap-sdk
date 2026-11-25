@@ -37,6 +37,14 @@ CoralSwap contracts + RedStone feeds + network health probes
 | `MonitoringModule` | Pair metrics, treasury pricing, RPC event history | Read-only metrics/warnings | Returns structured health/metric objects; a price-fetch failure is treated as a metric-quality issue, not a fatal transport error |
 | `AlertsModule` | Oracle or pair-derived price data plus configured thresholds | Read-only evaluation + local in-memory alert rules | Some alert paths skip unavailable prices or fall back to spot-price checks; failures are surfaced via typed `ValidationError` / protocol errors |
 
+### Trusted contracts for history and reporting
+
+`getSwapHistory()`, `getLeaderboard()` / `getTopTraders()`, and every tax report (`exportTradeHistory()`, `getCostBasis()`, `getCapitalGains()`) are derived from Soroban `getEvents` scans. A decoded `swap` topic is **not** enough: events are accepted only when `event.contractId` is a pair registered by the CoralSwap factory for the configured network.
+
+The shared registry is cached in `FactoryModule` from `factory.all_pairs()` and refreshed from factory new-pair events in the requested ledger window. When the registry fits the RPC budget (at most 5 filters with 5 contract IDs each), those addresses are sent as the `getEvents` `contractIds` filter; larger registries are filtered by `event.contractId` after decoding. If no factory is configured or the registry is empty, these reports return no rows rather than trusting arbitrary contracts. Passing an unregistered `pairAddress` also yields no rows.
+
+Low-level decoder helpers follow the same rule: `EventParser`, `decodeEvents()` and `decodeEventsFromXdr()` fail closed by default. Supply `contractIds` (or `contractId`) for a trusted pair, or pass `acceptAnyContract: true` only when your own code has already verified event provenance.
+
 ### Error and unavailability contract
 
 The SDK follows a consistent typed-error model instead of ad hoc string matching:
@@ -597,9 +605,9 @@ npm run check:bundle-size
 
 | Budget                              | Value     |
 | ----------------------------------- | --------- |
-| `src/index.ts` (minified bundle)   | 229 KiB (234432 bytes) |
+| `src/index.ts` (minified bundle)   | 256 KiB (262144 bytes) |
 
-The budget is enforced in CI by `.github/workflows/bundle-size.yml`. The measured baseline is 215.1 KiB (220,313 bytes) at `0d73bc2` on 2026-09-26; the post-merge fee work measures 227.6 KiB (233,091 bytes) in this workspace, so this cap keeps a small cushion while still guarding dead-export regressions. To change it, update `BUNDLE_SIZE_BUDGET_BYTES` in `scripts/check-bundle-size.mjs` and this table, and record the commit the new baseline was measured at.
+The budget is enforced in CI by `.github/workflows/bundle-size.yml`. The measured baseline was 215.1 KiB (220,313 bytes) at `0d73bc2` on 2026-09-26; it had grown to 239.3 KiB at `4858637` before issue #883. Trusting only factory-registered pair events adds the registry lookup and RPC filter helpers to every report path, bringing the measured bundle to 243.7 KiB (249,581 bytes). The cap was re-baselined to 256 KiB to keep a deliberate margin while still catching dead-export regressions. To change it, update `BUNDLE_SIZE_BUDGET_BYTES` in `scripts/check-bundle-size.mjs` and this table, and record the commit the new baseline was measured at.
 
 ## Design Principles
 

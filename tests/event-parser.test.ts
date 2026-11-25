@@ -82,7 +82,9 @@ describe('EventParser', () => {
   let parser: EventParser;
 
   beforeEach(() => {
-    parser = new EventParser();
+    // These tests exercise decoding shapes, so opt in explicitly to events
+    // from the fixture contract. Trust-boundary cases below do not opt in.
+    parser = new EventParser({ acceptAnyContract: true });
   });
 
   // -----------------------------------------------------------------------
@@ -349,12 +351,11 @@ describe('EventParser', () => {
       expect(result).toHaveLength(1);
     });
 
-    it('allows all events when no contract filter is set', () => {
-      const noFilter = new EventParser();
-
+    it('rejects events until a contract filter or explicit opt-in is supplied', () => {
       const diag = makeDiagnosticEvent('swap', swapData);
-      const result = noFilter.parse([diag]);
-      expect(result).toHaveLength(1);
+
+      expect(new EventParser().parse([diag])).toHaveLength(0);
+      expect(new EventParser({ acceptAnyContract: true }).parse([diag])).toHaveLength(1);
     });
   });
 
@@ -508,7 +509,7 @@ describe('formatted event timestamp/ledger contract', () => {
     '%s events report seconds-since-epoch timestamp and sequence ledger',
     (expectedType, topic, data) => {
       const diag = makeDiagnosticEvent(topic, data);
-      const parser = new EventParser();
+      const parser = new EventParser([CONTRACT_ADDR]);
       const result = parser.parse(
         [diag],
         'tx_regression',
@@ -531,7 +532,7 @@ describe('formatted event timestamp/ledger contract', () => {
       const diag = makeDiagnosticEvent(topic, data);
       const result = decodeEventsFromXdr(
         [diag],
-        {},
+        { contractId: CONTRACT_ADDR },
         'tx_regression',
         REGRESSION_LEDGER,
         REGRESSION_TIMESTAMP,
@@ -583,7 +584,7 @@ describe('decodeEventsFromXdr', () => {
 
   it('decodes a single swap event', () => {
     const events = [makeDiagnosticEvent(EVENT_TOPICS.SWAP, swapData)];
-    const result = decodeEventsFromXdr(events);
+    const result = decodeEventsFromXdr(events, { contractId: CONTRACT_ADDR });
 
     expect(result).toHaveLength(1);
     const swap = result[0] as SwapEvent;
@@ -595,7 +596,7 @@ describe('decodeEventsFromXdr', () => {
 
   it('decodes a single mint event', () => {
     const events = [makeDiagnosticEvent(EVENT_TOPICS.MINT, mintData)];
-    const result = decodeEventsFromXdr(events);
+    const result = decodeEventsFromXdr(events, { contractId: CONTRACT_ADDR });
 
     expect(result).toHaveLength(1);
     const mint = result[0] as MintEvent;
@@ -608,7 +609,7 @@ describe('decodeEventsFromXdr', () => {
 
   it('decodes a single burn event', () => {
     const events = [makeDiagnosticEvent(EVENT_TOPICS.BURN, burnData)];
-    const result = decodeEventsFromXdr(events);
+    const result = decodeEventsFromXdr(events, { contractId: CONTRACT_ADDR });
 
     expect(result).toHaveLength(1);
     const burn = result[0] as BurnEvent;
@@ -621,7 +622,7 @@ describe('decodeEventsFromXdr', () => {
 
   it('decodes a single sync event', () => {
     const events = [makeDiagnosticEvent(EVENT_TOPICS.SYNC, syncData)];
-    const result = decodeEventsFromXdr(events);
+    const result = decodeEventsFromXdr(events, { contractId: CONTRACT_ADDR });
 
     expect(result).toHaveLength(1);
     const sync = result[0] as SyncEvent;
@@ -637,7 +638,7 @@ describe('decodeEventsFromXdr', () => {
       makeDiagnosticEvent(EVENT_TOPICS.MINT, mintData),
       makeDiagnosticEvent(EVENT_TOPICS.BURN, burnData),
     ];
-    const result = decodeEventsFromXdr(events);
+    const result = decodeEventsFromXdr(events, { contractId: CONTRACT_ADDR });
 
     expect(result).toHaveLength(4);
     expect(result[0].type).toBe('swap');
@@ -648,7 +649,7 @@ describe('decodeEventsFromXdr', () => {
 
   it('attaches txHash and ledger when provided', () => {
     const events = [makeDiagnosticEvent(EVENT_TOPICS.SWAP, swapData)];
-    const result = decodeEventsFromXdr(events, {}, 'tx_hash_123', 54321);
+    const result = decodeEventsFromXdr(events, { contractId: CONTRACT_ADDR }, 'tx_hash_123', 54321);
 
     expect(result).toHaveLength(1);
     expect(result[0].txHash).toBe('tx_hash_123');
@@ -668,7 +669,7 @@ describe('decodeEventsFromXdr', () => {
 
   it('throws in strict mode for malformed event data', () => {
     const events = [makeDiagnosticEvent(EVENT_TOPICS.SWAP, xdr.ScVal.scvVoid())];
-    expect(() => decodeEventsFromXdr(events, { strict: true })).toThrow();
+    expect(() => decodeEventsFromXdr(events, { strict: true, contractId: CONTRACT_ADDR })).toThrow();
   });
 
   it('silently skips malformed events in non-strict mode', () => {
@@ -676,7 +677,7 @@ describe('decodeEventsFromXdr', () => {
       makeDiagnosticEvent(EVENT_TOPICS.SWAP, xdr.ScVal.scvVoid()),
       makeDiagnosticEvent(EVENT_TOPICS.SYNC, syncData),
     ];
-    const result = decodeEventsFromXdr(events, { strict: false });
+    const result = decodeEventsFromXdr(events, { strict: false, contractId: CONTRACT_ADDR });
 
     expect(result).toHaveLength(1);
     expect(result[0].type).toBe('sync');
@@ -692,7 +693,7 @@ describe('decodeEventsFromXdr', () => {
       makeDiagnosticEvent('unknown_event', xdr.ScVal.scvVoid()),
       makeDiagnosticEvent(EVENT_TOPICS.SWAP, swapData),
     ];
-    const result = decodeEventsFromXdr(events);
+    const result = decodeEventsFromXdr(events, { contractId: CONTRACT_ADDR });
 
     expect(result).toHaveLength(1);
     expect(result[0].type).toBe('swap');

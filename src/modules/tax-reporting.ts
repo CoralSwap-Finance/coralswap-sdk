@@ -3,6 +3,11 @@ import { fromSorobanAmount } from "@/utils/amounts";
 import { validateAddress } from "@/utils/validation";
 import { EventCursor, decodeEventTopic, MIN_START_LEDGER } from "@/utils/event-cursor";
 import {
+  RegisteredPairRegistry,
+  isTrustedContractEvent,
+  selectScanContractIds,
+} from "@/utils/registered-pairs";
+import {
   ledgerToApproxTime,
   LedgerHead,
   LEDGER_CLOSE_INTERVAL_SECONDS,
@@ -150,9 +155,13 @@ export class TaxReportingModule {
       closeTime: Math.floor(Date.now() / 1000),
     };
 
+    // Event-derived rows are only trusted when emitted by a registered pair.
+    const registry = RegisteredPairRegistry.forClient(this.client);
+    const trustedPairs = await registry.getPairsForWindow(startLedger, currentLedger);
+
     const [swapEvents, liquidityEvents] = await Promise.all([
-      this.fetchSwapEvents(address, startLedger, head),
-      this.fetchLiquidityEvents(address, startLedger, head),
+      this.fetchSwapEvents(address, startLedger, head, trustedPairs),
+      this.fetchLiquidityEvents(address, startLedger, head, trustedPairs),
     ]);
 
     const rows: TaxReportRow[] = [
@@ -186,8 +195,9 @@ export class TaxReportingModule {
     address: string,
     startLedger: number,
     head: LedgerHead,
+    trustedPairs: Set<string>,
   ): Promise<TaxReportRow[]> {
-    const response = await this.fetchEvents(startLedger, ["swap"]);
+    const response = await this.fetchEvents(startLedger, ["swap"], trustedPairs);
     const rows: TaxReportRow[] = [];
 
     for (const ev of response) {
@@ -195,7 +205,8 @@ export class TaxReportingModule {
       if (!data) continue;
 
       const sender = readAddress(data, "sender");
-      if (sender && sender !== address) continue;
+      // A missing sender is not proof that this address traded: fail closed.
+      if (!sender || sender !== address) continue;
 
       const amountIn = readI128(data, "amount_in") ?? 0n;
       const amountOut = readI128(data, "amount_out") ?? 0n;
@@ -222,10 +233,11 @@ export class TaxReportingModule {
     address: string,
     startLedger: number,
     head: LedgerHead,
+    trustedPairs: Set<string>,
   ): Promise<TaxReportRow[]> {
     const [addEvents, removeEvents] = await Promise.all([
-      this.fetchEvents(startLedger, ["add_liquidity"]),
-      this.fetchEvents(startLedger, ["remove_liquidity"]),
+      this.fetchEvents(startLedger, ["add_liquidity"], trustedPairs),
+      this.fetchEvents(startLedger, ["remove_liquidity"], trustedPairs),
     ]);
 
     const rows: TaxReportRow[] = [];
@@ -238,7 +250,7 @@ export class TaxReportingModule {
       if (!data) continue;
 
       const provider = readAddress(data, "provider");
-      if (provider && provider !== address) continue;
+      if (!provider || provider !== address) continue;
 
       const amountA = readI128(data, "amount_a") ?? 0n;
       const amountB = readI128(data, "amount_b") ?? 0n;
@@ -481,17 +493,27 @@ export class TaxReportingModule {
    *
    * The cursor encodes topics as base64 XDR ScVals and keeps the ledger cursor
    * anchored to the chain head — hand-rolling either here is what produced the
-   * raw-string filter bug this module was audited for.
+   * raw-string filter bug this module was audited for. Events are additionally
+   * restricted to registered CoralSwap pairs (as RPC filters when the registry
+   * is small enough, otherwise by post-decode contract ID checks).
    */
-  private async fetchEvents(startLedger: number, topics: string[]): Promise<RawEvent[]> {
+  private async fetchEvents(
+    startLedger: number,
+    topics: string[],
+    trustedPairs: Set<string>,
+  ): Promise<RawEvent[]> {
+    const contractIds = selectScanContractIds(trustedPairs);
     const cursor = new EventCursor(this.client.server);
     const events = await cursor.scan({
+      contractIds: contractIds ?? [],
       topics,
       fromLedger: startLedger,
       limit: MAX_HISTORY_EVENTS,
     });
 
-    return events as unknown as RawEvent[];
+    return events.filter((ev) =>
+      isTrustedContractEvent(ev, trustedPairs),
+    ) as unknown as RawEvent[];
   }
 }
 
@@ -501,6 +523,8 @@ export class TaxReportingModule {
 
 interface RawEvent {
   value: unknown;
+  /** Emitter address; checked against the factory registry before decoding. */
+  contractId?: unknown;
   /** Topic entries are XDR ScVals (or base64 XDR on raw responses). */
   topic?: unknown[];
   txHash?: string;

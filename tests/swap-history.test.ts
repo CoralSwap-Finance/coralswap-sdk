@@ -121,6 +121,9 @@ describe("SwapModule.getSwapHistory()", () => {
 
     swapModule = new SwapModule(client);
 
+    // Only registered CoralSwap pairs are trusted event sources (#883).
+    jest.spyOn(client.factory, "getAllPairs").mockResolvedValue([PAIR_A, PAIR_B]);
+
     // Default: current ledger = 2000
     jest.spyOn(client, "getCurrentLedger").mockResolvedValue(2000);
   });

@@ -110,10 +110,25 @@ export {
   decodeEvents,
   decodeEventsFromXdr,
 } from './events';
-export type { DecodeEventsOptions } from './events';
+export type { DecodeEventsOptions, EventParserOptions } from './events';
 
 export { EventCursor, TypedEventCursor, decodeEventTopic, MIN_START_LEDGER, MAX_EVENT_LIMIT } from './event-cursor';
 export type { EventCursorOptions, TypedEventScanParams, PageInfo, ScanResult } from './event-cursor';
+export {
+  buildEventFilters,
+  MAX_EVENT_FILTERS,
+  MAX_CONTRACT_IDS_PER_FILTER,
+  MAX_FILTERED_CONTRACT_IDS,
+} from './event-filters';
+export type { EventFilterSpec } from './event-filters';
+export {
+  RegisteredPairRegistry,
+  NEW_PAIR_TOPICS,
+  selectScanContractIds,
+  filterTrustedEvents,
+  isTrustedContractEvent,
+} from './registered-pairs';
+export type { RegisteredPairRegistryOptions } from './registered-pairs';
 export { ConnectionPool } from './connection-pool';
 
 

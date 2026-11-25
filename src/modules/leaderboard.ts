@@ -3,6 +3,11 @@ import { validateAddress } from "@/utils/validation";
 import { ValidationError } from "@/errors";
 import { EventCursor, decodeEventTopic, MIN_START_LEDGER } from "@/utils/event-cursor";
 import { DecimalsResolver } from "@/utils/decimals-resolver";
+import {
+  RegisteredPairRegistry,
+  isTrustedContractEvent,
+  selectScanContractIds,
+} from "@/utils/registered-pairs";
 import { TreasuryModule, TreasuryModuleOptions } from "./treasury";
 import { SwapModule } from "./swap";
 
@@ -129,11 +134,18 @@ export class LeaderboardModule extends TreasuryModule {
 
     const topic = type === "trader" ? "swap" : "add_liquidity";
 
-    // The shared cursor encodes the topic as a base64 XDR ScVal symbol; a raw
-    // string filter is silently ignored by a real RPC node.
+    // Only pairs registered with the factory are trusted. The shared cursor
+    // encodes the topic as a base64 XDR ScVal symbol; a raw string filter is
+    // silently ignored by a real RPC node.
+    const registry = RegisteredPairRegistry.forClient(this.leaderboardClient);
+    const trustedPairs = await registry.getPairsForWindow(startLedger, endLedger);
+    if (trustedPairs.size === 0) return [];
+    const contractIds = selectScanContractIds(trustedPairs, options.pairAddress);
+    if (contractIds === null) return [];
+
     const cursor = new EventCursor(this.leaderboardClient.server);
     const events = await cursor.scan({
-      contractIds: options.pairAddress ? [options.pairAddress] : [],
+      contractIds,
       topics: [topic],
       fromLedger: startLedger,
       toLedger: endLedger,
@@ -164,7 +176,7 @@ export class LeaderboardModule extends TreasuryModule {
     const previousEndBound = Math.max(startLedger, currentLedger - ledgersPerDay);
 
     for (const ev of events) {
-      if (options.pairAddress && ev.contractId?.toString() !== options.pairAddress) continue;
+      if (!isTrustedContractEvent(ev, trustedPairs, options.pairAddress)) continue;
       // Topics arrive as XDR ScVals — decode before comparing.
       const topicName = ev.topic?.[0] ? decodeEventTopic(ev.topic[0]) : "";
       if (topicName !== topic) continue;

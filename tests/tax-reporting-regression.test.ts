@@ -6,6 +6,7 @@ import { xdr } from "@stellar/stellar-sdk";
 const MOCK_ADDRESS = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
 const TOKEN_A = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM";
 const TOKEN_B = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM";
+const PAIR = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
 
 const makeAddr = (addr: string) => ({
   address: () => ({ toString: () => addr }),
@@ -32,6 +33,7 @@ function buildMockSwapEvent(opts: {
   ledgerClosedAt?: string;
 }) {
   return {
+    contractId: PAIR,
     topic: [xdr.ScVal.scvSymbol("swap")],
     value: {
       map: () => [
@@ -59,6 +61,7 @@ describe("TaxReportingModule - Regression Suite (#659)", () => {
     });
     jest.spyOn(client, "getCurrentLedger").mockResolvedValue(5000);
     jest.spyOn(client.server, "getLatestLedger").mockResolvedValue({ sequence: 5000 } as any);
+    jest.spyOn(client.factory, "getAllPairs").mockResolvedValue([PAIR]);
     taxModule = new TaxReportingModule(client);
   });
 

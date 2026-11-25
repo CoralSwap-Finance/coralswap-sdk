@@ -18,6 +18,11 @@ import { PairNotFoundError, ValidationError, InsufficientLiquidityError, Transac
 import { PairClient } from '@/contracts/pair';
 import { Address } from '@stellar/stellar-sdk';
 import { EventCursor } from '@/utils/event-cursor';
+import {
+  RegisteredPairRegistry,
+  isTrustedContractEvent,
+  selectScanContractIds,
+} from '@/utils/registered-pairs';
 import { decodeI128 } from '@/utils/numeric';
 import { GasEstimate } from '../types/gas';
 import { estimateGas } from '../utils/gas';
@@ -824,78 +829,88 @@ export class SwapModule {
       );
     }
 
-    // The shared EventCursor builds the getEvents request (XDR-encoded "swap"
-    // topic, scoped to the pair when one is given) and pages through results.
-    // The cursor keeps paging while pages are full, so cap the raw events at
-    // `limit` to keep the previous single-page bound.
     const limit = filter.limit ?? 200;
+
+    // Only events emitted by CoralSwap pairs registered in the factory are
+    // trusted. The registry is cached and refreshed from factory pair-created
+    // events in this ledger window; an explicitly requested unregistered pair
+    // yields no history at all.
+    const registry = RegisteredPairRegistry.forClient(this.client);
+    const trustedPairs = await registry.getPairsForWindow(fromLedger, toLedger);
+    if (trustedPairs.size === 0) return [];
+    const contractIds = selectScanContractIds(trustedPairs, filter.pairAddress);
+    if (contractIds === null) return [];
+
     const cursor = new EventCursor(this.client.server);
-    const scanned = await cursor.scan({
-      contractIds: filter.pairAddress ? [filter.pairAddress] : [],
+    const events: SwapHistoryEvent[] = [];
+
+    // Page with the shared cursor until `limit` matching swaps have been
+    // collected or the ledger range is exhausted. Filtering and the limit are
+    // applied *after* every decode, never to the raw page.
+    for await (const page of cursor.scanPages({
+      contractIds,
       topics: ["swap"],
       fromLedger,
       toLedger,
-      limit,
-    });
-    const rawEvents = scanned.slice(0, limit);
+      limit: Math.min(limit, 200),
+    })) {
+      for (const ev of page.events) {
+        if (events.length >= limit) break;
+        if (ev.ledger > toLedger) continue;
+        if (!isTrustedContractEvent(ev, trustedPairs, filter.pairAddress)) continue;
 
-    const events: SwapHistoryEvent[] = [];
+        // Skip non-swap topics
+        const topicName = ev.topic?.[0] ? decodeScValString(ev.topic[0]) : "";
+        if (topicName !== "swap") continue;
 
-    for (const ev of rawEvents) {
-      // Skip events beyond toLedger
-      if (ev.ledger > toLedger) continue;
+        if (!ev.value) continue;
 
-      // Skip non-swap topics
-      const topicName = ev.topic?.[0] ? decodeScValString(ev.topic[0]) : "";
-      if (topicName !== "swap") continue;
+        const data = decodeMapEvent(ev.value);
+        if (!data) continue;
 
-      if (!ev.value) continue;
+        const sender = readAddress(data, "sender");
+        if (!sender) continue;
 
-      const data = decodeMapEvent(ev.value);
-      if (!data) continue;
+        // Filter by userAddress if specified
+        if (filter.userAddress && sender !== filter.userAddress) continue;
 
-      const sender = readAddress(data, "sender");
-      if (!sender) continue;
+        const amountIn = readI128(data, "amount_in");
+        const amountOut = readI128(data, "amount_out");
+        const tokenIn = readAddress(data, "token_in");
+        const tokenOut = readAddress(data, "token_out");
+        const feeBps = readU32(data, "fee_bps");
 
-      // Filter by userAddress if specified
-      if (filter.userAddress && sender !== filter.userAddress) continue;
+        if (
+          amountIn === undefined ||
+          amountOut === undefined ||
+          !tokenIn ||
+          !tokenOut ||
+          feeBps === undefined
+        ) {
+          continue;
+        }
 
-      const amountIn = readI128(data, "amount_in");
-      const amountOut = readI128(data, "amount_out");
-      const tokenIn = readAddress(data, "token_in");
-      const tokenOut = readAddress(data, "token_out");
-      const feeBps = readU32(data, "fee_bps");
+        const timestamp = ev.ledgerClosedAt
+          ? Math.floor(new Date(ev.ledgerClosedAt).getTime() / 1000)
+          : Math.floor(Date.now() / 1000);
 
-      if (
-        amountIn === undefined ||
-        amountOut === undefined ||
-        !tokenIn ||
-        !tokenOut ||
-        feeBps === undefined
-      ) {
-        continue;
+        events.push({
+          txHash: ev.txHash ?? "",
+          amountIn,
+          amountOut,
+          tokenIn,
+          tokenOut,
+          sender,
+          pairAddress: ev.contractId?.toString() ?? "",
+          ledger: ev.ledger,
+          timestamp,
+          feeBps,
+        });
       }
-
-      const timestamp = ev.ledgerClosedAt
-        ? Math.floor(new Date(ev.ledgerClosedAt).getTime() / 1000)
-        : Math.floor(Date.now() / 1000);
-
-      events.push({
-        txHash: ev.txHash ?? "",
-        amountIn,
-        amountOut,
-        tokenIn,
-        tokenOut,
-        sender,
-        pairAddress: ev.contractId?.toString() ?? "",
-        ledger: ev.ledger,
-        timestamp,
-        feeBps,
-      });
+      if (events.length >= limit) break;
     }
 
-    // Limit the results
-    return events.slice(0, filter.limit ?? 200);
+    return events;
   }
 }
 

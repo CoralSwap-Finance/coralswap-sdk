@@ -159,14 +159,18 @@ function extractData(evt: xdr.DiagnosticEvent): xdr.ScVal {
  * - {@link fromTransaction} — extracts and parses events directly from a
  *   successful Soroban transaction response.
  *
- * Events with unrecognised topics or from non-CoralSwap contracts are
- * silently skipped. Use {@link parseStrict} to throw on any parse failure.
+ * Events with unrecognised topics or from contracts outside the configured
+ * allow-list are silently skipped. A parser created without contract IDs does
+ * **not** accept events from arbitrary contracts: callers must explicitly opt
+ * in with `acceptAnyContract: true`. Use {@link parseStrict} to throw on any
+ * parse failure.
  *
  * @example
  * ```ts
  * import { EventParser } from '@coralswap/sdk';
  *
- * const parser = new EventParser();
+ * // Trust a known pair, or opt in explicitly when provenance is verified elsewhere.
+ * const parser = new EventParser({ contractIds: [pairAddress] });
  *
  * // From a successful transaction response
  * const events = parser.fromTransaction(txResponse);
@@ -175,16 +179,36 @@ function extractData(evt: xdr.DiagnosticEvent): xdr.ScVal {
  * const parsed = parser.parse(diagnosticEvents);
  * ```
  */
+/** Options controlling which contracts an {@link EventParser} trusts. */
+export interface EventParserOptions {
+  /** Explicit allow-list of CoralSwap contract addresses. */
+  contractIds?: string[];
+  /**
+   * Opt in to parsing events from contracts not in `contractIds`. Defaults to
+   * `false`; callers that have not verified event provenance must not set it.
+   */
+  acceptAnyContract?: boolean;
+}
+
 export class EventParser {
   private readonly contractIds: Set<string>;
+  private readonly acceptAnyContract: boolean;
 
   /**
-   * @param contractIds - Optional set of CoralSwap contract addresses. When
-   *   provided, only events from these contracts are parsed; all others are
-   *   ignored. Pass an empty array to parse events from any contract.
+   * @param contractIds - Legacy positional allow-list of contract addresses.
+   * @param options - Trust options. `acceptAnyContract: true` is the explicit
+   *   opt-in required to parse events from unregistered contracts. When both
+   *   an allow-list and the opt-in are supplied, the allow-list wins.
    */
-  constructor(contractIds: string[] = []) {
-    this.contractIds = new Set(contractIds);
+  constructor(
+    contractIds: string[] | EventParserOptions = [],
+    options: EventParserOptions = {},
+  ) {
+    const resolved: EventParserOptions = Array.isArray(contractIds)
+      ? { ...options, contractIds: options.contractIds ?? contractIds }
+      : contractIds;
+    this.contractIds = new Set(resolved.contractIds ?? []);
+    this.acceptAnyContract = resolved.acceptAnyContract === true;
   }
 
   /**
@@ -349,8 +373,11 @@ export class EventParser {
     ledger: number,
     timestamp: number,
   ): CoralSwapEvent | null {
-    // If contract filter is configured, skip non-matching contracts
-    if (this.contractIds.size > 0 && !this.contractIds.has(contractId)) {
+    // Fail closed: an allow-list always restricts, and with no allow-list the
+    // caller must explicitly opt in to events from unregistered contracts.
+    if (this.contractIds.size > 0) {
+      if (!this.contractIds.has(contractId)) return null;
+    } else if (!this.acceptAnyContract) {
       return null;
     }
 
@@ -531,6 +558,8 @@ export class EventParser {
 export interface DecodeEventsOptions {
   contractId?: string;
   strict?: boolean;
+  /** Explicit opt-in to decode events from contracts outside `contractId`. */
+  acceptAnyContract?: boolean;
 }
 
 /**
@@ -543,13 +572,15 @@ export interface DecodeEventsOptions {
  * @param options - Optional configuration for filtering and parsing behavior.
  * @param options.contractId - If provided, only events from this contract are decoded.
  * @param options.strict - If true, throws on malformed event data. Defaults to false.
+ * @param options.acceptAnyContract - Required when no `contractId` is given to
+ *   decode events from contracts that have not been registered as CoralSwap pairs.
  * @returns Array of typed CoralSwapEvent objects.
  *
  * @example
  * ```ts
  * import { decodeEvents } from '@coralswap/sdk';
  *
- * const events = decodeEvents(txResponse);
+ * const events = decodeEvents(txResponse, { acceptAnyContract: true });
  * for (const event of events) {
  *   if (event.type === 'swap') {
  *     console.log(`Swapped ${event.amountIn} for ${event.amountOut}`);
@@ -569,8 +600,10 @@ export function decodeEvents(
   response: rpc.Api.GetSuccessfulTransactionResponse,
   options: DecodeEventsOptions = {},
 ): CoralSwapEvent[] {
-  const contractIds = options.contractId ? [options.contractId] : [];
-  const parser = new EventParser(contractIds);
+  const parser = new EventParser({
+    contractIds: options.contractId ? [options.contractId] : [],
+    acceptAnyContract: options.acceptAnyContract,
+  });
 
   const meta = response.resultMetaXdr;
   if (meta.type !== "v3") return [];
@@ -597,6 +630,8 @@ export function decodeEvents(
  * @param options - Optional configuration for filtering and parsing behavior.
  * @param options.contractId - If provided, only events from this contract are decoded.
  * @param options.strict - If true, throws on malformed event data. Defaults to false.
+ * @param options.acceptAnyContract - Required when no `contractId` is given to
+ *   decode events from contracts that have not been registered as CoralSwap pairs.
  * @param txHash - Transaction hash to attach to parsed events.
  * @param ledger - Ledger sequence number.
  * @param timestamp - Unix timestamp (seconds since epoch) when the ledger closed.
@@ -620,8 +655,10 @@ export function decodeEventsFromXdr(
   ledger = 0,
   timestamp = 0,
 ): CoralSwapEvent[] {
-  const contractIds = options.contractId ? [options.contractId] : [];
-  const parser = new EventParser(contractIds);
+  const parser = new EventParser({
+    contractIds: options.contractId ? [options.contractId] : [],
+    acceptAnyContract: options.acceptAnyContract,
+  });
 
   if (options.strict) {
     return parser.parseStrict(events, txHash, ledger, timestamp);
