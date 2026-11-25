@@ -15,6 +15,7 @@ import {
 } from "@/types/staking";
 import { Signer } from "@/types/common";
 import { RemoveLiquidityRequest, LiquidityResult } from "@/types/liquidity";
+import { LiquidityModule } from "@/modules/liquidity";
 import {
   ValidationError,
   TransactionError,
@@ -462,8 +463,8 @@ export class StakingModule {
    *     tokenA: 'CAAA...',
    *     tokenB: 'CBBB...',
    *     liquidity: 500n,
-   *     amountAMin: 0n,
-   *     amountBMin: 0n,
+   *     amountAMin: 495n,
+   *     amountBMin: 495n,
    *     to: myAddress,
    *   },
    *   mySigner,
@@ -481,20 +482,27 @@ export class StakingModule {
     validateDistinctTokens(removeLiquidityRequest.tokenA, removeLiquidityRequest.tokenB);
     validateAddress(removeLiquidityRequest.to, "to");
     validatePositiveAmount(removeLiquidityRequest.liquidity, "liquidity");
-    validateNonNegativeAmount(removeLiquidityRequest.amountAMin, "amountAMin");
-    validateNonNegativeAmount(removeLiquidityRequest.amountBMin, "amountBMin");
+
+    // Derive any missing minimums from the pool's removal quote instead of
+    // passing unbounded zero bounds to the router.
+    const liquidityModule = new LiquidityModule(this.client);
+    const resolved = await liquidityModule.resolveRemoveLiquidityRequest(
+      removeLiquidityRequest,
+    );
+    validateNonNegativeAmount(resolved.amountAMin, "amountAMin");
+    validateNonNegativeAmount(resolved.amountBMin, "amountBMin");
 
     const publicKey = await signer.publicKey();
     const unstakeOp = await this.buildUnstakeOperation(lpTokenAddress, amount, publicKey);
 
-    const deadline = removeLiquidityRequest.deadline ?? this.client.getDeadline();
+    const deadline = resolved.deadline ?? this.client.getDeadline();
     const withdrawOp = this.client.router.buildRemoveLiquidity(
-      removeLiquidityRequest.to,
-      removeLiquidityRequest.tokenA,
-      removeLiquidityRequest.tokenB,
-      removeLiquidityRequest.liquidity,
-      removeLiquidityRequest.amountAMin,
-      removeLiquidityRequest.amountBMin,
+      resolved.to,
+      resolved.tokenA,
+      resolved.tokenB,
+      resolved.liquidity,
+      resolved.amountAMin,
+      resolved.amountBMin,
       deadline,
     );
 
@@ -513,9 +521,9 @@ export class StakingModule {
     return {
       txHash: result.data.txHash,
       ledger: result.data.ledger,
-      amountA: removeLiquidityRequest.amountAMin,
-      amountB: removeLiquidityRequest.amountBMin,
-      liquidity: removeLiquidityRequest.liquidity,
+      amountA: resolved.amountAMin,
+      amountB: resolved.amountBMin,
+      liquidity: resolved.liquidity,
     };
   }
 
