@@ -16,3 +16,18 @@ docs/*
 # Rust build output (1.2GB of Cargo artifacts was previously tracked here)
 target/
 **/target/
+
+# Scratch / debug files — never commit these
+test-tx.js
+test-debug.js
+jest_output.txt
+test-output.txt
+PR_DESCRIPTION.md
+IMPLEMENTATION_SUMMARY.md
+issue*.md
+scratch*.js
+scratch*.ts
+
+# Unrelated embedded projects
+rosedrip/
+src/pair/

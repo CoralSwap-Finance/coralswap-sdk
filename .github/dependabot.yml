@@ -1,5 +1,6 @@
 version: 2
 updates:
+  # npm dependency updates
   - package-ecosystem: "npm"
     directory: "/"
     schedule:
@@ -13,9 +14,11 @@ updates:
         update-types:
           - "minor"
           - "patch"
-    reviewers:
-      - "Majormaxx"
+    # Reviewer assignment is managed by .github/CODEOWNERS, which requires
+    # maintainer review for package.json and package-lock.json changes.
+    # The deprecated `reviewers` key has been removed.
 
+  # GitHub Actions pin updates — keep SHAs current automatically
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
@@ -28,5 +31,4 @@ updates:
         update-types:
           - "minor"
           - "patch"
-    reviewers:
-      - "Majormaxx"
+    # Reviewer assignment is managed by .github/CODEOWNERS (.github/** path).

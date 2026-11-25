@@ -4,25 +4,78 @@ on:
   pull_request:
     branches: [main]
 
+# Least-privilege default: read-only token.
+permissions:
+  contents: read
+
 jobs:
   lint:
     name: ESLint
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 20
           cache: npm
 
-      - name: Install dependencies
-        run: npm ci
+      - name: Install dependencies (no lifecycle scripts)
+        run: npm ci --ignore-scripts
 
       - name: Run ESLint
         run: npm run lint
 
       - name: Check package metadata
         run: npm run check:package
+
+  actionlint:
+    name: Actionlint (workflow lint + pin check)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Check workflow schema and shell blocks
+        uses: rhysd/actionlint@03d0035246f3e81f36aed592ffb4bebf33a03106 # v1.7.7
+        with:
+          # Fail on any workflow problem, including unpinned `uses:` refs
+          # (actionlint flags mutable tags via the `uses` rule when
+          # -shellcheck is available; the pin check below is a hard gate).
+          fail-on-error: true
+
+      - name: Verify all actions are pinned to full commit SHAs
+        run: |
+          set -euo pipefail
+          # Every `uses:` in every workflow must reference a full 40-char
+          # commit SHA.  A mutable tag (e.g. `actions/checkout@v7`) lets a
+          # moved tag run new code with the job's token.
+          bad=0
+          while IFS= read -r line; do
+            ref="${line##*@}"
+            if ! [[ "$ref" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "::error::Action not pinned to a full commit SHA: $line"
+              bad=1
+            fi
+          done < <(grep -rhE '^\s*uses:\s*\S+@' .github/workflows/*.yml | sed 's/^\s*uses:\s*//')
+          if [ "$bad" -eq 1 ]; then
+            exit 1
+          fi
+          echo "All actions are pinned to full commit SHAs."
+
+      - name: Verify every workflow declares a permissions block
+        run: |
+          set -euo pipefail
+          bad=0
+          for wf in .github/workflows/*.yml; do
+            if ! grep -qE '^permissions:' "$wf"; then
+              echo "::error file=$wf::Workflow is missing a top-level 'permissions:' block."
+              bad=1
+            fi
+          done
+          if [ "$bad" -eq 1 ]; then
+            exit 1
+          fi
+          echo "All workflows declare explicit permissions."

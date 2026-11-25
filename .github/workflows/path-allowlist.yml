@@ -1,0 +1,158 @@
+name: Path Allowlist
+
+# Fails when a PR introduces files outside the approved top-level directory and
+# extension allowlist.  This prevents unrelated projects, Rust crates, shell
+# scripts, and scratch output files from being merged without an explicit
+# exception.
+#
+# To extend the allowlist:
+#   1. Add the new pattern to the ALLOWED_PATTERNS array in the check step.
+#   2. Open a PR that includes a comment explaining why the new path type is
+#      needed.  CODEOWNERS requires a maintainer review for .github/ changes.
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  path-allowlist:
+    name: Path allowlist check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Check changed paths against allowlist
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          # Collect all files added or renamed in this PR (status A or R).
+          # Deleted files are fine — we only gate on new content.
+          mapfile -t CHANGED < <(
+            git diff --name-only --diff-filter=AR "$BASE_SHA" "$HEAD_SHA"
+          )
+
+          if [ "${#CHANGED[@]}" -eq 0 ]; then
+            echo "No new files in this PR — allowlist check passed."
+            exit 0
+          fi
+
+          # ---------------------------------------------------------------------------
+          # Allowlist: patterns that are acceptable anywhere in the repository.
+          # Each entry is a Bash extended-glob pattern matched against the full path.
+          # ---------------------------------------------------------------------------
+          ALLOWED_PATTERNS=(
+            # TypeScript / JavaScript source
+            "src/**/*.ts"
+            "src/**/*.tsx"
+            "tests/**/*.ts"
+            "tests/**/*.tsx"
+            "benchmarks/**/*.ts"
+            "examples/**/*.ts"
+            "examples/**/*.js"
+            "examples/**/*.mjs"
+            "scripts/**/*.mjs"
+            "scripts/**/*.js"
+            "scripts/**/*.ts"
+            "smoke-test/**/*.ts"
+            "smoke-test/**/*.js"
+
+            # Documentation
+            "docs/**/*.md"
+            "docs/**/*.json"
+            "*.md"
+
+            # GitHub / CI configuration
+            ".github/**"
+
+            # Well-known root config files
+            ".gitignore"
+            ".npmignore"
+            ".eslintignore"
+            "eslint.config.*"
+            "jest.config.*"
+            "jest.setup.*"
+            "jest.integration.config.*"
+            "tsconfig*.json"
+            "typedoc.json"
+            "package.json"
+            "package-lock.json"
+            "release-please-config.json"
+            ".release-please-manifest.json"
+            "CHANGELOG.md"
+            "CONTRIBUTING.md"
+            "MIGRATION.md"
+            "SECURITY.md"
+            "LICENSE"
+          )
+
+          # Blocklist: patterns that must NEVER appear regardless of the allowlist.
+          # Evaluated after the allowlist; any match here is always a failure.
+          DENY_PATTERNS=(
+            "*.rs"           # Rust source — no Rust crate belongs in the TS SDK
+            "Cargo.toml"
+            "Cargo.lock"
+            "target/**"
+            "jest_output.txt"
+            "test-output.txt"
+            "test-tx.js"
+            "test-debug.js"
+            "PR_DESCRIPTION.md"
+            "IMPLEMENTATION_SUMMARY.md"
+            "issue*.md"
+            "scratch*"
+          )
+
+          shopt -s extglob globstar nullglob
+
+          failed=0
+          for file in "${CHANGED[@]}"; do
+            # 1. Check the deny list first.
+            denied=false
+            for deny in "${DENY_PATTERNS[@]}"; do
+              # shellcheck disable=SC2254
+              case "$file" in
+                $deny)
+                  echo "::error file=${file}::Path '${file}' matches the deny list pattern '${deny}' and is not permitted."
+                  denied=true
+                  failed=1
+                  break
+                  ;;
+              esac
+            done
+            [ "$denied" = "true" ] && continue
+
+            # 2. Check if it matches any allowlist pattern.
+            allowed=false
+            for pattern in "${ALLOWED_PATTERNS[@]}"; do
+              # shellcheck disable=SC2254
+              case "$file" in
+                $pattern)
+                  allowed=true
+                  break
+                  ;;
+              esac
+            done
+
+            if [ "$allowed" = "false" ]; then
+              echo "::error file=${file}::Path '${file}' is not in the approved allowlist."
+              echo "  To add it, update the ALLOWED_PATTERNS in .github/workflows/path-allowlist.yml"
+              echo "  and open a PR — CODEOWNERS requires a maintainer review."
+              failed=1
+            fi
+          done
+
+          if [ "$failed" -eq 0 ]; then
+            echo "All ${#CHANGED[@]} changed path(s) are within the allowlist."
+          else
+            exit 1
+          fi

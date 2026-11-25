@@ -1,0 +1,19 @@
+# CODEOWNERS — assign required reviewers for sensitive paths.
+# Requires "Require review from Code Owners" in branch protection for main.
+# Dependabot reviewer assignment is handled here (not in dependabot.yml).
+#
+# Syntax: <path-pattern>  <@owner-or-team> ...
+# More specific patterns take precedence over broader ones.
+
+# CI / GitHub Actions workflows
+.github/                     @CoralSwap-Finance/maintainers
+
+# Dependency manifests — changes here affect the entire supply chain
+package.json                 @CoralSwap-Finance/maintainers
+package-lock.json            @CoralSwap-Finance/maintainers
+
+# Build scripts
+scripts/                     @CoralSwap-Finance/maintainers
+
+# Public SDK surface — any change here alters the published API
+src/index.ts                 @CoralSwap-Finance/maintainers
