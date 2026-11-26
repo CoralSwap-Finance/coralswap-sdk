@@ -273,7 +273,9 @@ export class LiquidityModule {
    * reserves to derive the second amount from, so `amountBDesired` is required
    * and used as-is. For an existing pair, `amountB` is the optimal amount at
    * the current reserve ratio; pass `amountBDesired` as well when quoting a
-   * first deposit into an initialized-but-empty pool.
+   * first deposit into an initialized-but-empty pool. If `amountBDesired` is
+   * below `amountB` for an existing pair it caps the deposit and `amountA` is
+   * reduced proportionally, so the quote matches what the router will pull.
    *
    * @param tokenA - Address of the first token
    * @param tokenB - Address of the second token
@@ -332,9 +334,22 @@ export class LiquidityModule {
 
     const amountBOptimal = (amountADesired * reserveB) / reserveA;
 
+    // The router uses whichever side is binding: when `amountBDesired` is
+    // below the ratio-optimal amount, B is deposited in full and A is reduced.
+    // Mirror that here so derived minimums never exceed what will be pulled.
+    let amountA = amountADesired;
+    let amountB = amountBOptimal;
+    if (
+      params.amountBDesired !== undefined &&
+      params.amountBDesired < amountBOptimal
+    ) {
+      amountA = (params.amountBDesired * reserveA) / reserveB;
+      amountB = params.amountBDesired;
+    }
+
     // The pair mints min(liqA, liqB); mirror that instead of using the A side only.
-    const liquidityA = (amountADesired * totalSupply) / reserveA;
-    const liquidityB = (amountBOptimal * totalSupply) / reserveB;
+    const liquidityA = (amountA * totalSupply) / reserveA;
+    const liquidityB = (amountB * totalSupply) / reserveB;
     const estimatedLP =
       liquidityA < liquidityB ? liquidityA : liquidityB;
 
@@ -342,8 +357,8 @@ export class LiquidityModule {
       Number((estimatedLP * 10000n) / (totalSupply + estimatedLP)) / 10000;
 
     return {
-      amountA: amountADesired,
-      amountB: amountBOptimal,
+      amountA,
+      amountB,
       estimatedLPTokens: estimatedLP,
       shareOfPool,
       priceAPerB: (reserveB * PRECISION.PRICE_SCALE) / reserveA,
@@ -669,6 +684,24 @@ export class LiquidityModule {
   }
 
   /**
+   * Guard a minimum derived from a quote. A derived `0n` is just as unbounded
+   * as an explicit zero minimum, so it needs the same `allowZeroMin` opt-in.
+   */
+  private requireDerivedMinimum(
+    amount: bigint,
+    name: string,
+    allowZeroMin: boolean | undefined,
+  ): bigint {
+    if (amount === 0n && !allowZeroMin) {
+      throw new ValidationError(
+        `${name} derived from the current quote and slippageBps is 0; increase the amount or set allowZeroMin to true to opt into unbounded slippage`,
+        { [name]: amount },
+      );
+    }
+    return amount;
+  }
+
+  /**
    * Fill in missing minimums for an add-liquidity request from a fresh quote
    * and the request's slippage tolerance.
    */
@@ -696,9 +729,19 @@ export class LiquidityModule {
     return {
       ...parsed,
       amountAMin:
-        parsed.amountAMin ?? this.applySlippage(quote.amountA, slippageBps),
+        parsed.amountAMin ??
+        this.requireDerivedMinimum(
+          this.applySlippage(quote.amountA, slippageBps),
+          "amountAMin",
+          parsed.allowZeroMin,
+        ),
       amountBMin:
-        parsed.amountBMin ?? this.applySlippage(quote.amountB, slippageBps),
+        parsed.amountBMin ??
+        this.requireDerivedMinimum(
+          this.applySlippage(quote.amountB, slippageBps),
+          "amountBMin",
+          parsed.allowZeroMin,
+        ),
     };
   }
 
@@ -734,9 +777,19 @@ export class LiquidityModule {
     );
 
     const amountAMin =
-      parsed.amountAMin ?? this.applySlippage(quote.amountA, slippageBps);
+      parsed.amountAMin ??
+      this.requireDerivedMinimum(
+        this.applySlippage(quote.amountA, slippageBps),
+        "amountAMin",
+        parsed.allowZeroMin,
+      );
     const amountBMin =
-      parsed.amountBMin ?? this.applySlippage(quote.amountB, slippageBps);
+      parsed.amountBMin ??
+      this.requireDerivedMinimum(
+        this.applySlippage(quote.amountB, slippageBps),
+        "amountBMin",
+        parsed.allowZeroMin,
+      );
 
     return { ...parsed, amountAMin, amountBMin };
   }

@@ -263,6 +263,31 @@ describe("LiquidityModule", () => {
         expect(quote.amountA).toBe(100n);
       });
 
+      it("caps amountA when amountBDesired is below the ratio-optimal amount", async () => {
+        // Pool 1000 A : 2000 B; 1000 A would optimally need 2000 B.
+        const client = createMockClient({
+          pairAddress: PAIR_ADDRESS,
+          reserve0: 1000n,
+          reserve1: 2000n,
+          token0: TOKEN_A,
+          token1: TOKEN_B,
+          totalSupply: 1000n,
+        });
+        const module = new LiquidityModule(client);
+
+        const quote = await module.getAddLiquidityQuote(
+          TOKEN_A,
+          TOKEN_B,
+          1000n,
+          1500n,
+        );
+
+        // B binds the deposit: amountA = (1500 * 1000) / 2000 = 750.
+        expect(quote.amountA).toBe(750n);
+        expect(quote.amountB).toBe(1500n);
+        expect(quote.estimatedLPTokens).toBe(750n);
+      });
+
       it("calculates LP tokens proportionally to total supply", async () => {
         const reserveA = 10_000n;
         const reserveB = 20_000n;
@@ -1088,6 +1113,76 @@ describe("LiquidityModule", () => {
           1980n,
           1234567890,
         );
+      });
+
+      it("derives minimums that the binding side can satisfy", async () => {
+        (mockClient.getPairAddress as jest.Mock).mockResolvedValue(
+          "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM",
+        );
+        (mockClient.pair as jest.Mock).mockReturnValue({
+          getReserves: jest
+            .fn()
+            .mockResolvedValue({ reserve0: 10_000n, reserve1: 20_000n }),
+          getTokens: jest
+            .fn()
+            .mockResolvedValue({ token0: TOKEN_A, token1: TOKEN_B }),
+        });
+        (mockClient.lpToken as jest.Mock).mockReturnValue({
+          totalSupply: jest.fn().mockResolvedValue(5_000n),
+        });
+
+        await module.addLiquidity({
+          tokenA: TOKEN_A,
+          tokenB: TOKEN_B,
+          amountADesired: 1000n,
+          amountBDesired: 1500n,
+          slippageBps: 100,
+          to: TO_ADDRESS,
+        });
+
+        // B binds: the router pulls (750, 1500); 1% slippage -> 742 / 1485.
+        expect(mockRouter.buildAddLiquidity).toHaveBeenCalledWith(
+          TO_ADDRESS,
+          TOKEN_A,
+          TOKEN_B,
+          1000n,
+          1500n,
+          742n,
+          1485n,
+          1234567890,
+        );
+      });
+
+      it("rejects a derived minimum that rounds down to zero without allowZeroMin", async () => {
+        (mockClient.getPairAddress as jest.Mock).mockResolvedValue(
+          "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM",
+        );
+        (mockClient.pair as jest.Mock).mockReturnValue({
+          getReserves: jest
+            .fn()
+            .mockResolvedValue({ reserve0: 1_000_000n, reserve1: 1_000_000n }),
+          getTokens: jest
+            .fn()
+            .mockResolvedValue({ token0: TOKEN_A, token1: TOKEN_B }),
+        });
+        (mockClient.lpToken as jest.Mock).mockReturnValue({
+          totalSupply: jest.fn().mockResolvedValue(1000n),
+        });
+
+        await expect(
+          module.addLiquidity({
+            tokenA: TOKEN_A,
+            tokenB: TOKEN_B,
+            amountADesired: 1n,
+            amountBDesired: 1n,
+            slippageBps: 5000,
+            to: TO_ADDRESS,
+          }),
+        ).rejects.toThrow(
+          "amountAMin derived from the current quote and slippageBps is 0",
+        );
+
+        expect(mockRouter.buildAddLiquidity).not.toHaveBeenCalled();
       });
     });
   });

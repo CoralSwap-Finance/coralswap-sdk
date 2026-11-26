@@ -3,7 +3,7 @@
 ## [Unreleased]
 
 ### Added
-- Explicit slippage policy on liquidity operations: `slippageBps` (validated 0-5000) on `AddLiquidityRequest`/`RemoveLiquidityRequest` derives `amountAMin`/`amountBMin` from a fresh quote when they are omitted, explicit `0` minimums are rejected unless `allowZeroMin` is set, and the new `getRemoveLiquidityQuote()` returns expected withdrawal amounts from reserves and LP supply (#884)
+- Explicit slippage policy on liquidity operations: `slippageBps` (validated 0-5000) on `AddLiquidityRequest`/`RemoveLiquidityRequest` derives `amountAMin`/`amountBMin` from a fresh quote when they are omitted, explicit `0` minimums are rejected unless `allowZeroMin` is set, a minimum that derives to `0` needs the same opt-in, add-liquidity quotes cap `amountA` when `amountBDesired` is the binding side, and the new `getRemoveLiquidityQuote()` returns expected withdrawal amounts from reserves and LP supply (#884)
 - Explicit slippage policy on every swap entry point: `slippageToleranceBps` (validated 1-1000, default 100 bps) derives `amountOutMin`/`maxAmountIn` from the current route quote, so no swap path executes without a documented bound (#679)
 - `GovernanceModule.cancelProposal()` and `executeProposal()`, and `decodeProposal` now returns the proposal's `actions` instead of an empty array (#655)
 - Test matrices for governance (propose, decode actions, cancel, execute) and staking cooldown boundaries (#655), an events-timeline continuity suite over multi-page ledgers (#657), and a tax-reporting regression suite for non-zero gains, BigInt-safe cost basis and exports past 200 events (#659)
