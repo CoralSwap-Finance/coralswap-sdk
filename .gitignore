@@ -11,8 +11,10 @@ coverage/
 benchmarks/bundle-size.json
 docs/*
 !docs/PERFORMANCE.md
+branch_structure.json
+temp_auto_push.bat
+temp_interactive_push.bat
 !docs/error-taxonomy.md
-
 # Rust build output (1.2GB of Cargo artifacts was previously tracked here)
 target/
 **/target/
