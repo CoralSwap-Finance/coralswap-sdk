@@ -1,6 +1,6 @@
 import {
   Contract,
-  SorobanRpc,
+  rpc,
   TransactionBuilder,
   xdr,
   Address,
@@ -17,7 +17,7 @@ import { Logger } from "@/types/common";
  */
 export class FactoryClient {
   private contract: Contract;
-  private server: SorobanRpc.Server;
+  private server: rpc.Server;
   private networkPassphrase: string;
   private retryOptions: RetryOptions;
   private logger?: Logger;
@@ -33,7 +33,7 @@ export class FactoryClient {
    */
   constructor(
     contractAddress: string,
-    server: SorobanRpc.Server,
+    server: rpc.Server,
     networkPassphrase: string,
     retryOptions: RetryOptions,
     logger?: Logger,
@@ -135,10 +135,52 @@ export class FactoryClient {
     const op = this.contract.call("all_pairs");
     const result = await this.simulateRead(op);
     if (!result) return [];
-    const vec = result.vec();
-    return vec
-      ? vec.map((v: xdr.ScVal) => Address.fromScVal(v).toString())
-      : [];
+    const vec = result.type === "scvVec" ? result.vec ?? [] : [];
+    return vec.map((v: xdr.ScVal) => Address.fromScVal(v).toString());
+  }
+
+  /**
+   * Query the total number of registered pairs in the factory.
+   *
+   * @returns The number of pairs tracked by the factory contract.
+   */
+  async getTotalPairs(): Promise<number> {
+    for (const methodName of ["get_total_pairs", "total_pairs"]) {
+      try {
+        const op = this.contract.call(methodName);
+        const result = await this.simulateRead(op);
+        if (!result) continue;
+        if (result.type === "scvU32") return result.u32;
+        if (result.type === "scvU64") return Number(result.u64);
+        if (result.type === "scvI32") return Number(result.i32);
+        if (result.type === "scvI64") return Number(result.i64);
+      } catch {
+        // Fall through to the next known naming variant.
+      }
+    }
+    return 0;
+  }
+
+  /**
+   * Query the current factory fee-state version.
+   *
+   * @returns The fee-state version applied by the factory contract.
+   */
+  async getFeeStateVersion(): Promise<number> {
+    for (const methodName of ["get_fee_state_version", "fee_state_version"]) {
+      try {
+        const op = this.contract.call(methodName);
+        const result = await this.simulateRead(op);
+        if (!result) continue;
+        if (result.type === "scvU32") return result.u32;
+        if (result.type === "scvU64") return Number(result.u64);
+        if (result.type === "scvI32") return Number(result.i32);
+        if (result.type === "scvI64") return Number(result.i64);
+      } catch {
+        // Fall through to the next known naming variant.
+      }
+    }
+    return 0;
   }
 
   /**
@@ -157,7 +199,7 @@ export class FactoryClient {
     const op = this.contract.call("get_fee_parameters");
     const result = await this.simulateRead(op);
     if (!result) throw new Error("Failed to read fee parameters");
-    const map = result.map();
+    const map = result.type === "scvMap" ? result.map : undefined;
     if (!map) throw new Error("Invalid fee parameters response");
     return {
       feeMin: 10,
@@ -189,7 +231,7 @@ export class FactoryClient {
     const op = this.contract.call("is_paused");
     const result = await this.simulateRead(op);
     if (!result) return false;
-    return result.b() ?? false;
+    return result.type === "scvBool" ? result.b : false;
   }
 
   /**
@@ -201,7 +243,7 @@ export class FactoryClient {
     const op = this.contract.call("protocol_version");
     const result = await this.simulateRead(op);
     if (!result) return 0;
-    return result.u32() ?? 0;
+    return result.type === "scvU32" ? result.u32 : 0;
   }
 
   /**
@@ -237,7 +279,7 @@ export class FactoryClient {
       this.logger,
       "FactoryClient_simulateTransaction",
     );
-    if (SorobanRpc.Api.isSimulationSuccess(sim) && sim.result) {
+    if (rpc.Api.isSimulationSuccess(sim) && sim.result) {
       return sim.result.retval;
     }
     return null;

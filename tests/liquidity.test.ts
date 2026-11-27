@@ -3,6 +3,7 @@ import { CoralSwapClient } from "../src/client";
 import { PairClient } from "../src/contracts/pair";
 import { PRECISION } from "../src/config";
 import { ValidationError, TransactionError } from "../src/errors";
+import { rpc } from "@stellar/stellar-sdk";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -372,6 +373,59 @@ describe("LiquidityModule", () => {
         expect(quote.estimatedLPTokens).toBeGreaterThan(0n);
       });
     });
+
+    // -- zod schema validation (issue #491) -------------------------------
+
+    describe("input validation via zod schemas", () => {
+      let module: LiquidityModule;
+
+      beforeEach(() => {
+        module = new LiquidityModule(createMockClient({ pairAddress: null }));
+      });
+
+      it("rejects an invalid tokenA address", async () => {
+        await expect(
+          module.getAddLiquidityQuote("invalid-address", TOKEN_B, 1000n),
+        ).rejects.toThrow("tokenA is not a valid Stellar address: invalid-address");
+      });
+
+      it("rejects an invalid tokenB address", async () => {
+        await expect(
+          module.getAddLiquidityQuote(TOKEN_A, "not-an-address", 1000n),
+        ).rejects.toThrow("tokenB is not a valid Stellar address: not-an-address");
+      });
+
+      it("rejects an empty tokenA address", async () => {
+        await expect(
+          module.getAddLiquidityQuote("", TOKEN_B, 1000n),
+        ).rejects.toThrow("tokenA must not be empty");
+      });
+
+      it("rejects identical tokens", async () => {
+        await expect(
+          module.getAddLiquidityQuote(TOKEN_A, TOKEN_A, 1000n),
+        ).rejects.toThrow("tokenIn and tokenOut must be different addresses");
+      });
+
+      it("rejects a zero amountADesired", async () => {
+        await expect(
+          module.getAddLiquidityQuote(TOKEN_A, TOKEN_B, 0n),
+        ).rejects.toThrow("amountADesired must be greater than 0, got 0");
+      });
+
+      it("rejects a negative amountADesired", async () => {
+        await expect(
+          module.getAddLiquidityQuote(TOKEN_A, TOKEN_B, -1n),
+        ).rejects.toThrow("amountADesired must be greater than 0, got -1");
+      });
+
+      it("accepts the smallest positive amount (boundary)", async () => {
+        const quote = await module.getAddLiquidityQuote(TOKEN_A, TOKEN_B, 1n);
+
+        expect(quote.amountA).toBe(1n);
+        expect(quote.amountB).toBe(1n);
+      });
+    });
   });
 
   // -----------------------------------------------------------------------
@@ -468,6 +522,9 @@ describe("LiquidityModule", () => {
           data: { ledger: 12345 },
         }),
         getDeadline: jest.fn().mockReturnValue(1234567890),
+        server: {
+          getTransaction: jest.fn(),
+        },
       } as any;
 
       module = new LiquidityModule(mockClient);
@@ -502,6 +559,39 @@ describe("LiquidityModule", () => {
         amountA: 1000n,
         amountB: 2000n,
         liquidity: 0n,
+        ledger: 12345,
+      });
+    });
+
+    it("returns simulated liquidity amounts instead of placeholder request values", async () => {
+      mockClient.simulateTransaction = jest.fn().mockResolvedValue({
+        success: true,
+        returnValue: {
+          vec: [
+            { i128: () => ({ hi: () => ({ toString: () => '0' }), lo: () => ({ toString: () => '2500' }) }) },
+            { i128: () => ({ hi: () => ({ toString: () => '0' }), lo: () => ({ toString: () => '3600' }) }) },
+            { i128: () => ({ hi: () => ({ toString: () => '0' }), lo: () => ({ toString: () => '4200' }) }) },
+          ],
+        },
+      });
+
+      const request = {
+        tokenA: TOKEN_A,
+        tokenB: TOKEN_B,
+        amountADesired: 1000n,
+        amountBDesired: 2000n,
+        amountAMin: 900n,
+        amountBMin: 1800n,
+        to: TO_ADDRESS,
+      };
+
+      const result = await module.addLiquidity(request);
+
+      expect(result).toEqual({
+        txHash: 'test-tx-hash',
+        amountA: 2500n,
+        amountB: 3600n,
+        liquidity: 4200n,
         ledger: 12345,
       });
     });
@@ -670,6 +760,146 @@ describe("LiquidityModule", () => {
         ValidationError,
       );
     });
+
+    // -- zod schema validation (issue #491) -------------------------------
+
+    describe("input validation via zod schemas", () => {
+      const baseRequest = () => ({
+        tokenA: TOKEN_A,
+        tokenB: TOKEN_B,
+        amountADesired: 1000n,
+        amountBDesired: 2000n,
+        amountAMin: 900n,
+        amountBMin: 1800n,
+        to: TO_ADDRESS,
+      });
+
+      const rejected: Array<[string, Record<string, unknown>, string]> = [
+        [
+          "an invalid tokenA address",
+          { tokenA: "invalid-address" },
+          "tokenA is not a valid Stellar address: invalid-address",
+        ],
+        [
+          "an invalid tokenB address",
+          { tokenB: "not-an-address" },
+          "tokenB is not a valid Stellar address: not-an-address",
+        ],
+        [
+          "an invalid recipient address",
+          { to: "nope" },
+          "to is not a valid Stellar address: nope",
+        ],
+        ["an empty tokenA", { tokenA: "" }, "tokenA must not be empty"],
+        [
+          "a whitespace-only tokenB",
+          { tokenB: "   " },
+          "tokenB must not be empty",
+        ],
+        [
+          "identical tokens",
+          { tokenB: TOKEN_A },
+          "tokenIn and tokenOut must be different addresses",
+        ],
+        [
+          "a zero amountADesired",
+          { amountADesired: 0n },
+          "amountADesired must be greater than 0, got 0",
+        ],
+        [
+          "a negative amountBDesired",
+          { amountBDesired: -1n },
+          "amountBDesired must be greater than 0, got -1",
+        ],
+        [
+          "a negative amountAMin",
+          { amountAMin: -1n },
+          "amountAMin must be non-negative, got -1",
+        ],
+        [
+          "a negative amountBMin",
+          { amountBMin: -1n },
+          "amountBMin must be non-negative, got -1",
+        ],
+        [
+          "amountAMin above amountADesired",
+          { amountAMin: 1001n },
+          "amountAMin must not exceed amountADesired",
+        ],
+        [
+          "amountBMin above amountBDesired",
+          { amountBMin: 2001n },
+          "amountBMin must not exceed amountBDesired",
+        ],
+        [
+          "a non-bigint amountADesired",
+          { amountADesired: 1000 },
+          "amountADesired",
+        ],
+      ];
+
+      it.each(rejected)(
+        "rejects %s",
+        async (_label, patch, message) => {
+          await expect(
+            module.addLiquidity({ ...baseRequest(), ...patch } as any),
+          ).rejects.toThrow(ValidationError);
+          await expect(
+            module.addLiquidity({ ...baseRequest(), ...patch } as any),
+          ).rejects.toThrow(message);
+        },
+      );
+
+      it("rejects an invalid request before building the operation", async () => {
+        await expect(
+          module.addLiquidity({ ...baseRequest(), amountAMin: 5000n } as any),
+        ).rejects.toThrow(ValidationError);
+
+        expect(mockRouter.buildAddLiquidity).not.toHaveBeenCalled();
+      });
+
+      it("accepts minimums equal to the desired amounts (slippage boundary)", async () => {
+        await module.addLiquidity({
+          ...baseRequest(),
+          amountAMin: 1000n,
+          amountBMin: 2000n,
+        });
+
+        expect(mockRouter.buildAddLiquidity).toHaveBeenCalledWith(
+          TO_ADDRESS,
+          TOKEN_A,
+          TOKEN_B,
+          1000n,
+          2000n,
+          1000n,
+          2000n,
+          1234567890,
+        );
+      });
+
+      it("accepts zero minimums and the smallest positive amounts (boundary)", async () => {
+        await module.addLiquidity({
+          tokenA: TOKEN_A,
+          tokenB: TOKEN_B,
+          amountADesired: 1n,
+          amountBDesired: 1n,
+          amountAMin: 0n,
+          amountBMin: 0n,
+          to: TO_ADDRESS,
+        });
+
+        expect(mockRouter.buildAddLiquidity).toHaveBeenCalledWith(
+          TO_ADDRESS,
+          TOKEN_A,
+          TOKEN_B,
+          1n,
+          1n,
+          0n,
+          0n,
+          1234567890,
+        );
+      });
+    });
   });
 
   // -----------------------------------------------------------------------
@@ -698,6 +928,9 @@ describe("LiquidityModule", () => {
           data: { ledger: 12345 },
         }),
         getDeadline: jest.fn().mockReturnValue(1234567890),
+        server: {
+          getTransaction: jest.fn(),
+        },
       } as any;
 
       module = new LiquidityModule(mockClient);
@@ -729,6 +962,37 @@ describe("LiquidityModule", () => {
         txHash: "test-tx-hash",
         amountA: 400n,
         amountB: 800n,
+        liquidity: 500n,
+        ledger: 12345,
+      });
+    });
+
+    it("returns the simulated removal amounts instead of requested minimums", async () => {
+      mockClient.simulateTransaction = jest.fn().mockResolvedValue({
+        success: true,
+        returnValue: {
+          vec: [
+            { i128: () => ({ hi: () => ({ toString: () => '0' }), lo: () => ({ toString: () => '4200' }) }) },
+            { i128: () => ({ hi: () => ({ toString: () => '0' }), lo: () => ({ toString: () => '8300' }) }) },
+          ],
+        },
+      });
+
+      const request = {
+        tokenA: TOKEN_A,
+        tokenB: TOKEN_B,
+        liquidity: 500n,
+        amountAMin: 400n,
+        amountBMin: 800n,
+        to: TO_ADDRESS,
+      };
+
+      const result = await module.removeLiquidity(request);
+
+      expect(result).toEqual({
+        txHash: 'test-tx-hash',
+        amountA: 4200n,
+        amountB: 8300n,
         liquidity: 500n,
         ledger: 12345,
       });
@@ -851,6 +1115,114 @@ describe("LiquidityModule", () => {
       await expect(module.removeLiquidity(request)).rejects.toThrow(
         ValidationError,
       );
+    });
+
+    // -- zod schema validation (issue #491) -------------------------------
+
+    describe("input validation via zod schemas", () => {
+      const baseRequest = () => ({
+        tokenA: TOKEN_A,
+        tokenB: TOKEN_B,
+        liquidity: 500n,
+        amountAMin: 400n,
+        amountBMin: 800n,
+        to: TO_ADDRESS,
+      });
+
+      const rejected: Array<[string, Record<string, unknown>, string]> = [
+        [
+          "an invalid tokenA address",
+          { tokenA: "invalid-address" },
+          "tokenA is not a valid Stellar address: invalid-address",
+        ],
+        [
+          "an invalid tokenB address",
+          { tokenB: "not-an-address" },
+          "tokenB is not a valid Stellar address: not-an-address",
+        ],
+        [
+          "an invalid recipient address",
+          { to: "nope" },
+          "to is not a valid Stellar address: nope",
+        ],
+        ["an empty tokenA", { tokenA: "" }, "tokenA must not be empty"],
+        [
+          "a whitespace-only tokenB",
+          { tokenB: "   " },
+          "tokenB must not be empty",
+        ],
+        [
+          "identical tokens",
+          { tokenB: TOKEN_A },
+          "tokenIn and tokenOut must be different addresses",
+        ],
+        [
+          "a zero liquidity amount",
+          { liquidity: 0n },
+          "liquidity must be greater than 0, got 0",
+        ],
+        [
+          "a negative liquidity amount",
+          { liquidity: -1n },
+          "liquidity must be greater than 0, got -1",
+        ],
+        [
+          "a negative amountAMin",
+          { amountAMin: -1n },
+          "amountAMin must be non-negative, got -1",
+        ],
+        [
+          "a negative amountBMin",
+          { amountBMin: -1n },
+          "amountBMin must be non-negative, got -1",
+        ],
+        [
+          "a non-bigint liquidity amount",
+          { liquidity: "500" },
+          "liquidity",
+        ],
+      ];
+
+      it.each(rejected)(
+        "rejects %s",
+        async (_label, patch, message) => {
+          await expect(
+            module.removeLiquidity({ ...baseRequest(), ...patch } as any),
+          ).rejects.toThrow(ValidationError);
+          await expect(
+            module.removeLiquidity({ ...baseRequest(), ...patch } as any),
+          ).rejects.toThrow(message);
+        },
+      );
+
+      it("rejects an invalid request before building the operation", async () => {
+        await expect(
+          module.removeLiquidity({ ...baseRequest(), liquidity: 0n } as any),
+        ).rejects.toThrow(ValidationError);
+
+        expect(mockRouter.buildRemoveLiquidity).not.toHaveBeenCalled();
+      });
+
+      it("accepts zero minimums with the smallest positive liquidity (boundary)", async () => {
+        await module.removeLiquidity({
+          tokenA: TOKEN_A,
+          tokenB: TOKEN_B,
+          liquidity: 1n,
+          amountAMin: 0n,
+          amountBMin: 0n,
+          to: TO_ADDRESS,
+        });
+
+        expect(mockRouter.buildRemoveLiquidity).toHaveBeenCalledWith(
+          TO_ADDRESS,
+          TOKEN_A,
+          TOKEN_B,
+          1n,
+          0n,
+          0n,
+          1234567890,
+        );
+      });
     });
   });
 
@@ -993,3 +1365,332 @@ describe("LiquidityModule", () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Idempotent resubmission — addLiquidity() and removeLiquidity()
+// ---------------------------------------------------------------------------
+
+/**
+ * These tests exercise the submitIdempotent integration inside LiquidityModule.
+ *
+ * The scenario under test:
+ *   A transaction is sent to the Soroban RPC but the client-side polling
+ *   loop times out before confirmation arrives. The module must check the
+ *   real ledger status (via server.getTransaction) before deciding whether
+ *   to surface success, failure, or an error that allows a safe retry.
+ *
+ * Three distinct timeout outcomes are covered:
+ *   1. Timed-out but already landed (SUCCESS)  → treat as success, no resubmit.
+ *   2. Timed-out and landed but failed (FAILED) → propagate on-chain failure.
+ *   3. Timed-out and not yet found (NOT_FOUND)  → surface timeout for retry.
+ *
+ * A fourth case verifies that non-timeout failures bypass the idempotency
+ * check entirely and propagate immediately.
+ */
+describe("LiquidityModule — idempotent resubmission", () => {
+  const TOKEN_A = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM";
+  const TOKEN_B = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4";
+  const TO_ADDRESS = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM";
+
+  // Reusable valid request shapes
+  const ADD_REQUEST = {
+    tokenA: TOKEN_A,
+    tokenB: TOKEN_B,
+    amountADesired: 1000n,
+    amountBDesired: 2000n,
+    amountAMin: 900n,
+    amountBMin: 1800n,
+    to: TO_ADDRESS,
+  };
+
+  const REMOVE_REQUEST = {
+    tokenA: TOKEN_A,
+    tokenB: TOKEN_B,
+    liquidity: 500n,
+    amountAMin: 400n,
+    amountBMin: 800n,
+    to: TO_ADDRESS,
+  };
+
+  // -----------------------------------------------------------------------
+  // Helpers
+  // -----------------------------------------------------------------------
+
+  /**
+   * Build a mock client for idempotency tests.
+   *
+   * `submitResult`  — what submitTransaction resolves to.
+   * `txStatusResult` — what server.getTransaction resolves to (the ledger check).
+   */
+  function createIdempotentClient(
+    submitResult: ReturnType<jest.Mock>,
+    txStatusResult?: rpc.Api.GetTransactionResponse,
+  ): CoralSwapClient {
+    const getTransactionMock = txStatusResult
+      ? jest.fn().mockResolvedValue(txStatusResult)
+      : jest.fn();
+
+    return {
+      router: {
+        buildAddLiquidity: jest.fn().mockReturnValue({}),
+        buildRemoveLiquidity: jest.fn().mockReturnValue({}),
+      },
+      submitTransaction: submitResult,
+      getDeadline: jest.fn().mockReturnValue(1234567890),
+      server: {
+        getTransaction: getTransactionMock,
+      },
+    } as unknown as CoralSwapClient;
+  }
+
+  /** Timeout result with a known txHash — simulates a polled-but-timed-out send. */
+  function timeoutResult(txHash = "landed-tx-hash") {
+    return jest.fn().mockResolvedValue({
+      success: false,
+      txHash,
+      error: {
+        code: "TX_TIMEOUT",
+        message: "Transaction confirmation timed out after 30 attempts",
+      },
+    });
+  }
+
+  /** Soroban RPC SUCCESS response (pre-built to simulate landing). */
+  function rpcSuccess(ledger = 999): rpc.Api.GetTransactionResponse {
+    return {
+      status: rpc.Api.GetTransactionStatus.SUCCESS,
+      ledger,
+      latestLedger: ledger,
+      latestLedgerCloseTime: Math.floor(Date.now() / 1000),
+      oldestLedger: 1,
+      oldestLedgerCloseTime: 0,
+      createdAt: Math.floor(Date.now() / 1000),
+      applicationOrder: 1,
+      feeBump: false,
+      envelopeXdr: {} as any,
+      resultXdr: {} as any,
+      resultMetaXdr: {} as any,
+      returnValue: undefined,
+    } as rpc.Api.GetSuccessfulTransactionResponse;
+  }
+
+  /** Soroban RPC FAILED response. */
+  function rpcFailed(ledger = 999): rpc.Api.GetTransactionResponse {
+    return {
+      status: rpc.Api.GetTransactionStatus.FAILED,
+      ledger,
+      latestLedger: ledger,
+      latestLedgerCloseTime: Math.floor(Date.now() / 1000),
+      oldestLedger: 1,
+      oldestLedgerCloseTime: 0,
+      createdAt: Math.floor(Date.now() / 1000),
+      applicationOrder: 1,
+      feeBump: false,
+      envelopeXdr: {} as any,
+      resultXdr: {} as any,
+      resultMetaXdr: {} as any,
+    } as rpc.Api.GetFailedTransactionResponse;
+  }
+
+  /** Soroban RPC NOT_FOUND response. */
+  function rpcNotFound(): rpc.Api.GetTransactionResponse {
+    return {
+      status: rpc.Api.GetTransactionStatus.NOT_FOUND,
+      latestLedger: 1000,
+      latestLedgerCloseTime: Math.floor(Date.now() / 1000),
+      oldestLedger: 1,
+      oldestLedgerCloseTime: 0,
+    } as rpc.Api.GetMissingTransactionResponse;
+  }
+
+  // -----------------------------------------------------------------------
+  // addLiquidity() — idempotency scenarios
+  // -----------------------------------------------------------------------
+  describe("addLiquidity() — idempotent resubmission", () => {
+    it("returns success when a timed-out tx is found to have landed (SUCCESS)", async () => {
+      const client = createIdempotentClient(timeoutResult(), rpcSuccess(42));
+      const module = new LiquidityModule(client);
+
+      const result = await module.addLiquidity(ADD_REQUEST);
+
+      // Should resolve as success using the tx hash from the timeout result
+      expect(result.txHash).toBe("landed-tx-hash");
+      expect(result.ledger).toBe(42);
+      expect(result.amountA).toBe(ADD_REQUEST.amountADesired);
+      expect(result.amountB).toBe(ADD_REQUEST.amountBDesired);
+    });
+
+    it("does not call submitTransaction a second time when the tx is already landed", async () => {
+      const submitMock = timeoutResult();
+      const client = createIdempotentClient(submitMock, rpcSuccess());
+      const module = new LiquidityModule(client);
+
+      await module.addLiquidity(ADD_REQUEST);
+
+      // submitTransaction must only be called once — no duplicate deposit
+      expect(submitMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("throws TransactionError when a timed-out tx is found to have failed on-chain (FAILED)", async () => {
+      const client = createIdempotentClient(timeoutResult(), rpcFailed());
+      const module = new LiquidityModule(client);
+
+      await expect(module.addLiquidity(ADD_REQUEST)).rejects.toThrow(TransactionError);
+      await expect(module.addLiquidity(ADD_REQUEST)).rejects.toThrow("Add liquidity failed");
+    });
+
+    it("throws TransactionError with original timeout message when tx is NOT_FOUND after timeout", async () => {
+      // The tx timed out and the ledger has no record — safe to retry fresh
+      const client = createIdempotentClient(timeoutResult(), rpcNotFound());
+      const module = new LiquidityModule(client);
+
+      await expect(module.addLiquidity(ADD_REQUEST)).rejects.toThrow(TransactionError);
+      await expect(module.addLiquidity(ADD_REQUEST)).rejects.toThrow("Add liquidity failed");
+    });
+
+    it("throws TransactionError immediately for non-timeout failures (no status check)", async () => {
+      const genuineFailure = jest.fn().mockResolvedValue({
+        success: false,
+        txHash: "fail-hash",
+        error: {
+          code: "INSUFFICIENT_BALANCE",
+          message: "Insufficient balance",
+        },
+      });
+      const getTransactionMock = jest.fn();
+      const client = createIdempotentClient(genuineFailure, undefined);
+      // Inject getTransaction separately to assert it is never called
+      (client.server as any).getTransaction = getTransactionMock;
+
+      await expect(module_from(client).addLiquidity(ADD_REQUEST)).rejects.toThrow(
+        "Add liquidity failed: Insufficient balance",
+      );
+
+      // idempotency check must NOT be triggered for non-timeout errors
+      expect(getTransactionMock).not.toHaveBeenCalled();
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // removeLiquidity() — idempotency scenarios
+  // -----------------------------------------------------------------------
+  describe("removeLiquidity() — idempotent resubmission", () => {
+    it("returns success when a timed-out tx is found to have landed (SUCCESS)", async () => {
+      const client = createIdempotentClient(timeoutResult(), rpcSuccess(77));
+      const module = new LiquidityModule(client);
+
+      const result = await module.removeLiquidity(REMOVE_REQUEST);
+
+      expect(result.txHash).toBe("landed-tx-hash");
+      expect(result.ledger).toBe(77);
+      expect(result.liquidity).toBe(REMOVE_REQUEST.liquidity);
+    });
+
+    it("does not call submitTransaction a second time when the tx is already landed", async () => {
+      const submitMock = timeoutResult();
+      const client = createIdempotentClient(submitMock, rpcSuccess());
+      const module = new LiquidityModule(client);
+
+      await module.removeLiquidity(REMOVE_REQUEST);
+
+      // submitTransaction must only be called once — no duplicate withdrawal
+      expect(submitMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("throws TransactionError when a timed-out tx is found to have failed on-chain (FAILED)", async () => {
+      const client = createIdempotentClient(timeoutResult(), rpcFailed());
+      const module = new LiquidityModule(client);
+
+      await expect(module.removeLiquidity(REMOVE_REQUEST)).rejects.toThrow(TransactionError);
+      await expect(module.removeLiquidity(REMOVE_REQUEST)).rejects.toThrow("Remove liquidity failed");
+    });
+
+    it("throws TransactionError with original timeout message when tx is NOT_FOUND after timeout", async () => {
+      const client = createIdempotentClient(timeoutResult(), rpcNotFound());
+      const module = new LiquidityModule(client);
+
+      await expect(module.removeLiquidity(REMOVE_REQUEST)).rejects.toThrow(TransactionError);
+      await expect(module.removeLiquidity(REMOVE_REQUEST)).rejects.toThrow("Remove liquidity failed");
+    });
+
+    it("throws TransactionError immediately for non-timeout failures (no status check)", async () => {
+      const genuineFailure = jest.fn().mockResolvedValue({
+        success: false,
+        txHash: "fail-hash",
+        error: {
+          code: "INSUFFICIENT_LP_BALANCE",
+          message: "Insufficient LP balance",
+        },
+      });
+      const getTransactionMock = jest.fn();
+      const client = createIdempotentClient(genuineFailure, undefined);
+      (client.server as any).getTransaction = getTransactionMock;
+
+      await expect(module_from(client).removeLiquidity(REMOVE_REQUEST)).rejects.toThrow(
+        "Remove liquidity failed: Insufficient LP balance",
+      );
+
+      expect(getTransactionMock).not.toHaveBeenCalled();
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Edge cases
+  // -----------------------------------------------------------------------
+  describe("edge cases", () => {
+    it("addLiquidity: does not call getTransaction when timeout result has no txHash", async () => {
+      const timeoutNoHash = jest.fn().mockResolvedValue({
+        success: false,
+        error: {
+          code: "TX_TIMEOUT",
+          message: "timed out",
+        },
+        // txHash intentionally absent
+      });
+      const getTransactionMock = jest.fn();
+      const client = createIdempotentClient(timeoutNoHash, undefined);
+      (client.server as any).getTransaction = getTransactionMock;
+
+      await expect(module_from(client).addLiquidity(ADD_REQUEST)).rejects.toThrow(TransactionError);
+      expect(getTransactionMock).not.toHaveBeenCalled();
+    });
+
+    it("removeLiquidity: does not call getTransaction when timeout result has no txHash", async () => {
+      const timeoutNoHash = jest.fn().mockResolvedValue({
+        success: false,
+        error: {
+          code: "TX_TIMEOUT",
+          message: "timed out",
+        },
+      });
+      const getTransactionMock = jest.fn();
+      const client = createIdempotentClient(timeoutNoHash, undefined);
+      (client.server as any).getTransaction = getTransactionMock;
+
+      await expect(module_from(client).removeLiquidity(REMOVE_REQUEST)).rejects.toThrow(TransactionError);
+      expect(getTransactionMock).not.toHaveBeenCalled();
+    });
+
+    it("addLiquidity: propagates timeout as TransactionError when getTransaction call fails", async () => {
+      // Simulates an RPC outage during the idempotency check
+      const client = {
+        router: {
+          buildAddLiquidity: jest.fn().mockReturnValue({}),
+        },
+        submitTransaction: timeoutResult("rpc-down-hash"),
+        getDeadline: jest.fn().mockReturnValue(1234567890),
+        server: {
+          getTransaction: jest.fn().mockRejectedValue(new Error("RPC unreachable")),
+        },
+      } as unknown as CoralSwapClient;
+
+      // Falls back to the original timeout result, which surfaces as an error
+      await expect(module_from(client).addLiquidity(ADD_REQUEST)).rejects.toThrow(TransactionError);
+    });
+  });
+});
+
+// Small factory used inside idempotency tests to avoid forward-reference issues.
+function module_from(client: CoralSwapClient): LiquidityModule {
+  return new LiquidityModule(client);
+}

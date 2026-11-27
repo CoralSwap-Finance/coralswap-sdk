@@ -34,6 +34,24 @@ export interface GetPositionsOptions {
    * If omitted, all known pairs from the factory are queried.
    */
   pairAddresses?: string[];
+  /**
+   * Maximum number of positions to return in this page.
+   */
+  limit?: number;
+  /**
+   * Cursor offset for a paged request. Interpreted as the zero-based index
+   * of the first position in the page.
+   */
+  cursor?: string;
+}
+
+export interface PositionPageInfo {
+  limit?: number;
+  cursor?: string;
+  nextCursor?: string | null;
+  hasNextPage?: boolean;
+  hasMore?: boolean;
+  [key: string]: unknown;
 }
 
 /**
@@ -46,4 +64,8 @@ export interface PositionSummary {
   totalPools: number;
   /** All enriched positions (filtered by options) */
   positions: EnrichedLPPosition[];
+  /** Whether the page was cut off by the requested limit. */
+  truncated?: boolean;
+  /** Cursor metadata for paged results. */
+  pageInfo?: PositionPageInfo;
 }

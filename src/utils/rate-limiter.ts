@@ -24,8 +24,30 @@ export interface RateLimiterOptions {
   maxBurst: number;
 }
 
+/**
+ * Error thrown when {@link RateLimiter.acquire} is pending while
+ * {@link RateLimiter.destroy} is called.
+ *
+ * Destroying a limiter means "stop throttling" — it must never *grant* tokens
+ * to queued waiters (that would materialize an unthrottled burst). Instead,
+ * every pending `acquire()` is rejected with this error so callers can tell a
+ * cancelled wait apart from a granted slot.
+ *
+ * The message deliberately avoids retryable-sounding keywords ("timeout",
+ * "429", "service unavailable", …) so `isRetryable()` classifies it as
+ * non-retryable and callers fail fast instead of retrying a dead limiter.
+ */
+export class RateLimiterDestroyedError extends Error {
+  constructor() {
+    super('RateLimiter was destroyed while a token request was still queued');
+    this.name = 'RateLimiterDestroyedError';
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
 interface PendingRequest {
   resolve: () => void;
+  reject: (reason: unknown) => void;
 }
 
 export class RateLimiter {
@@ -67,6 +89,10 @@ export class RateLimiter {
    *
    * Returns a Promise that resolves once the token has been granted.
    * Requests are granted in FIFO order so starvation is impossible.
+   *
+   * If the limiter is destroyed while this request is queued, the returned
+   * Promise rejects with {@link RateLimiterDestroyedError} — it never resolves
+   * as if a token had been granted.
    */
   acquire(): Promise<void> {
     this._refill();
@@ -76,8 +102,8 @@ export class RateLimiter {
       return Promise.resolve();
     }
 
-    return new Promise<void>((resolve) => {
-      this.queue.push({ resolve });
+    return new Promise<void>((resolve, reject) => {
+      this.queue.push({ resolve, reject });
       this._scheduleNext();
     });
   }
@@ -98,7 +124,14 @@ export class RateLimiter {
 
   /**
    * Stop the internal timer and drain the pending queue.
-   * Pending requests are resolved immediately (tokens are "gifted").
+   *
+   * Every queued `acquire()` is rejected with {@link RateLimiterDestroyedError}:
+   * destroying the limiter must not gift tokens, otherwise a teardown path
+   * would resolve all waiters at once and produce exactly the unthrottled
+   * burst the limiter exists to prevent.
+   *
+   * The bucket state (tokens / refill clock) is left untouched; a destroyed
+   * limiter is simply no longer willing to hand out tokens.
    */
   destroy(): void {
     if (this.timer !== null) {
@@ -106,7 +139,7 @@ export class RateLimiter {
       this.timer = null;
     }
     for (const pending of this.queue.splice(0)) {
-      pending.resolve();
+      pending.reject(new RateLimiterDestroyedError());
     }
   }
 

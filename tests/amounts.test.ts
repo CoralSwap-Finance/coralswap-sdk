@@ -123,6 +123,16 @@ describe('Amount Utilities', () => {
       const big = BigInt('1000000000000000000');
       expect(safeMul(big, 2n)).toBe(2000000000000000000n);
     });
+
+    it('allows large but in-bounds products', () => {
+      const a = (2n ** 126n) - 1n;
+      expect(safeMul(a, 2n)).toBe((2n ** 127n) - 2n);
+    });
+
+    it('throws when a product exceeds the Soroban i128 range', () => {
+      const a = 2n ** 126n;
+      expect(() => safeMul(a, 2n)).toThrow('exceeds the Soroban i128 range');
+    });
   });
 
   describe('safeDiv', () => {

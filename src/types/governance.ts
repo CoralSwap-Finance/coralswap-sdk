@@ -28,7 +28,7 @@
  * - `'abstain'` — the voter participates but takes no side (counted
  *   toward quorum requirements)
  */
-export type VoteType = 'for' | 'against' | 'abstain';
+export type VoteType = "for" | "against" | "abstain";
 
 /**
  * Lifecycle status of a governance proposal.
@@ -38,7 +38,7 @@ export type VoteType = 'for' | 'against' | 'abstain';
  * The `expired` status is terminal and occurs when a proposal's
  * deadline passes without enough votes to reach a decision.
  */
-export type ProposalStatus = 'active' | 'passed' | 'rejected' | 'expired';
+export type ProposalStatus = "active" | "passed" | "rejected" | "expired";
 
 /**
  * A single on-chain action bundled inside a governance proposal.
@@ -138,6 +138,8 @@ export interface Proposal {
    * Ledger sequence number at which the proposal was created.
    *
    * Can be used as a cursor for pagination in `getProposalHistory`.
+   * Also serves as the snapshot ledger for computing voting power
+   * with {@link GovernanceModule.getProposalVotingPower}.
    */
   createdAt: number;
 
@@ -203,7 +205,7 @@ export interface ProposalFilter {
    * valid — `active` proposals are intentionally excluded here since
    * they are better served by `getActiveProposals()`.
    */
-  status?: 'passed' | 'rejected' | 'expired';
+  status?: "passed" | "rejected" | "expired";
 
   /**
    * Only return proposals created at or after this ledger sequence

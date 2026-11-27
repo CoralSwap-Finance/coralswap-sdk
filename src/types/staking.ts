@@ -48,3 +48,21 @@ export interface CooldownStatus {
   /** Date object representing when withdrawal becomes available. */
   canWithdrawAt: Date;
 }
+
+/**
+ * Stake eligibility status for governance voting.
+ *
+ * Returned by {@link StakingModule.getVoteEligibility}.
+ * Indicates whether a stake has settled long enough to count
+ * toward governance voting power.
+ */
+export interface VoteEligibility {
+  /** Whether this stake is eligible to count toward governance votes. */
+  isEligible: boolean;
+  /** Unix timestamp (seconds) when the stake was created. */
+  stakedAt: number;
+  /** Unix timestamp (seconds) when the stake becomes vote-eligible. */
+  eligibleAt: number;
+  /** Human-readable Date when the stake becomes eligible. */
+  eligibleAtDate: Date;
+}

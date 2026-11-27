@@ -8,6 +8,15 @@ import {
   TOKEN_A,
   TOKEN_B,
   TOKEN_C,
+  PAIR_AD,
+  PAIR_BE,
+  PAIR_CF,
+  PAIR_DG,
+  PAIR_EG,
+  PAIR_FG,
+  PAIR_AF,
+  PAIR_BD,
+  PAIR_BC,
 } from './fixtures';
 import { TradeType } from '../src/types/common';
 
@@ -130,6 +139,25 @@ export function buildOperations(rpcLatencyMs: number): BenchmarkOperation[] {
       name: 'pair.getReserves',
       group: 'analytics',
       run: () => ctx.client.pair(PAIR_AB).getReserves(),
+    },
+
+    // --- Batch token-price fetch ---
+    {
+      name: 'treasury.getSpotPriceMap',
+      group: 'analytics',
+      run: () =>
+        ctx.treasury.getSpotPriceMap([
+          PAIR_AB,
+          PAIR_BC,
+          PAIR_AD,
+          PAIR_BE,
+          PAIR_CF,
+          PAIR_DG,
+          PAIR_EG,
+          PAIR_FG,
+          PAIR_AF,
+          PAIR_BD,
+        ]),
     },
   ];
 }

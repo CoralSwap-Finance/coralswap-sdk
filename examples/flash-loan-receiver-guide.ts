@@ -28,7 +28,6 @@ import {
   encodeFlashLoanData,
   decodeFlashLoanData,
   calculateRepayment,
-  OnFlashLoanParams,
 } from '../src/contracts/flash-receiver';
 
 // ============================================================================
@@ -84,16 +83,6 @@ import {
  * the fee back to the pair contract. If you don't, the transaction will revert.
  */
 
-// TypeScript interface representing the callback parameters
-// (This is for SDK usage, not the actual Soroban contract)
-interface FlashLoanCallback {
-  sender: string;    // Address that initiated the flash loan
-  token: string;     // Token being borrowed
-  amount: bigint;    // Amount borrowed (principal)
-  fee: bigint;       // Fee amount to be paid
-  data: Buffer;      // Arbitrary callback data
-}
-
 // ============================================================================
 // CALLBACK DATA ENCODING AND DECODING
 // ============================================================================
@@ -139,8 +128,12 @@ function demonstrateCallbackDataEncoding() {
     slippageTolerance: 100, // 1%
   });
 
-  console.log('✅ Callback data encoded successfully');
-  console.log('   Pass this data to FlashLoanModule.execute()');
+  console.log('✅ Callback data encoded successfully:');
+  console.log('   simple:', simpleData);
+  console.log('   arbitrage:', arbitrageData);
+  console.log('   liquidation:', liquidationData);
+  console.log('   complex:', complexData);
+  console.log('   Pass one of these to FlashLoanModule.execute()');
 }
 
 /**

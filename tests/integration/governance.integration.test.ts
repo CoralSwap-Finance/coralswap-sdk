@@ -1,19 +1,19 @@
-import { CoralSwapClient } from '../../src';
+import { CoralSwapClient, Network } from '../../src';
 import { Keypair } from '@stellar/stellar-sdk';
 
-describe('Governance Module Integration Tests (Testnet)', () => {
+const SKIP = process.env.STELLAR_TESTNET !== 'true' || !process.env.TEST_KEYPAIR;
+const describeIntegration = SKIP ? describe.skip : describe;
+
+describeIntegration('Governance Module Integration Tests (Testnet)', () => {
   let client: CoralSwapClient;
   let testKeypair: Keypair;
 
   beforeAll(() => {
-    const secret = process.env.TEST_KEYPAIR;
-    if (!secret) {
-      throw new Error('TEST_KEYPAIR env var is required for integration tests');
-    }
+    const secret = process.env.TEST_KEYPAIR!;
     testKeypair = Keypair.fromSecret(secret);
 
     client = new CoralSwapClient({
-      network: 'testnet' as any,  // temporary until we find the enum
+      network: Network.TESTNET,
       secretKey: secret,
     });
   });

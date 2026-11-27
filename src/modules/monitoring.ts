@@ -17,9 +17,39 @@ import {
   MetricGranularity,
   MetricQueryOptions,
   MonitoringDashboard,
+  ProtocolMetrics,
+  PoolMetrics,
+  SystemMetrics,
+  SystemMetricsPeriod,
+  MetricChange,
+  PoolTvlChange,
 } from '@/types/monitoring';
+import { SyncEvent, SwapEvent } from '@/types/events';
 import { ValidationError } from '@/errors';
 import { validateAddress } from '@/utils/validation';
+import { LEDGER_CLOSE_INTERVAL_SECONDS } from '@/utils/ledger';
+import { TypedEventCursor, MIN_START_LEDGER } from '@/utils/event-cursor';
+import { MonitoringPeriodSchema, validateWithSchema } from '@/schemas';
+import { TreasuryModule, TreasuryModuleOptions } from '@/modules/treasury';
+import { SwapModule } from '@/modules/swap';
+
+const STROOP = 1e7;
+/** Cache TTL for getProtocolMetrics()/getPoolMetrics(), per acceptance criteria. */
+const METRICS_CACHE_TTL_MS = 60_000;
+/** Approximate ledger count for a 24h window, derived from the shared ledger close interval. */
+const LEDGERS_PER_DAY = 86_400 / LEDGER_CLOSE_INTERVAL_SECONDS;
+/**
+ * Max swap events fetched per 24h-window query. getSwapHistory() reads a single
+ * RPC page with no pagination, so pools/protocols with more than this many swaps
+ * in 24h will under-count totalSwaps24h/uniqueUsers24h/volume24hUSD.
+ */
+const HISTORY_QUERY_LIMIT = 1000;
+/**
+ * Per-request page size for getSystemMetrics() event scans. EventCursor keeps
+ * paging while pages come back full, so this bounds request size, not the
+ * number of events considered.
+ */
+const SYSTEM_METRICS_PAGE_LIMIT = 1000;
 
 // ---------------------------------------------------------------------------
 // Built-in metric definitions
@@ -55,12 +85,20 @@ export interface MetricPoint {
 
 /**
  * Pool-level health status.
+ *
+ * `tvlUSD`, `volume24hUSD` and `fees24hUSD` are derived from the pool's
+ * on-chain reserves and its trailing-24h `swap` events respectively — they are
+ * never placeholders, so an empty pool or a window without swaps reads as `0`
+ * only because the underlying data is absent.
  */
 export interface PoolHealth {
   pairAddress: string;
   operational: boolean;
+  /** USD value of the pool's current reserves (stablecoin-anchored spot pricing). */
   tvlUSD: number;
+  /** USD swap volume across the pool's `swap` events in the trailing ~24h. */
   volume24hUSD: number;
+  /** USD fee revenue (`amountIn × feeBps`) from those same swap events. */
   fees24hUSD: number;
   reserveRatio: number;
   oracleDeviationBps: number;
@@ -136,7 +174,12 @@ const DEFAULT_GRANULARITY: MetricGranularity = '1h';
  * // Protocol-level health
  * const summary = await monitor.getProtocolSummary();
  * const health = await monitor.checkSystemHealth();
+ * const kpis = await monitor.getSystemMetrics('7d');
  * const poolHealth = await monitor.getPoolHealth('CA3D...');
+ *
+ * // Dashboard aggregator (cached for 60s)
+ * const metrics = await monitor.getProtocolMetrics();
+ * const poolMetrics = await monitor.getPoolMetrics('CA3D...');
  *
  * // Custom metric collection
  * const id = await monitor.registerMetric({
@@ -146,61 +189,359 @@ const DEFAULT_GRANULARITY: MetricGranularity = '1h';
  * await monitor.collect(id);
  * const dashboard = await monitor.getDashboard();
  * ```
+ *
+ * ### Not a price oracle
+ *
+ * **All USD values, spot prices, and TVL figures returned by this module are
+ * derived from on-chain reserve ratios using static stablecoin anchor prices
+ * supplied by the caller. They are NOT attested oracle prices and must not
+ * be used as the sole reference for settlement, liquidation, or pricing
+ * decisions.** RedStone integration (see `utils/redstone.ts`) provides signed
+ * per-swap price *guards*, but the monitoring module does not consume RedStone
+ * feeds and offers no manipulation-resistant price stream. For reliable,
+ * signed price data, use the TWAP Oracle (`src/modules/oracle.ts`) or a
+ * dedicated oracle provider.
+ *
+ * ### USD pricing note
+ * `getProtocolMetrics()`/`getPoolMetrics()`/`getSystemMetrics()`/`getPoolHealth()`/
+ * `getProtocolSummary()` price reserves and swap volume in
+ * USD using the same stablecoin-anchored spot pricing as
+ * {@link TreasuryModule}/`PortfolioModule` (reserve ratios against
+ * caller-supplied `stableAddresses`), not RedStone. RedStone in this SDK is a
+ * per-swap price *guard* that requires the caller to supply a signed
+ * `RedStonePayload` keyed by feed symbol (see `utils/redstone.ts`); it isn't a
+ * queryable price source the SDK can call on its own, and it has no built-in
+ * mapping from arbitrary token addresses to feed symbols. Pass
+ * `stableAddresses` in the constructor options to enable USD valuations;
+ * without at least one, all USD fields are 0.
  */
 export class MonitoringModule {
   private readonly client: CoralSwapClient;
   private readonly metrics: Map<string, MetricInstance> = new Map();
+  private readonly pricing: TreasuryModule;
+  private readonly swap: SwapModule;
+  private readonly cache: Map<string, { value: unknown; expiresAt: number }> = new Map();
 
-  constructor(client: CoralSwapClient) {
+  constructor(client: CoralSwapClient, options: TreasuryModuleOptions = {}) {
     this.client = client;
+    this.pricing = new TreasuryModule(client, options);
+    this.swap = new SwapModule(client);
+  }
+
+  private getCached<T>(key: string): T | undefined {
+    const entry = this.cache.get(key);
+    if (!entry || entry.expiresAt < Date.now()) return undefined;
+    return entry.value as T;
+  }
+
+  private setCached(key: string, value: unknown): void {
+    this.cache.set(key, { value, expiresAt: Date.now() + METRICS_CACHE_TTL_MS });
+  }
+
+  // -----------------------------------------------------------------------
+  // Dashboard aggregator (protocol + per-pool metrics, 60s cache)
+  // -----------------------------------------------------------------------
+
+  /**
+   * Aggregate key protocol-wide metrics for a dashboard: TVL, 24h volume,
+   * active pool count, unique users, swap count, and average swap size.
+   *
+   * Cached for 60 seconds to avoid redundant RPC calls.
+   */
+  async getProtocolMetrics(): Promise<ProtocolMetrics> {
+    const cached = this.getCached<ProtocolMetrics>('protocol');
+    if (cached) return cached;
+
+    const allPairs = await this.client.factory.getAllPairs();
+    const priceMap = await this.pricing.getSpotPriceMap(allPairs);
+
+    let tvlUSD = 0;
+    let activePools = 0;
+
+    await Promise.all(
+      allPairs.map(async (pairAddress) => {
+        try {
+          const pair = this.client.pair(pairAddress);
+          const [{ token0, token1 }, { reserve0, reserve1 }] = await Promise.all([
+            pair.getTokens(),
+            pair.getReserves(),
+          ]);
+          if (reserve0 === 0n || reserve1 === 0n) return;
+          activePools++;
+          const price0 = priceMap.get(token0) ?? 0;
+          const price1 = priceMap.get(token1) ?? 0;
+          tvlUSD += (Number(reserve0) / STROOP) * price0 + (Number(reserve1) / STROOP) * price1;
+        } catch {
+          // Skip pools we can't read; don't fail the whole aggregate.
+        }
+      }),
+    );
+
+    const currentLedger = await this.client.getCurrentLedger();
+    const fromLedger = Math.max(0, currentLedger - LEDGERS_PER_DAY);
+    const events = await this.swap.getSwapHistory({
+      fromLedger,
+      toLedger: currentLedger,
+      limit: HISTORY_QUERY_LIMIT,
+    });
+
+    const totalSwaps24h = events.length;
+    const uniqueUsers24h = new Set(events.map((e) => e.sender)).size;
+    const volume24hUSD = events.reduce((sum, e) => {
+      const price = priceMap.get(e.tokenIn) ?? 0;
+      return sum + (Number(e.amountIn) / STROOP) * price;
+    }, 0);
+    const avgSwapSizeUSD = totalSwaps24h > 0 ? volume24hUSD / totalSwaps24h : 0;
+
+    const result: ProtocolMetrics = {
+      tvlUSD,
+      volume24hUSD,
+      activePools,
+      uniqueUsers24h,
+      totalSwaps24h,
+      avgSwapSizeUSD,
+      computedAt: Date.now(),
+    };
+    this.setCached('protocol', result);
+    return result;
+  }
+
+  /**
+   * Detailed metrics for a single pool: TVL, 24h volume, swap count, unique
+   * users, average swap size, reserves, and current fee.
+   *
+   * Cached for 60 seconds to avoid redundant RPC calls.
+   */
+  async getPoolMetrics(pairAddress: string): Promise<PoolMetrics> {
+    validateAddress(pairAddress, 'pairAddress');
+    const cacheKey = `pool:${pairAddress}`;
+    const cached = this.getCached<PoolMetrics>(cacheKey);
+    if (cached) return cached;
+
+    const allPairs = await this.client.factory.getAllPairs();
+    const priceMap = await this.pricing.getSpotPriceMap(allPairs);
+
+    const pair = this.client.pair(pairAddress);
+    const [{ token0, token1 }, { reserve0, reserve1 }, feeBps] = await Promise.all([
+      pair.getTokens(),
+      pair.getReserves(),
+      pair.getDynamicFee(),
+    ]);
+
+    const price0 = priceMap.get(token0) ?? 0;
+    const price1 = priceMap.get(token1) ?? 0;
+    const tvlUSD = (Number(reserve0) / STROOP) * price0 + (Number(reserve1) / STROOP) * price1;
+
+    const { volume24hUSD, totalSwaps24h, uniqueUsers24h } = await this.fetchPairSwapTotals(
+      pairAddress,
+      priceMap,
+    );
+    const avgSwapSizeUSD = totalSwaps24h > 0 ? volume24hUSD / totalSwaps24h : 0;
+
+    const result: PoolMetrics = {
+      pairAddress,
+      tvlUSD,
+      volume24hUSD,
+      totalSwaps24h,
+      uniqueUsers24h,
+      avgSwapSizeUSD,
+      reserve0,
+      reserve1,
+      feeBps,
+      computedAt: Date.now(),
+    };
+    this.setCached(cacheKey, result);
+    return result;
+  }
+
+  // -----------------------------------------------------------------------
+  // System metrics (growth KPIs)
+  // -----------------------------------------------------------------------
+
+  /**
+   * High-level protocol KPIs for operators and governance.
+   *
+   * Compares the requested lookback window against the immediately preceding
+   * window of equal length for TVL, swap volume, fee revenue, and unique
+   * swappers, and ranks the pools whose TVL grew / declined the most.
+   *
+   * Historical figures come from on-chain `sync` / `swap` events read through
+   * the shared {@link TypedEventCursor}, which handles topic encoding,
+   * pagination, and decoding — this module never builds `getEvents` filters
+   * itself. Previous TVL is valued from each pool's last `sync` event at or
+   * before the start of the current window, priced with today's spot map.
+   *
+   * **RPC event retention:** the previous window starts at
+   * `currentLedger - 2 * periodLedgers` (~2 days for `'24h'`, ~14 days for
+   * `'7d'`, ~60 days for `'30d'`). Public Soroban RPC providers often retain
+   * only a few days of events; outside that range `getEvents` rejects the
+   * request, and the error is surfaced rather than silently reported as a
+   * zero previous window. Use an archival / long-retention RPC for `'7d'` and
+   * `'30d'`.
+   *
+   * @param period - Lookback window; defaults to `'24h'`.
+   * @returns Aggregated {@link SystemMetrics}.
+   * @throws {ValidationError} When `period` is not one of `'24h' | '7d' | '30d'`.
+   *
+   * @example
+   * ```ts
+   * const metrics = await monitor.getSystemMetrics('7d');
+   * console.log(metrics.tvlChange.percentage); // e.g. 12.5
+   * ```
+   */
+  async getSystemMetrics(period: SystemMetricsPeriod = '24h'): Promise<SystemMetrics> {
+    validateWithSchema(MonitoringPeriodSchema, period, `system metrics period (${String(period)})`);
+
+    const allPairs = await this.client.factory.getAllPairs();
+    if (allPairs.length === 0) {
+      return {
+        tvlChange: computeMetricChange(0, 0),
+        volumeChange: computeMetricChange(0, 0),
+        revenueChange: computeMetricChange(0, 0),
+        userGrowth: computeMetricChange(0, 0),
+        revenueUSD: 0,
+        topGrowingPool: null,
+        topDecliningPool: null,
+      };
+    }
+
+    const periodLedgers = periodToLedgers(period);
+    const currentLedger = await this.client.getCurrentLedger();
+    const currentStart = Math.max(MIN_START_LEDGER, currentLedger - periodLedgers);
+    const previousStart = Math.max(MIN_START_LEDGER, currentLedger - periodLedgers * 2);
+
+    const priceMap = await this.pricing.getSpotPriceMap(allPairs);
+
+    const perPool = await Promise.all(
+      allPairs.map(async (pairAddress) => {
+        const [tvl, activity] = await Promise.all([
+          this.fetchPoolTvlWindow(pairAddress, priceMap, previousStart, currentStart),
+          this.fetchPoolSwapActivity(pairAddress, priceMap, previousStart, currentStart, currentLedger),
+        ]);
+        return { pairAddress, tvl, activity };
+      }),
+    );
+
+    const poolChanges: PoolTvlChange[] = [];
+    let currentTvl = 0;
+    let previousTvl = 0;
+    let currentVolume = 0;
+    let previousVolume = 0;
+    let currentRevenue = 0;
+    let previousRevenue = 0;
+    const currentUsers = new Set<string>();
+    const previousUsers = new Set<string>();
+
+    for (const { pairAddress, tvl, activity } of perPool) {
+      if (tvl) {
+        currentTvl += tvl.currentTvlUSD;
+        previousTvl += tvl.previousTvlUSD;
+        poolChanges.push({
+          pairAddress,
+          currentTvlUSD: tvl.currentTvlUSD,
+          previousTvlUSD: tvl.previousTvlUSD,
+          tvlChange: computeMetricChange(tvl.currentTvlUSD, tvl.previousTvlUSD),
+        });
+      }
+      currentVolume += activity.currentVolumeUSD;
+      previousVolume += activity.previousVolumeUSD;
+      currentRevenue += activity.currentRevenueUSD;
+      previousRevenue += activity.previousRevenueUSD;
+      for (const u of activity.currentUsers) currentUsers.add(u);
+      for (const u of activity.previousUsers) previousUsers.add(u);
+    }
+
+    const { topGrowingPool, topDecliningPool } = pickTopPools(poolChanges);
+
+    return {
+      tvlChange: computeMetricChange(currentTvl, previousTvl),
+      volumeChange: computeMetricChange(currentVolume, previousVolume),
+      revenueChange: computeMetricChange(currentRevenue, previousRevenue),
+      userGrowth: computeMetricChange(currentUsers.size, previousUsers.size),
+      revenueUSD: currentRevenue,
+      topGrowingPool,
+      topDecliningPool,
+    };
   }
 
   // -----------------------------------------------------------------------
   // Pool metrics (protocol health)
   // -----------------------------------------------------------------------
 
+  /**
+   * Health snapshot for one pool: liveness, reserve ratio, and USD TVL,
+   * 24h volume, and 24h fee revenue derived from live reserves plus the
+   * pool's trailing-24h `swap` transfer events.
+   *
+   * USD figures use the same stablecoin-anchored spot pricing as
+   * {@link getProtocolMetrics}; with no `stableAddresses` configured the USD
+   * fields are `0` while `reserveRatio` still reflects on-chain reserves.
+   *
+   * @throws {ValidationError} When `pairAddress` is not a valid address.
+   */
   async getPoolHealth(pairAddress: string): Promise<PoolHealth> {
+    validateAddress(pairAddress, 'pairAddress');
     try {
-      const pair = this.client.pair(pairAddress);
-      const [reserves] = await Promise.all([
-        pair.getReserves(),
-        pair.getTokens(),
-      ]);
-      const { reserve0, reserve1 } = reserves;
-      const reserveRatio = reserve1 > 0n ? Number((reserve0 * 10000n) / reserve1) / 10000 : 0;
-      return {
-        pairAddress,
-        operational: true,
-        tvlUSD: 0,
-        volume24hUSD: 0,
-        fees24hUSD: 0,
-        reserveRatio,
-        oracleDeviationBps: 0,
-        errors: [],
-        warnings: [],
-      };
+      const allPairs = await this.client.factory.getAllPairs();
+      const priceMap = await this.pricing.getSpotPriceMap(
+        allPairs.length > 0 ? allPairs : [pairAddress],
+      );
+      return await this.buildPoolHealth(pairAddress, priceMap);
     } catch {
-      return {
-        pairAddress,
-        operational: false,
-        tvlUSD: 0,
-        volume24hUSD: 0,
-        fees24hUSD: 0,
-        reserveRatio: 0,
-        oracleDeviationBps: 0,
-        errors: ['Failed to fetch pool data'],
-        warnings: [],
-      };
+      return poolHealthFailure(pairAddress);
     }
   }
 
+  /**
+   * Health snapshots for every pool in the factory, sharing one spot-price
+   * map so the aggregate does not re-read every pair once per pool.
+   */
   async getAllPoolHealth(): Promise<PoolHealth[]> {
     try {
       const pairs = await this.client.factory.getAllPairs();
-      return Promise.all(pairs.map((p) => this.getPoolHealth(p)));
+      if (pairs.length === 0) return [];
+      const priceMap = await this.pricing.getSpotPriceMap(pairs);
+      return await Promise.all(
+        pairs.map(async (p) => {
+          try {
+            return await this.buildPoolHealth(p, priceMap);
+          } catch {
+            return poolHealthFailure(p);
+          }
+        }),
+      );
     } catch {
       return [];
     }
+  }
+
+  /**
+   * Read one pool's reserves/tokens and derive its health figures from the
+   * given price map. Throws when the pool's on-chain state can't be read, so
+   * callers decide how to degrade.
+   */
+  private async buildPoolHealth(
+    pairAddress: string,
+    priceMap: Map<string, number>,
+  ): Promise<PoolHealth> {
+    const pair = this.client.pair(pairAddress);
+    const [{ reserve0, reserve1 }, { token0, token1 }] = await Promise.all([
+      pair.getReserves(),
+      pair.getTokens(),
+    ]);
+    const reserveRatio = reserve1 > 0n ? Number((reserve0 * 10000n) / reserve1) / 10000 : 0;
+    const { volume24hUSD, fees24hUSD } = await this.fetchPairSwapTotals(pairAddress, priceMap);
+    return {
+      pairAddress,
+      operational: true,
+      tvlUSD: reservesToUSD(reserve0, reserve1, token0, token1, priceMap),
+      volume24hUSD,
+      fees24hUSD,
+      reserveRatio,
+      oracleDeviationBps: 0,
+      errors: [],
+      warnings: [],
+    };
   }
 
   // -----------------------------------------------------------------------
@@ -233,6 +574,12 @@ export class MonitoringModule {
   // Protocol summary
   // -----------------------------------------------------------------------
 
+  /**
+   * Protocol-wide summary aggregated from every pool's
+   * {@link getAllPoolHealth} snapshot: TVL, 24h volume, and 24h fees are the
+   * sums of figures derived per pool from live reserves and trailing-24h
+   * swap events, so they move with on-chain data rather than being fixed.
+   */
   async getProtocolSummary(): Promise<ProtocolSummary> {
     const allHealth = await this.getAllPoolHealth();
     const active = allHealth.filter((p) => p.operational);
@@ -365,6 +712,171 @@ export class MonitoringModule {
     }
   }
 
+  // -----------------------------------------------------------------------
+  // Private helpers — system metrics
+  // -----------------------------------------------------------------------
+
+  /**
+   * Current and start-of-window TVL for one pool, or `null` when the pool's
+   * live reserves can't be read (skipped, as in {@link getProtocolMetrics}).
+   */
+  private async fetchPoolTvlWindow(
+    pairAddress: string,
+    priceMap: Map<string, number>,
+    fromLedger: number,
+    toLedger: number,
+  ): Promise<{ currentTvlUSD: number; previousTvlUSD: number } | null> {
+    let reserve0: bigint, reserve1: bigint, token0: string, token1: string;
+    try {
+      const pair = this.client.pair(pairAddress);
+      [{ reserve0, reserve1 }, { token0, token1 }] = await Promise.all([
+        pair.getReserves(),
+        pair.getTokens(),
+      ]);
+    } catch {
+      return null;
+    }
+
+    const previous = await this.fetchPreviousReserves(pairAddress, fromLedger, toLedger);
+    return {
+      currentTvlUSD: reservesToUSD(reserve0, reserve1, token0, token1, priceMap),
+      previousTvlUSD: previous
+        ? reservesToUSD(previous.reserve0, previous.reserve1, token0, token1, priceMap)
+        : 0,
+    };
+  }
+
+  /**
+   * Reserves from the pool's last `sync` event in `[fromLedger, toLedger]`,
+   * or `null` if it emitted none in that range.
+   */
+  private async fetchPreviousReserves(
+    pairAddress: string,
+    fromLedger: number,
+    toLedger: number,
+  ): Promise<{ reserve0: bigint; reserve1: bigint } | null> {
+    const cursor = new TypedEventCursor(this.client.server, pairAddress, ['sync']);
+    const events = await cursor.scan({ fromLedger, toLedger, limit: SYSTEM_METRICS_PAGE_LIMIT });
+
+    let latest: SyncEvent | null = null;
+    for (const event of events) {
+      // The final page can run past toLedger; getEvents has no end bound.
+      if (event.type !== 'sync' || event.ledger > toLedger) continue;
+      if (!latest || event.ledger >= latest.ledger) latest = event as SyncEvent;
+    }
+    return latest ? { reserve0: latest.reserve0, reserve1: latest.reserve1 } : null;
+  }
+
+  /**
+   * Swap volume, fee revenue, and unique swappers for one pool, split into
+   * the previous window `[fromLedger, currentStart)` and the current window
+   * `[currentStart, toLedger]`.
+   */
+  private async fetchPoolSwapActivity(
+    pairAddress: string,
+    priceMap: Map<string, number>,
+    fromLedger: number,
+    currentStart: number,
+    toLedger: number,
+  ): Promise<{
+    currentVolumeUSD: number;
+    previousVolumeUSD: number;
+    currentRevenueUSD: number;
+    previousRevenueUSD: number;
+    currentUsers: Set<string>;
+    previousUsers: Set<string>;
+  }> {
+    const cursor = new TypedEventCursor(this.client.server, pairAddress, ['swap']);
+    const events = await cursor.scan({ fromLedger, toLedger, limit: SYSTEM_METRICS_PAGE_LIMIT });
+
+    const activity = {
+      currentVolumeUSD: 0,
+      previousVolumeUSD: 0,
+      currentRevenueUSD: 0,
+      previousRevenueUSD: 0,
+      currentUsers: new Set<string>(),
+      previousUsers: new Set<string>(),
+    };
+
+    for (const event of events) {
+      if (event.type !== 'swap' || event.ledger > toLedger) continue;
+      const swap = event as SwapEvent;
+      const price = priceMap.get(swap.tokenIn) ?? 0;
+      const volumeUSD = (Number(swap.amountIn) / STROOP) * price;
+      const feeUSD = (Number((swap.amountIn * BigInt(swap.feeBps)) / 10_000n) / STROOP) * price;
+
+      if (swap.ledger >= currentStart) {
+        activity.currentVolumeUSD += volumeUSD;
+        activity.currentRevenueUSD += feeUSD;
+        activity.currentUsers.add(swap.sender);
+      } else {
+        activity.previousVolumeUSD += volumeUSD;
+        activity.previousRevenueUSD += feeUSD;
+        activity.previousUsers.add(swap.sender);
+      }
+    }
+    return activity;
+  }
+
+  /**
+   * Trailing-24h swap activity for one pool, derived from its `swap` transfer
+   * events and priced with `priceMap` (the same stablecoin-anchored spot
+   * pricing used for TVL). This is the single source for the per-pool volume,
+   * fee, swap-count, and unique-sender figures exposed by `getPoolMetrics()`
+   * and `getPoolHealth()`.
+   */
+  private async fetchPairSwapTotals(
+    pairAddress: string,
+    priceMap: Map<string, number>,
+  ): Promise<{
+    volume24hUSD: number;
+    fees24hUSD: number;
+    totalSwaps24h: number;
+    uniqueUsers24h: number;
+  }> {
+    const currentLedger = await this.client.getCurrentLedger();
+    const fromLedger = Math.max(0, currentLedger - LEDGERS_PER_DAY);
+    const events = await this.swap.getSwapHistory({
+      pairAddress,
+      fromLedger,
+      toLedger: currentLedger,
+      limit: HISTORY_QUERY_LIMIT,
+    });
+
+    let volume24hUSD = 0;
+    let fees24hUSD = 0;
+    for (const event of events) {
+      const price = priceMap.get(event.tokenIn) ?? 0;
+      volume24hUSD += (Number(event.amountIn) / STROOP) * price;
+      fees24hUSD += (Number((event.amountIn * BigInt(event.feeBps)) / 10_000n) / STROOP) * price;
+    }
+
+    return {
+      volume24hUSD,
+      fees24hUSD,
+      totalSwaps24h: events.length,
+      uniqueUsers24h: new Set(events.map((e) => e.sender)).size,
+    };
+  }
+
+  /**
+   * One collector-facing trailing-24h figure (`volume24hUSD` or
+   * `fees24hUSD`) for a target pair, derived from its swap transfer events
+   * and priced with the shared stablecoin-anchored spot map. Failures degrade
+   * to `0`, matching the other built-in metric collectors.
+   */
+  private async fetchSwapWindowValue(
+    address: string,
+    field: 'volume24hUSD' | 'fees24hUSD',
+  ): Promise<number> {
+    try {
+      const priceMap = await this.pricing.getSpotPriceMap(await this.client.factory.getAllPairs());
+      return (await this.fetchPairSwapTotals(address, priceMap))[field];
+    } catch {
+      return 0;
+    }
+  }
+
   private async fetchMetricValue(config: MetricConfig): Promise<number> {
     switch (config.category) {
       case 'liquidity': return this.fetchLiquidityValue(config.targetAddress);
@@ -382,8 +894,14 @@ export class MonitoringModule {
     catch { return 0; }
   }
 
-  private async fetchVolumeValue(_address: string): Promise<number> { return 0; }
-  private async fetchFeesValue(_address: string): Promise<number> { return 0; }
+  private async fetchVolumeValue(address: string): Promise<number> {
+    return this.fetchSwapWindowValue(address, 'volume24hUSD');
+  }
+
+  private async fetchFeesValue(address: string): Promise<number> {
+    return this.fetchSwapWindowValue(address, 'fees24hUSD');
+  }
+
   private async fetchGasValue(): Promise<number> { return 0; }
 
   private async fetchPriceValue(_pairAddress: string): Promise<number> {
@@ -395,4 +913,80 @@ export class MonitoringModule {
     try { return (await this.client.factory.getAllPairs()).length; }
     catch { return 0; }
   }
+}
+
+// ---------------------------------------------------------------------------
+// System metrics helpers (pure; exported for unit tests)
+// ---------------------------------------------------------------------------
+
+function periodToLedgers(period: SystemMetricsPeriod): number {
+  if (period === '7d') return LEDGERS_PER_DAY * 7;
+  if (period === '30d') return LEDGERS_PER_DAY * 30;
+  return LEDGERS_PER_DAY;
+}
+
+function reservesToUSD(
+  reserve0: bigint,
+  reserve1: bigint,
+  token0: string,
+  token1: string,
+  priceMap: Map<string, number>,
+): number {
+  const price0 = priceMap.get(token0) ?? 0;
+  const price1 = priceMap.get(token1) ?? 0;
+  return (Number(reserve0) / STROOP) * price0 + (Number(reserve1) / STROOP) * price1;
+}
+
+/**
+ * Degraded pool-health snapshot used when a pool's reserves/tokens can't be
+ * read: every derived figure is `0` because nothing could be measured.
+ */
+function poolHealthFailure(pairAddress: string): PoolHealth {
+  return {
+    pairAddress,
+    operational: false,
+    tvlUSD: 0,
+    volume24hUSD: 0,
+    fees24hUSD: 0,
+    reserveRatio: 0,
+    oracleDeviationBps: 0,
+    errors: ['Failed to fetch pool data'],
+    warnings: [],
+  };
+}
+
+/**
+ * Compute absolute + percentage change with explicit zero-baseline handling.
+ *
+ * - previous = 0, current = 0 → percentage 0
+ * - previous = 0, current ≠ 0 → percentage 100
+ * - otherwise → ((current − previous) / previous) × 100
+ */
+export function computeMetricChange(current: number, previous: number): MetricChange {
+  const absolute = current - previous;
+  if (previous === 0) {
+    return { absolute, percentage: current === 0 ? 0 : 100 };
+  }
+  return { absolute, percentage: (absolute / previous) * 100 };
+}
+
+/**
+ * Pick distinct top-growing and top-declining pools by absolute TVL change.
+ */
+export function pickTopPools(pools: PoolTvlChange[]): {
+  topGrowingPool: PoolTvlChange | null;
+  topDecliningPool: PoolTvlChange | null;
+} {
+  if (pools.length === 0) {
+    return { topGrowingPool: null, topDecliningPool: null };
+  }
+  if (pools.length === 1) {
+    const only = pools[0];
+    return only.tvlChange.absolute >= 0
+      ? { topGrowingPool: only, topDecliningPool: null }
+      : { topGrowingPool: null, topDecliningPool: only };
+  }
+
+  const sorted = [...pools].sort((a, b) => b.tvlChange.absolute - a.tvlChange.absolute);
+  return { topGrowingPool: sorted[0], topDecliningPool: sorted[sorted.length - 1] };
 }

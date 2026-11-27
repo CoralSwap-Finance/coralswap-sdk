@@ -8,6 +8,15 @@ import {
 } from '../src/errors';
 import { shufflePath } from './helpers';
 
+// Keep retry backoff instant so idempotent-resubmission tests run fast.
+jest.mock('../src/utils/retry', () => {
+  const actual = jest.requireActual('../src/utils/retry');
+  return {
+    ...actual,
+    sleep: jest.fn().mockResolvedValue(undefined),
+  };
+});
+
 // ---------------------------------------------------------------------------
 // Mock helpers (same pattern as existing multi-hop-swap.test.ts)
 // ---------------------------------------------------------------------------
@@ -66,6 +75,9 @@ function buildMockClient(
       txHash: 'MOCK_TX_HASH',
       data: { txHash: 'MOCK_TX_HASH', ledger: 1000 },
     }),
+    server: {
+      getTransaction: jest.fn().mockResolvedValue({ status: 'NOT_FOUND' }),
+    },
   };
 }
 
@@ -301,7 +313,7 @@ describe('Multi-hop routing (dedicated methods)', () => {
       expect(result.ledger).toBe(1000);
     });
 
-    it('throws TransactionError on submission failure', async () => {
+    it('throws TransactionError when the swap fails on-chain', async () => {
       const client = buildMockClient({
         [`${TOKEN_A}|${TOKEN_B}`]: { reserve0: RESERVE, reserve1: RESERVE, feeBps: FEE, token0: TOKEN_A, token1: TOKEN_B },
         [`${TOKEN_B}|${TOKEN_C}`]: { reserve0: RESERVE, reserve1: RESERVE, feeBps: FEE, token0: TOKEN_B, token1: TOKEN_C },
@@ -311,6 +323,10 @@ describe('Multi-hop routing (dedicated methods)', () => {
         error: { code: 'TX_FAILED', message: 'Simulation failed' },
         txHash: 'FAIL_HASH',
       });
+      // On-chain status confirms the transaction failed, so no resubmission occurs.
+      client.server = {
+        getTransaction: jest.fn().mockResolvedValue({ status: 'FAILED', ledger: 123 }),
+      } as any;
 
       const swap = new SwapModule(client as any);
 
@@ -320,7 +336,69 @@ describe('Multi-hop routing (dedicated methods)', () => {
           amount: 1_000_000n,
           tradeType: TradeType.EXACT_IN,
         }),
-      ).rejects.toThrow('Multi-hop swap failed');
+      ).rejects.toThrow('Swap failed on-chain');
+      expect(client.submitTransaction).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not resubmit a swap that already landed despite a client-side timeout', async () => {
+      const client = buildMockClient({
+        [`${TOKEN_A}|${TOKEN_B}`]: { reserve0: RESERVE, reserve1: RESERVE, feeBps: FEE, token0: TOKEN_A, token1: TOKEN_B },
+        [`${TOKEN_B}|${TOKEN_C}`]: { reserve0: RESERVE, reserve1: RESERVE, feeBps: FEE, token0: TOKEN_B, token1: TOKEN_C },
+      });
+      // The first submission times out client-side, but the transaction landed.
+      client.submitTransaction = jest.fn().mockResolvedValue({
+        success: false,
+        error: { code: 'TX_TIMEOUT', message: 'Confirmation timed out' },
+        txHash: 'LANDED_HASH',
+      });
+      client.server = {
+        getTransaction: jest.fn().mockResolvedValue({ status: 'SUCCESS', ledger: 4321 }),
+      } as any;
+
+      const swap = new SwapModule(client as any);
+
+      const result = await swap.executeMultiHop({
+        path: [TOKEN_A, TOKEN_B, TOKEN_C],
+        amount: 1_000_000n,
+        tradeType: TradeType.EXACT_IN,
+      });
+
+      expect(result.txHash).toBe('LANDED_HASH');
+      expect(result.ledger).toBe(4321);
+      expect(client.submitTransaction).toHaveBeenCalledTimes(1);
+    });
+
+    it('resubmits when the transaction never landed on-chain', async () => {
+      const client = buildMockClient({
+        [`${TOKEN_A}|${TOKEN_B}`]: { reserve0: RESERVE, reserve1: RESERVE, feeBps: FEE, token0: TOKEN_A, token1: TOKEN_B },
+        [`${TOKEN_B}|${TOKEN_C}`]: { reserve0: RESERVE, reserve1: RESERVE, feeBps: FEE, token0: TOKEN_B, token1: TOKEN_C },
+      });
+      client.submitTransaction = jest
+        .fn()
+        .mockResolvedValueOnce({
+          success: false,
+          error: { code: 'TX_TIMEOUT', message: 'Confirmation timed out' },
+          txHash: 'PENDING_HASH',
+        })
+        .mockResolvedValue({
+          success: true,
+          txHash: 'SECOND_HASH',
+          data: { txHash: 'SECOND_HASH', ledger: 1000 },
+        });
+      client.server = {
+        getTransaction: jest.fn().mockResolvedValue({ status: 'NOT_FOUND' }),
+      } as any;
+
+      const swap = new SwapModule(client as any);
+
+      const result = await swap.executeMultiHop({
+        path: [TOKEN_A, TOKEN_B, TOKEN_C],
+        amount: 1_000_000n,
+        tradeType: TradeType.EXACT_IN,
+      });
+
+      expect(result.txHash).toBe('SECOND_HASH');
+      expect(client.submitTransaction).toHaveBeenCalledTimes(2);
     });
 
     it('uses custom recipient when to is provided', async () => {
@@ -334,11 +412,11 @@ describe('Multi-hop routing (dedicated methods)', () => {
         path: [TOKEN_A, TOKEN_B, TOKEN_C],
         amount: 1_000_000n,
         tradeType: TradeType.EXACT_IN,
-        to: 'GRECIPIENT',
+        to: 'GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFSHONUCEOASW7QC7OX2H',
       });
 
       const [calledSender] = (client.router.buildSwapExactTokensForTokens as jest.Mock).mock.calls[0];
-      expect(calledSender).toBe('GRECIPIENT');
+      expect(calledSender).toBe('GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFSHONUCEOASW7QC7OX2H');
     });
   });
 });

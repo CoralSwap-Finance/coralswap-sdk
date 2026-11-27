@@ -57,3 +57,90 @@ export interface FeeHistoryEntry {
   /** Volatility accumulator at the time */
   volatility: bigint;
 }
+
+/**
+ * Per-token fee totals aggregated over a revenue scan window.
+ *
+ * Stroop-level totals are exact BigInt values; the display value is derived
+ * with the token's own decimal precision.
+ */
+export interface FeeRevenueByToken {
+  /** Address of the token contract the fees were paid in */
+  token: string;
+  /** Decimal precision of the token, used for the display conversion */
+  decimals: number;
+  /** Exact cumulative fee amount in the token's smallest (stroop-level) unit */
+  feeStroops: bigint;
+  /** Display fee total in whole token units (float, display only) */
+  feeDisplay: number;
+}
+
+/**
+ * One aggregated swap-fee entry produced by a fee revenue scan.
+ *
+ * `feeStroops` carries the exact BigInt fee; `feeXLM` is a display value
+ * converted with the input token's own decimals (for XLM pairs, which use
+ * 7 decimals, it is the amount in XLM — hence the legacy field name).
+ */
+export interface FeeRevenueEvent {
+  /** Ledger sequence number where the swap settled */
+  ledger: number;
+  /** Unix timestamp (seconds) of the swap, approximated when unavailable */
+  timestamp: number;
+  /** Address of the token the fee was paid in */
+  tokenIn: string;
+  /** Decimal precision of `tokenIn` used for the display conversion */
+  decimals: number;
+  /** Fee charged for the swap, in basis points */
+  feeBps: number;
+  /** Exact fee amount in `tokenIn`'s smallest (stroop-level) unit */
+  feeStroops: bigint;
+  /** Display fee amount in whole `tokenIn` units (float, display only) */
+  feeXLM: number;
+}
+
+/**
+ * Aggregated fee revenue for a pair over a ledger window.
+ *
+ * All arithmetic is performed in BigInt on stroop-level values; float fields
+ * are display-only conveniences.
+ */
+export interface PairFeeRevenue {
+  /** Address of the pair contract */
+  pairAddress: string;
+  /** Exact cumulative fee across all scanned swaps, in stroop-level units (mixed tokens) */
+  totalFeeStroops: bigint;
+  /** Display total in token units (each event converted with its own token's decimals) */
+  totalFeeXLM: number;
+  /** Exact per-token fee totals with the decimals used for each display conversion */
+  totalFeeByToken: FeeRevenueByToken[];
+  /** Number of swap events aggregated */
+  swapCount: number;
+  /** Per-swap fee breakdown, ordered as returned by the ledger scan */
+  history: FeeRevenueEvent[];
+}
+
+/**
+ * LP yield metrics for an address in a pair over a ledger window.
+ *
+ * Share and value computations use BigInt-safe intermediate math; float
+ * fields are display-only.
+ */
+export interface LPYieldResult {
+  /** Address of the pair contract */
+  pairAddress: string;
+  /** Address of the LP token holder */
+  lpAddress: string;
+  /** Exact cumulative fee revenue in stroop-level units (mixed tokens) */
+  totalFeeRevenueStroops: bigint;
+  /** Display total fee revenue in token units (legacy name kept for compatibility) */
+  totalFeeRevenueXLM: number;
+  /** LP share of the pool's total supply, in percent (display only) */
+  lpSharePercent: number;
+  /** Display LP share of the window's fee revenue in token units */
+  lpFeeShareXLM: number;
+  /** Display implied value of the LP position in token units (per-side decimals applied) */
+  lpValueXLM: number;
+  /** Annualised yield in percent for the scanned window (display only) */
+  aprPercent: number;
+}
