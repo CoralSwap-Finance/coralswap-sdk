@@ -6,9 +6,11 @@ import {
   getNativeAssetContractAddress,
   resolveTokenIdentifier,
   sortTokens,
+  toScAddress,
   truncateAddress,
   getPairAddress,
 } from '../src/utils/addresses';
+import { ValidationError } from '../src/errors';
 
 describe('Address Utilities', () => {
   const VALID_PUBLIC_KEY = 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF';
@@ -99,6 +101,10 @@ describe('Address Utilities', () => {
       const mainnet = getNativeAssetContractAddress(MAINNET_PASSPHRASE);
       expect(testnet).not.toBe(mainnet);
     });
+
+    it('throws ValidationError for an empty network passphrase', () => {
+      expect(() => getNativeAssetContractAddress('')).toThrow(ValidationError);
+    });
   });
 
   describe('resolveTokenIdentifier', () => {
@@ -123,8 +129,23 @@ describe('Address Utilities', () => {
       expect(b).toBe('B_TOKEN');
     });
 
-    it('throws on identical tokens', () => {
-      expect(() => sortTokens('A_TOKEN', 'A_TOKEN')).toThrow('Identical');
+    it('throws ValidationError for identical tokens', () => {
+      expect(() => sortTokens('A_TOKEN', 'A_TOKEN')).toThrow(ValidationError);
+      try {
+        sortTokens('A_TOKEN', 'A_TOKEN');
+      } catch (error) {
+        expect((error as ValidationError).code).toBe('VALIDATION_ERROR');
+      }
+    });
+  });
+
+  describe('toScAddress', () => {
+    it('converts a valid Stellar address', () => {
+      expect(toScAddress(VALID_PUBLIC_KEY)).toBeDefined();
+    });
+
+    it('throws ValidationError for an invalid address', () => {
+      expect(() => toScAddress('invalid-address')).toThrow(ValidationError);
     });
   });
 
@@ -176,10 +197,28 @@ describe('Address Utilities', () => {
       expect(testnet).not.toBe(mainnet);
     });
 
-    it('throws on identical tokens', () => {
+    it('throws ValidationError for identical tokens', () => {
       expect(() =>
         getPairAddress(FACTORY, TOKEN_A, TOKEN_A, TESTNET_PASSPHRASE),
-      ).toThrow('Identical');
+      ).toThrow(ValidationError);
+    });
+
+    it('throws ValidationError for an invalid factory address', () => {
+      expect(() =>
+        getPairAddress('invalid-factory', TOKEN_A, TOKEN_B, TESTNET_PASSPHRASE),
+      ).toThrow(ValidationError);
+    });
+
+    it('throws ValidationError for an invalid token address', () => {
+      expect(() =>
+        getPairAddress(FACTORY, 'invalid-token', TOKEN_B, TESTNET_PASSPHRASE),
+      ).toThrow(ValidationError);
+    });
+
+    it('throws ValidationError for an empty network passphrase', () => {
+      expect(() => getPairAddress(FACTORY, TOKEN_A, TOKEN_B, '')).toThrow(
+        ValidationError,
+      );
     });
   });
 });
