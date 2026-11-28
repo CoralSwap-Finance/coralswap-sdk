@@ -17,7 +17,7 @@ import { Logger } from "@/types/common";
  */
 export class FactoryClient {
   private contract: Contract;
-  private server: rpc.Server;
+  private server: rpc.Server | (() => rpc.Server);
   private networkPassphrase: string;
   private retryOptions: RetryOptions;
   private logger?: Logger;
@@ -33,7 +33,7 @@ export class FactoryClient {
    */
   constructor(
     contractAddress: string,
-    server: rpc.Server,
+    server: rpc.Server | (() => rpc.Server),
     networkPassphrase: string,
     retryOptions: RetryOptions,
     logger?: Logger,
@@ -254,10 +254,18 @@ export class FactoryClient {
    * @param op - The XDR operation to simulate.
    * @returns The `ScVal` return value, or `null` if simulation produced no result.
    */
+  /**
+   * Resolve the current RPC server. A provider keeps existing client
+   * references in sync when the parent client rotates RPC endpoints.
+   */
+  private getServer(): rpc.Server {
+    return typeof this.server === "function" ? this.server() : this.server;
+  }
+
   private async simulateRead(op: xdr.Operation): Promise<xdr.ScVal | null> {
     const account = await withRetry(
       () =>
-        this.server.getAccount(
+        this.getServer().getAccount(
           "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
         ),
       this.retryOptions,
@@ -274,7 +282,7 @@ export class FactoryClient {
       .build();
 
     const sim = await withRetry(
-      () => this.server.simulateTransaction(tx),
+      () => this.getServer().simulateTransaction(tx),
       this.retryOptions,
       this.logger,
       "FactoryClient_simulateTransaction",

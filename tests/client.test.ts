@@ -3,7 +3,7 @@ import { CoralSwapClient } from '../src/client';
 import { ConnectionPool } from '../src';
 import { Network, Signer } from '../src/types/common';
 import { SignerError } from '../src/errors';
-import { DEFAULTS } from '../src/config';
+import { DEFAULTS, NETWORK_CONFIGS } from '../src/config';
 import { resetCircuitBreakers, DeadlineError } from '../src/utils/retry';
 
 // Mock transaction for testing
@@ -738,9 +738,10 @@ describe('executeWithFallback', () => {
       retryDelayMs: 0,
     });
 
-    // Snapshot original networkConfig values
+    // Snapshot instance and global network configuration before failover.
     const originalRpcUrl = client.networkConfig.rpcUrl;
     const originalPassphrase = client.networkConfig.networkPassphrase;
+    const originalGlobalRpcUrl = NETWORK_CONFIGS[Network.TESTNET].rpcUrl;
 
     // Seed valid contract addresses so factory/router singletons can be created
     (client as any).networkConfig.factoryAddress = 'CBLBMYODT37R3GJZLEFCGCYWOOVEUZ3MMTVR2QCOKOK2UPKSI3CXZBNB';
@@ -755,8 +756,19 @@ describe('executeWithFallback', () => {
       new Error('503 Service Unavailable'),
       { response: { status: 503 } },
     );
-    const mockServerFail = { getHealth: jest.fn().mockRejectedValue(retryableError) } as any;
-    const mockServerOk   = { getHealth: jest.fn().mockResolvedValue({ status: 'healthy' }) } as any;
+    const mockServerFail = {
+      getHealth: jest.fn().mockRejectedValue(retryableError),
+      getAccount: jest.fn().mockRejectedValue(retryableError),
+      simulateTransaction: jest.fn().mockRejectedValue(retryableError),
+    } as any;
+
+    const mockServerOk = {
+      getHealth: jest.fn().mockResolvedValue({ status: 'healthy' }),
+      getAccount: jest.fn().mockResolvedValue({}),
+      simulateTransaction: jest.fn().mockResolvedValue({
+        result: { retval: null },
+      }),
+    } as any;
 
     // Inject the failing server as the initial server (bypasses real network)
     client.server = mockServerFail;
@@ -776,12 +788,29 @@ describe('executeWithFallback', () => {
     // networkConfig must remain untouched after failover rotation
     expect(client.networkConfig.rpcUrl).toBe(originalRpcUrl);
     expect(client.networkConfig.networkPassphrase).toBe(originalPassphrase);
+    expect(NETWORK_CONFIGS[Network.TESTNET].rpcUrl).toBe(originalGlobalRpcUrl);
 
-    // Factory/router singletons must have been nulled and rebuilt with the new server
+    // Factory/router getters rebuild their cached instances after rotation.
     const factoryAfter = client.factory;
     const routerAfter = client.router;
     expect(factoryAfter).not.toBe(factoryBefore);
     expect(routerAfter).not.toBe(routerBefore);
+
+    // Previously captured references must also resolve the new RPC server.
+    await expect(factoryBefore.getAllPairs()).resolves.toEqual([]);
+    await expect(
+      routerBefore.getDynamicFee(
+        Keypair.fromSecret(TEST_SECRET).publicKey(),
+        Keypair.fromSecret(TEST_SECRET).publicKey(),
+      ),
+    ).resolves.toBe(30);
+
+    expect(mockServerOk.getAccount).toHaveBeenCalledTimes(2);
+    expect(mockServerOk.simulateTransaction).toHaveBeenCalledTimes(2);
+
+    // The old endpoint must not receive either contract read.
+    expect(mockServerFail.getAccount).not.toHaveBeenCalled();
+    expect(mockServerFail.simulateTransaction).not.toHaveBeenCalled();
 
     createRpcServerSpy.mockRestore();
   });
