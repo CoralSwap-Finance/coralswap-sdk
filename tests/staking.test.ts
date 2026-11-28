@@ -524,8 +524,8 @@ describe("StakingModule", () => {
         tokenA: TOKEN_A,
         tokenB: TOKEN_B,
         liquidity: 500n,
-        amountAMin: 0n,
-        amountBMin: 0n,
+        amountAMin: 495n,
+        amountBMin: 495n,
         to: MOCK_ADDRESS,
         ...overrides,
       };

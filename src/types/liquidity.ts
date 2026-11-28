@@ -10,10 +10,27 @@ export interface AddLiquidityRequest {
   amountADesired: bigint;
   /** Desired amount of token B to add */
   amountBDesired: bigint;
-  /** Minimum amount of token A to add (slippage protection) */
-  amountAMin: bigint;
-  /** Minimum amount of token B to add (slippage protection) */
-  amountBMin: bigint;
+  /**
+   * Minimum amount of token A to add (slippage protection).
+   *
+   * When omitted, the minimum is derived from a fresh quote and
+   * `slippageBps`. An explicit `0` is rejected unless `allowZeroMin` is set.
+   */
+  amountAMin?: bigint;
+  /**
+   * Minimum amount of token B to add (slippage protection).
+   *
+   * When omitted, the minimum is derived from a fresh quote and
+   * `slippageBps`. An explicit `0` is rejected unless `allowZeroMin` is set.
+   */
+  amountBMin?: bigint;
+  /**
+   * Slippage tolerance in basis points (0-5000) used to derive missing
+   * minimums. Defaults to the client's `defaultSlippageBps` or the SDK default.
+   */
+  slippageBps?: number;
+  /** Opt in to sending an explicit zero minimum (unbounded slippage). */
+  allowZeroMin?: boolean;
   /** Address receiving the LP tokens */
   to: string;
   /** Timestamp when the request expires */
@@ -30,10 +47,25 @@ export interface RemoveLiquidityRequest {
   tokenB: string;
   /** Amount of LP tokens to withdraw */
   liquidity: bigint;
-  /** Minimum amount of token A to receive */
-  amountAMin: bigint;
-  /** Minimum amount of token B to receive */
-  amountBMin: bigint;
+  /**
+   * Minimum amount of token A to receive. Derived from a removal quote and
+   * `slippageBps` when omitted. An explicit `0` is rejected unless
+   * `allowZeroMin` is set.
+   */
+  amountAMin?: bigint;
+  /**
+   * Minimum amount of token B to receive. Derived from a removal quote and
+   * `slippageBps` when omitted. An explicit `0` is rejected unless
+   * `allowZeroMin` is set.
+   */
+  amountBMin?: bigint;
+  /**
+   * Slippage tolerance in basis points (0-5000) used to derive missing
+   * minimums. Defaults to the client's `defaultSlippageBps` or the SDK default.
+   */
+  slippageBps?: number;
+  /** Opt in to sending an explicit zero minimum (unbounded slippage). */
+  allowZeroMin?: boolean;
   /** Address receiving the withdrawn tokens */
   to: string;
   /** Timestamp when the request expires */
@@ -54,6 +86,18 @@ export interface LiquidityResult {
   liquidity: bigint;
   /** Ledger sequence number */
   ledger: number;
+}
+
+/**
+ * Quote for removing liquidity (expected amounts).
+ */
+export interface RemoveLiquidityQuote {
+  /** Expected amount of token A to receive */
+  amountA: bigint;
+  /** Expected amount of token B to receive */
+  amountB: bigint;
+  /** Amount of LP tokens burned */
+  liquidity: bigint;
 }
 
 /**
