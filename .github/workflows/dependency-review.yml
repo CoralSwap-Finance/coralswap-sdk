@@ -1,0 +1,45 @@
+name: Dependency Review
+
+# Run on every PR that touches package-lock.json to gate new or updated
+# dependencies against the GitHub Advisory Database.
+#
+# Fails on:
+#   - Any dependency with a HIGH or CRITICAL advisory.
+#   - Any new package that declares install scripts (postinstall, preinstall,
+#     etc.) — these run arbitrary code during `npm ci` and must be explicitly
+#     approved before being merged.
+#
+# To accept an intentional exception, add the GHSA advisory ID to the
+# `allow-ghsas` list below and document the reason in a comment.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'package-lock.json'
+      - 'package.json'
+
+permissions:
+  contents: read
+
+jobs:
+  dependency-review:
+    name: Dependency review
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Dependency Review
+        uses: actions/dependency-review-action@da24556b548a50705dd671f47852072ea4c105d9 # v4.7.1
+        with:
+          # Fail the check if any added dependency has a HIGH or CRITICAL
+          # vulnerability in the GitHub Advisory Database.
+          fail-on-severity: high
+
+          # Fail if any new dependency package has install scripts.
+          # Install scripts execute during `npm ci` with the job's token and
+          # file-system access; they must be explicitly approved.
+          fail-on-scopes: runtime, development
+          deny-packages: ''
+          # allow-ghsas: GHSA-xxxx-xxxx-xxxx  # Add intentional exceptions here with justification
