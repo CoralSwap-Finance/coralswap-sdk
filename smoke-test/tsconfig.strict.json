@@ -12,8 +12,7 @@
     "resolveJsonModule": true,
     "types": ["node"],
     "paths": {
-      "@coralswap/sdk": ["../src/index.ts"],
-      "@/*": ["../src/*"]
+      "@coralswap/sdk": ["../dist/index.d.ts"]
     }
   },
   "include": ["consumer.ts"]

@@ -1,5 +1,6 @@
 import { PRECISION } from "@/config";
 import { ValidationError } from "@/errors";
+import { validateTokenDecimals } from "@/utils/validate-decimals";
 
 /**
  * Amount utilities for Soroban i128 arithmetic.
@@ -42,10 +43,8 @@ import { ValidationError } from "@/errors";
  * - Pads insufficient decimal places with zeros
  */
 function parseDecimalString(amount: string, decimals: number): bigint {
-  if (!Number.isInteger(decimals) || decimals < 0) {
-    throw new Error("Invalid decimals");
-  }
-
+  validateTokenDecimals(decimals);
+  
   const trimmed = amount.trim();
   if (trimmed === "") {
     throw new Error("Amount is required");
@@ -168,6 +167,8 @@ export function fromSorobanAmount(
   amount: bigint,
   decimals: number = 7,
 ): string {
+  validateTokenDecimals(decimals);
+  
   const isNegative = amount < 0n;
   const abs = isNegative ? -amount : amount;
   const str = abs.toString().padStart(decimals + 1, "0");

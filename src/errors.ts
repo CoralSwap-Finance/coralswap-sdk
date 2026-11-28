@@ -75,6 +75,7 @@ export const ERROR_TAXONOMY: Array<{ class: string; code: string; retryPolicy: R
   { class: "AddressNotFoundError", code: "ADDRESS_NOT_FOUND", retryPolicy: "fail-fast" },
   { class: "PortfolioCalculationError", code: "PORTFOLIO_CALCULATION_ERROR", retryPolicy: "fail-fast" },
   { class: "WebhookDisabledError", code: "WEBHOOK_DISABLED", retryPolicy: "fail-fast" },
+  { class: "InvalidTokenMetadataError", code: "INVALID_TOKEN_METADATA", retryPolicy: "fail-fast" },
 ];
 
 /**
@@ -238,6 +239,16 @@ export class ValidationError extends CoralSwapSDKError {
   constructor(message: string, details?: Record<string, unknown>) {
     super("VALIDATION_ERROR", message, details);
     this.name = "ValidationError";
+  }
+}
+
+/**
+ * Token metadata (e.g., decimals) is invalid or out of valid range.
+ */
+export class InvalidTokenMetadataError extends CoralSwapSDKError {
+  constructor(message: string, details?: Record<string, unknown>) {
+    super("INVALID_TOKEN_METADATA", message, details);
+    this.name = "InvalidTokenMetadataError";
   }
 }
 
