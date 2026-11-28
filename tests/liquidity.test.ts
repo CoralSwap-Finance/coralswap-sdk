@@ -2,7 +2,12 @@ import { LiquidityModule } from "../src/modules/liquidity";
 import { CoralSwapClient } from "../src/client";
 import { PairClient } from "../src/contracts/pair";
 import { PRECISION } from "../src/config";
-import { ValidationError, TransactionError } from "../src/errors";
+import {
+  InsufficientLiquidityError,
+  PairNotFoundError,
+  ValidationError,
+  TransactionError,
+} from "../src/errors";
 import { rpc } from "@stellar/stellar-sdk";
 
 // ---------------------------------------------------------------------------
@@ -52,6 +57,18 @@ function createMockClient(
  */
 function sqrtOf(module: LiquidityModule, value: bigint): bigint {
   return (module as any).sqrt(value);
+}
+
+/** Build a mocked Soroban i128 return-value vector. */
+function i128Vec(...values: string[]) {
+  return {
+    vec: values.map((value) => ({
+      i128: () => ({
+        hi: () => ({ toString: () => "0" }),
+        lo: () => ({ toString: () => value }),
+      }),
+    })),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -137,35 +154,61 @@ describe("LiquidityModule", () => {
     // -- First liquidity provider (no existing pair) ----------------------
 
     describe("first liquidity provider (no pair exists)", () => {
-      it("returns desired amounts as-is for both tokens", async () => {
+      it("uses the caller's amountBDesired instead of assuming 1:1", async () => {
         const client = createMockClient({ pairAddress: null });
         const module = new LiquidityModule(client);
-        const amount = 1_000_000n;
 
         const quote = await module.getAddLiquidityQuote(
           TOKEN_A,
           TOKEN_B,
-          amount,
+          1_000_000n,
+          2_000_000n,
         );
 
-        expect(quote.amountA).toBe(amount);
-        expect(quote.amountB).toBe(amount);
+        expect(quote.amountA).toBe(1_000_000n);
+        expect(quote.amountB).toBe(2_000_000n);
+      });
+
+      it("requires amountBDesired when no pair exists", async () => {
+        const client = createMockClient({ pairAddress: null });
+        const module = new LiquidityModule(client);
+
+        await expect(
+          module.getAddLiquidityQuote(TOKEN_A, TOKEN_B, 1_000_000n),
+        ).rejects.toThrow(ValidationError);
+        await expect(
+          module.getAddLiquidityQuote(TOKEN_A, TOKEN_B, 1_000_000n),
+        ).rejects.toThrow("amountBDesired is required for the first liquidity deposit");
       });
 
       it("returns sqrt(amountA * amountB) - MIN_LIQUIDITY as estimated LP tokens", async () => {
         const client = createMockClient({ pairAddress: null });
         const module = new LiquidityModule(client);
-        const amount = 1_000_000n;
+        const amountA = 1_000_000n;
+        const amountB = 2_000_000n;
 
         const quote = await module.getAddLiquidityQuote(
           TOKEN_A,
           TOKEN_B,
-          amount,
+          amountA,
+          amountB,
         );
 
-        // For first LP: amountA == amountB == amount, so sqrt(amount * amount) == amount
-        const expectedLP = amount - PRECISION.MIN_LIQUIDITY;
+        const expectedLP = sqrtOf(module, amountA * amountB) - PRECISION.MIN_LIQUIDITY;
         expect(quote.estimatedLPTokens).toBe(expectedLP);
+        expect(quote.estimatedLPTokens).toBeGreaterThan(0n);
+      });
+
+      it("rejects a first deposit too small to mint LP tokens", async () => {
+        const client = createMockClient({ pairAddress: null });
+        const module = new LiquidityModule(client);
+
+        await expect(
+          module.getAddLiquidityQuote(TOKEN_A, TOKEN_B, 100n, 100n),
+        ).rejects.toThrow(ValidationError);
+        await expect(
+          module.getAddLiquidityQuote(TOKEN_A, TOKEN_B, 100n, 100n),
+        ).rejects.toThrow("First deposit is too small");
       });
 
       it("returns 100% share of pool", async () => {
@@ -176,12 +219,13 @@ describe("LiquidityModule", () => {
           TOKEN_A,
           TOKEN_B,
           1_000_000n,
+          2_000_000n,
         );
 
         expect(quote.shareOfPool).toBe(1.0);
       });
 
-      it("returns 1:1 price ratio", async () => {
+      it("returns a price ratio derived from the desired amounts", async () => {
         const client = createMockClient({ pairAddress: null });
         const module = new LiquidityModule(client);
 
@@ -189,10 +233,11 @@ describe("LiquidityModule", () => {
           TOKEN_A,
           TOKEN_B,
           1_000_000n,
+          2_000_000n,
         );
 
-        expect(quote.priceAPerB).toBe(PRECISION.PRICE_SCALE);
-        expect(quote.priceBPerA).toBe(PRECISION.PRICE_SCALE);
+        expect(quote.priceAPerB).toBe(2n * PRECISION.PRICE_SCALE);
+        expect(quote.priceBPerA).toBe(PRECISION.PRICE_SCALE / 2n);
       });
     });
 
@@ -419,12 +464,80 @@ describe("LiquidityModule", () => {
         ).rejects.toThrow("amountADesired must be greater than 0, got -1");
       });
 
-      it("accepts the smallest positive amount (boundary)", async () => {
-        const quote = await module.getAddLiquidityQuote(TOKEN_A, TOKEN_B, 1n);
-
-        expect(quote.amountA).toBe(1n);
-        expect(quote.amountB).toBe(1n);
+      it("rejects a first deposit that cannot mint a positive amount", async () => {
+        await expect(
+          module.getAddLiquidityQuote(TOKEN_A, TOKEN_B, 1n, 1n),
+        ).rejects.toThrow(ValidationError);
       });
+    });
+
+    describe("empty existing pair", () => {
+      it("throws a typed error instead of RangeError when reserves are zero", async () => {
+        const client = createMockClient({
+          pairAddress: PAIR_ADDRESS,
+          reserve0: 0n,
+          reserve1: 0n,
+          token0: TOKEN_A,
+          token1: TOKEN_B,
+          totalSupply: 0n,
+        });
+        const module = new LiquidityModule(client);
+
+        await expect(
+          module.getAddLiquidityQuote(TOKEN_A, TOKEN_B, 1000n, 2000n),
+        ).rejects.toThrow(InsufficientLiquidityError);
+      });
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // getRemoveLiquidityQuote()
+  // -----------------------------------------------------------------------
+  describe("getRemoveLiquidityQuote()", () => {
+    const TOKEN_A = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM";
+    const TOKEN_B = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4";
+    const PAIR_ADDRESS =
+      "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM";
+
+    function pairClient(overrides: { totalSupply?: bigint } = {}) {
+      return createMockClient({
+        pairAddress: PAIR_ADDRESS,
+        reserve0: 10_000n,
+        reserve1: 20_000n,
+        token0: TOKEN_A,
+        token1: TOKEN_B,
+        totalSupply: overrides.totalSupply ?? 5_000n,
+      });
+    }
+
+    it("returns expected amounts from reserves and LP supply", async () => {
+      const module = new LiquidityModule(pairClient());
+
+      const quote = await module.getRemoveLiquidityQuote(TOKEN_A, TOKEN_B, 500n);
+
+      expect(quote).toEqual({
+        amountA: 1_000n,
+        amountB: 2_000n,
+        liquidity: 500n,
+      });
+    });
+
+    it("throws PairNotFoundError when no pair exists", async () => {
+      const module = new LiquidityModule(
+        createMockClient({ pairAddress: null }),
+      );
+
+      await expect(
+        module.getRemoveLiquidityQuote(TOKEN_A, TOKEN_B, 500n),
+      ).rejects.toThrow(PairNotFoundError);
+    });
+
+    it("throws a typed error when LP supply is zero", async () => {
+      const module = new LiquidityModule(pairClient({ totalSupply: 0n }));
+
+      await expect(
+        module.getRemoveLiquidityQuote(TOKEN_A, TOKEN_B, 500n),
+      ).rejects.toThrow(InsufficientLiquidityError);
     });
   });
 
@@ -522,8 +635,14 @@ describe("LiquidityModule", () => {
           data: { ledger: 12345 },
         }),
         getDeadline: jest.fn().mockReturnValue(1234567890),
+        getPairAddress: jest.fn().mockResolvedValue(null),
+        pair: jest.fn(),
+        lpToken: jest.fn(),
         server: {
-          getTransaction: jest.fn(),
+          getTransaction: jest.fn().mockResolvedValue({
+            status: "SUCCESS",
+            returnValue: i128Vec("1000", "2000", "500"),
+          }),
         },
       } as any;
 
@@ -558,21 +677,19 @@ describe("LiquidityModule", () => {
         txHash: "test-tx-hash",
         amountA: 1000n,
         amountB: 2000n,
-        liquidity: 0n,
+        liquidity: 500n,
         ledger: 12345,
       });
     });
 
-    it("returns simulated liquidity amounts instead of placeholder request values", async () => {
+    it("returns the transaction result amounts, not the pre-submit simulation", async () => {
       mockClient.simulateTransaction = jest.fn().mockResolvedValue({
         success: true,
-        returnValue: {
-          vec: [
-            { i128: () => ({ hi: () => ({ toString: () => '0' }), lo: () => ({ toString: () => '2500' }) }) },
-            { i128: () => ({ hi: () => ({ toString: () => '0' }), lo: () => ({ toString: () => '3600' }) }) },
-            { i128: () => ({ hi: () => ({ toString: () => '0' }), lo: () => ({ toString: () => '4200' }) }) },
-          ],
-        },
+        returnValue: i128Vec("2500", "3600", "4200"),
+      });
+      (mockClient.server.getTransaction as jest.Mock).mockResolvedValue({
+        status: "SUCCESS",
+        returnValue: i128Vec("3000", "4000", "4500"),
       });
 
       const request = {
@@ -589,11 +706,30 @@ describe("LiquidityModule", () => {
 
       expect(result).toEqual({
         txHash: 'test-tx-hash',
-        amountA: 2500n,
-        amountB: 3600n,
-        liquidity: 4200n,
+        amountA: 3000n,
+        amountB: 4000n,
+        liquidity: 4500n,
         ledger: 12345,
       });
+    });
+
+    it("throws when the confirmed transaction has no decodable amounts", async () => {
+      (mockClient.server.getTransaction as jest.Mock).mockResolvedValue({
+        status: "SUCCESS",
+        resultMetaXdr: {},
+      });
+
+      await expect(
+        module.addLiquidity({
+          tokenA: TOKEN_A,
+          tokenB: TOKEN_B,
+          amountADesired: 1000n,
+          amountBDesired: 2000n,
+          amountAMin: 900n,
+          amountBMin: 1800n,
+          to: TO_ADDRESS,
+        }),
+      ).rejects.toThrow(TransactionError);
     });
 
     it("uses client deadline when not provided in request", async () => {
@@ -877,25 +1013,79 @@ describe("LiquidityModule", () => {
         );
       });
 
-      it("accepts zero minimums and the smallest positive amounts (boundary)", async () => {
+      it("rejects an explicit zero minimum without allowZeroMin", async () => {
+        await expect(
+          module.addLiquidity({
+            ...baseRequest(),
+            amountAMin: 0n,
+            amountBMin: 0n,
+          }),
+        ).rejects.toThrow(ValidationError);
+        await expect(
+          module.addLiquidity({
+            ...baseRequest(),
+            amountAMin: 0n,
+            amountBMin: 0n,
+          }),
+        ).rejects.toThrow("amountAMin must be greater than 0 unless allowZeroMin is true");
+
+        expect(mockRouter.buildAddLiquidity).not.toHaveBeenCalled();
+      });
+
+      it("accepts zero minimums when allowZeroMin is set", async () => {
         await module.addLiquidity({
-          tokenA: TOKEN_A,
-          tokenB: TOKEN_B,
-          amountADesired: 1n,
-          amountBDesired: 1n,
+          ...baseRequest(),
           amountAMin: 0n,
           amountBMin: 0n,
-          to: TO_ADDRESS,
+          allowZeroMin: true,
         });
 
         expect(mockRouter.buildAddLiquidity).toHaveBeenCalledWith(
           TO_ADDRESS,
           TOKEN_A,
           TOKEN_B,
-          1n,
-          1n,
+          1000n,
+          2000n,
           0n,
           0n,
+          1234567890,
+        );
+      });
+
+      it("derives minimums from a fresh quote when only slippageBps is given", async () => {
+        (mockClient.getPairAddress as jest.Mock).mockResolvedValue(
+          "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM",
+        );
+        (mockClient.pair as jest.Mock).mockReturnValue({
+          getReserves: jest
+            .fn()
+            .mockResolvedValue({ reserve0: 10_000n, reserve1: 20_000n }),
+          getTokens: jest
+            .fn()
+            .mockResolvedValue({ token0: TOKEN_A, token1: TOKEN_B }),
+        });
+        (mockClient.lpToken as jest.Mock).mockReturnValue({
+          totalSupply: jest.fn().mockResolvedValue(5_000n),
+        });
+
+        await module.addLiquidity({
+          tokenA: TOKEN_A,
+          tokenB: TOKEN_B,
+          amountADesired: 1000n,
+          amountBDesired: 2000n,
+          slippageBps: 100,
+          to: TO_ADDRESS,
+        });
+
+        // Quote: amountA=1000, amountB=2000; 1% slippage -> 990 / 1980.
+        expect(mockRouter.buildAddLiquidity).toHaveBeenCalledWith(
+          TO_ADDRESS,
+          TOKEN_A,
+          TOKEN_B,
+          1000n,
+          2000n,
+          990n,
+          1980n,
           1234567890,
         );
       });
@@ -928,8 +1118,14 @@ describe("LiquidityModule", () => {
           data: { ledger: 12345 },
         }),
         getDeadline: jest.fn().mockReturnValue(1234567890),
+        getPairAddress: jest.fn().mockResolvedValue(null),
+        pair: jest.fn(),
+        lpToken: jest.fn(),
         server: {
-          getTransaction: jest.fn(),
+          getTransaction: jest.fn().mockResolvedValue({
+            status: "SUCCESS",
+            returnValue: i128Vec("400", "800"),
+          }),
         },
       } as any;
 
@@ -967,15 +1163,14 @@ describe("LiquidityModule", () => {
       });
     });
 
-    it("returns the simulated removal amounts instead of requested minimums", async () => {
+    it("returns the transaction result amounts, not the requested minimums", async () => {
       mockClient.simulateTransaction = jest.fn().mockResolvedValue({
         success: true,
-        returnValue: {
-          vec: [
-            { i128: () => ({ hi: () => ({ toString: () => '0' }), lo: () => ({ toString: () => '4200' }) }) },
-            { i128: () => ({ hi: () => ({ toString: () => '0' }), lo: () => ({ toString: () => '8300' }) }) },
-          ],
-        },
+        returnValue: i128Vec("100", "200"),
+      });
+      (mockClient.server.getTransaction as jest.Mock).mockResolvedValue({
+        status: "SUCCESS",
+        returnValue: i128Vec("4200", "8300"),
       });
 
       const request = {
@@ -1203,23 +1398,69 @@ describe("LiquidityModule", () => {
         expect(mockRouter.buildRemoveLiquidity).not.toHaveBeenCalled();
       });
 
-      it("accepts zero minimums with the smallest positive liquidity (boundary)", async () => {
+      it("rejects an explicit zero minimum without allowZeroMin", async () => {
+        await expect(
+          module.removeLiquidity({
+            ...baseRequest(),
+            amountAMin: 0n,
+            amountBMin: 0n,
+          }),
+        ).rejects.toThrow(ValidationError);
+
+        expect(mockRouter.buildRemoveLiquidity).not.toHaveBeenCalled();
+      });
+
+      it("accepts zero minimums when allowZeroMin is set", async () => {
         await module.removeLiquidity({
-          tokenA: TOKEN_A,
-          tokenB: TOKEN_B,
-          liquidity: 1n,
+          ...baseRequest(),
           amountAMin: 0n,
           amountBMin: 0n,
-          to: TO_ADDRESS,
+          allowZeroMin: true,
         });
 
         expect(mockRouter.buildRemoveLiquidity).toHaveBeenCalledWith(
           TO_ADDRESS,
           TOKEN_A,
           TOKEN_B,
-          1n,
+          500n,
           0n,
           0n,
+          1234567890,
+        );
+      });
+
+      it("derives minimums from a fresh removal quote when only slippageBps is given", async () => {
+        (mockClient.getPairAddress as jest.Mock).mockResolvedValue(
+          "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM",
+        );
+        (mockClient.pair as jest.Mock).mockReturnValue({
+          getReserves: jest
+            .fn()
+            .mockResolvedValue({ reserve0: 10_000n, reserve1: 20_000n }),
+          getTokens: jest
+            .fn()
+            .mockResolvedValue({ token0: TOKEN_A, token1: TOKEN_B }),
+        });
+        (mockClient.lpToken as jest.Mock).mockReturnValue({
+          totalSupply: jest.fn().mockResolvedValue(5_000n),
+        });
+
+        await module.removeLiquidity({
+          tokenA: TOKEN_A,
+          tokenB: TOKEN_B,
+          liquidity: 500n,
+          slippageBps: 100,
+          to: TO_ADDRESS,
+        });
+
+        // Quote: amountA=1000, amountB=2000; 1% slippage -> 990 / 1980.
+        expect(mockRouter.buildRemoveLiquidity).toHaveBeenCalledWith(
+          TO_ADDRESS,
+          TOKEN_A,
+          TOKEN_B,
+          500n,
+          990n,
+          1980n,
           1234567890,
         );
       });
@@ -1470,7 +1711,7 @@ describe("LiquidityModule — idempotent resubmission", () => {
       envelopeXdr: {} as any,
       resultXdr: {} as any,
       resultMetaXdr: {} as any,
-      returnValue: undefined,
+      returnValue: i128Vec("1000", "2000", "500") as any,
     } as rpc.Api.GetSuccessfulTransactionResponse;
   }
 
