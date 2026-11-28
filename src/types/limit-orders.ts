@@ -36,8 +36,17 @@ export interface OrderStatus {
   state: LimitOrderState;
   /** How much of the order has been filled (0–100). */
   fillPercent: number;
-  /** Weighted-average execution price, if any fills exist. */
+  /**
+   * Display-only weighted-average execution price, if any fills exist.
+   * Derived from {@link executionPriceScaled} via an explicit number helper;
+   * use the scaled field when exactness matters (values above 2^53).
+   */
   executionPrice?: number;
+  /**
+   * Exact weighted-average execution price as a fixed-point bigint at scale
+   * 1e9 (tokenOut human units per tokenIn human unit).
+   */
+  executionPriceScaled?: bigint;
   /** Unix timestamp (seconds) when the order was fully filled. */
   filledAt?: number;
 }
@@ -65,10 +74,12 @@ export interface LimitOrderParams {
   /** Amount of `tokenIn` to sell (in smallest unit, e.g. stroops for Stellar assets). */
   amountIn: bigint;
   /**
-   * Desired execution price (tokenOut per tokenIn). Must be positive and ≤ 1,000,000.
+   * Desired execution price (tokenOut human units per tokenIn human unit).
+   * Canonical form is a bigint scaled by 1e9 (e.g. `500n` means 0.0000005);
+   * the deprecated number form is rounded to nine decimals. Must be positive and ≤ 1,000,000.
    * The order will only execute when the market price reaches this level or better.
    */
-  targetPrice: number;
+  targetPrice: bigint | number;
   /**
    * Unix timestamp (seconds) after which the order expires.
    * Must be **strictly greater than** `Math.floor(Date.now() / 1000)`.
