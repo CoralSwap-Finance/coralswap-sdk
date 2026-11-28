@@ -17,6 +17,7 @@
 import * as fc from "fast-check";
 import { xdr, Address, nativeToScVal } from "@stellar/stellar-sdk";
 import { EventParser, EVENT_TOPICS, decodeEventsFromXdr } from "../src/utils/events";
+import { filterTrustedEvents } from "../src/utils/registered-pairs";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -189,7 +190,7 @@ const adversarialTopic: fc.Arbitrary<xdr.ScVal[]> = fc
 // ---------------------------------------------------------------------------
 
 describe("A1 – Deeply nested structures", () => {
-  const parser = new EventParser();
+  const parser = new EventParser({ acceptAnyContract: true });
 
   it("nested maps do not crash EventParser.parse", () => {
     fc.assert(
@@ -226,7 +227,7 @@ describe("A1 – Deeply nested structures", () => {
     fc.assert(
       fc.property(nestedMap, (data) => {
         const diag = makeDiagnosticEvent(EVENT_TOPICS.MINT, data);
-        const result = decodeEventsFromXdr([diag]);
+        const result = decodeEventsFromXdr([diag], { acceptAnyContract: true });
         expect(Array.isArray(result)).toBe(true);
         return true;
       }),
@@ -240,7 +241,7 @@ describe("A1 – Deeply nested structures", () => {
 // ---------------------------------------------------------------------------
 
 describe("A2 – Large arrays and oversized payloads", () => {
-  const parser = new EventParser();
+  const parser = new EventParser({ acceptAnyContract: true });
 
   it("large arrays in event data do not crash or hang", () => {
     fc.assert(
@@ -321,7 +322,7 @@ describe("A2 – Large arrays and oversized payloads", () => {
 // ---------------------------------------------------------------------------
 
 describe("A3 – Unexpected XDR type tags", () => {
-  const parser = new EventParser();
+  const parser = new EventParser({ acceptAnyContract: true });
 
   it("adversarial maps with wrong types per field do not crash", () => {
     fc.assert(
@@ -440,7 +441,7 @@ describe("A3 – Unexpected XDR type tags", () => {
 // ---------------------------------------------------------------------------
 
 describe("All decoders fail closed under any adversarial input", () => {
-  const parser = new EventParser();
+  const parser = new EventParser({ acceptAnyContract: true });
 
   it("EventParser.parse never hangs on any ScVal", () => {
     fc.assert(
@@ -482,7 +483,7 @@ describe("All decoders fail closed under any adversarial input", () => {
         (data) => {
           const diag = makeDiagnosticEvent(EVENT_TOPICS.SWAP, data);
           const start = Date.now();
-          const result = decodeEventsFromXdr([diag]);
+          const result = decodeEventsFromXdr([diag], { acceptAnyContract: true });
           const elapsed = Date.now() - start;
           expect(elapsed).toBeLessThan(1000);
           expect(Array.isArray(result)).toBe(true);
@@ -496,6 +497,72 @@ describe("All decoders fail closed under any adversarial input", () => {
   it("empty events array returns empty without crashing", () => {
     expect(parser.parse([])).toEqual([]);
     expect(parser.parseStrict([])).toEqual([]);
-    expect(decodeEventsFromXdr([])).toEqual([]);
+    expect(decodeEventsFromXdr([], { acceptAnyContract: true })).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #883 – forged emitters never reach report output
+// ---------------------------------------------------------------------------
+
+describe("Forged contract IDs are excluded from event-derived reports", () => {
+  const SENDER = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
+  const TOKEN_A = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM";
+  const TOKEN_B = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4";
+
+  const addressVal = (addr: string) =>
+    nativeToScVal(Address.fromString(addr), { type: "address" });
+  const i128Val = (n: bigint) =>
+    nativeToScVal({ hi: n >> 64n, lo: n & 0xffffffffffffffffn }, { type: "i128" });
+
+  const validSwapData = xdr.ScVal.scvMap([
+    new xdr.ScMapEntry({ key: symbolVal("sender"), val: addressVal(SENDER) }),
+    new xdr.ScMapEntry({ key: symbolVal("token_in"), val: addressVal(TOKEN_A) }),
+    new xdr.ScMapEntry({ key: symbolVal("token_out"), val: addressVal(TOKEN_B) }),
+    new xdr.ScMapEntry({ key: symbolVal("amount_in"), val: i128Val(1_000_000n) }),
+    new xdr.ScMapEntry({ key: symbolVal("amount_out"), val: i128Val(980_000n) }),
+    new xdr.ScMapEntry({ key: symbolVal("fee_bps"), val: xdr.ScVal.scvU32(30) }),
+  ]);
+
+  /** Random 32-byte contract IDs, always different from the registered pair. */
+  const forgedContract = fc
+    .uint8Array({ minLength: 32, maxLength: 32 })
+    .map((bytes) => Address.contract(Uint8Array.from(bytes)))
+    .filter((address) => address.toString() !== CONTRACT_ADDR);
+
+  it("never parses a forged swap without an explicit opt-in", () => {
+    fc.assert(
+      fc.property(forgedContract, (contract) => {
+        const diag = makeDiagnosticEvent(
+          EVENT_TOPICS.SWAP,
+          validSwapData,
+          contract.toBuffer(),
+        );
+
+        expect(new EventParser().parse([diag])).toEqual([]);
+        expect(new EventParser([CONTRACT_ADDR]).parse([diag])).toEqual([]);
+        expect(decodeEventsFromXdr([diag])).toEqual([]);
+        return true;
+      }),
+      { numRuns: 200 },
+    );
+  });
+
+  it("never lets a forged raw event through the report trust filter", () => {
+    fc.assert(
+      fc.property(forgedContract, (contract) => {
+        const rawEvent = {
+          contractId: contract.toString(),
+          topic: [xdr.ScVal.scvSymbol(EVENT_TOPICS.SWAP)],
+          value: validSwapData,
+        };
+
+        expect(
+          filterTrustedEvents([rawEvent], new Set([CONTRACT_ADDR])),
+        ).toEqual([]);
+        return true;
+      }),
+      { numRuns: 200 },
+    );
   });
 });

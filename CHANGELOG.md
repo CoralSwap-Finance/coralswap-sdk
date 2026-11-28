@@ -3,6 +3,9 @@
 ## [Unreleased]
 
 ### Added
+- Shared registered-pair trust boundary for event-derived reports: `FactoryModule.getRegisteredPairs()` caches the factory pair set and `RegisteredPairRegistry` refreshes it from factory new-pair events in the requested ledger window (#883)
+- `buildEventFilters()` splits a large registry into RPC-legal `getEvents` filters (5 contract IDs per filter, 5 filters per request), and `selectScanContractIds()` / `filterTrustedEvents()` let reports fall back to post-decode `contractId` checks when the registry exceeds that budget (#883)
+- `EventParserOptions.acceptAnyContract` makes unregistered-contract parsing an explicit opt-in for `EventParser`, `decodeEvents()` and `decodeEventsFromXdr()` (#883)
 - Explicit slippage policy on every swap entry point: `slippageToleranceBps` (validated 1-1000, default 100 bps) derives `amountOutMin`/`maxAmountIn` from the current route quote, so no swap path executes without a documented bound (#679)
 - `GovernanceModule.cancelProposal()` and `executeProposal()`, and `decodeProposal` now returns the proposal's `actions` instead of an empty array (#655)
 - Test matrices for governance (propose, decode actions, cancel, execute) and staking cooldown boundaries (#655), an events-timeline continuity suite over multi-page ledgers (#657), and a tax-reporting regression suite for non-zero gains, BigInt-safe cost basis and exports past 200 events (#659)
@@ -26,6 +29,8 @@
 - Zod schemas for position entries (`EnrichedLPPositionSchema`, `PositionMathSchema`, `PositionSummarySchema`, exported from `@/schemas`) with a malformed/valid fixture suite (`tests/positions-schema.test.ts`): missing or empty fields, wrong primitive types, `NaN`/infinite/out-of-range `share`, fractional/negative/out-of-ceiling `feeBps`, non-bigint stroops, and summary-level failures — each pinned to a `ValidationError` naming the offending field
 
 ### Changed
+- Re-baselined the bundle-size budget from 229 KiB to 256 KiB: the trusted-pair registry and RPC filter helpers are now reachable from every event-derived report path, and the pre-existing baseline had already outgrown the old cap
+- `EventCursor.scanPages()` exposes one RPC page at a time so `getSwapHistory()` can apply every filter and its `limit` *after* decoding, then stop paging only when the limit is filled or the ledger range is exhausted (#883)
 - Governance module validates `createProposal` and `castVote` inputs with zod schemas (`CreateProposalInputSchema`, `CastVoteInputSchema`), replacing the hand-written guards while keeping `ValidationError` as the thrown type (#488)
 - `MonitoringModule.getSystemMetrics(period)` validates `period` through the shared `MonitoringPeriodSchema` (zod) via `validateWithSchema`, replacing the hand-written check; the error is still a `ValidationError` (#493)
 - `EventCursor` continues a multi-page scan from the previous page's cursor (paging token) instead of `lastLedger + 1`, so events beyond the page limit inside a single ledger are no longer skipped; continuation requests carry the cursor and no ledger range, as Soroban RPC requires (#657)
@@ -41,6 +46,7 @@
 - `PositionsModule.getPosition()` validates its BigInt math operands and the assembled entry before returning, and `getPositions()` validates the final summary, so a malformed chain read fails as a `ValidationError` naming the field instead of a raw `TypeError` (mixing a `number` into `reserve0 * balance`) or a silently wrong-shaped object. A `ValidationError` from one pool is no longer swallowed by `Promise.allSettled`; transient per-pair RPC failures are still skipped
 
 ### Fixed
+- Event-derived history, leaderboards and tax reports no longer accept a forged `swap` event from an unregistered contract. Reports now trust only factory-registered pair emitters, and swap history with `userAddress` keeps paging past full non-matching pages so 300 events with the last 5 belonging to the user return all 5 at `limit: 200` (#883)
 - `DeadlineError` is a single class again: `src/utils/retry.ts` defined its own copy alongside the one in `src/errors.ts`, so `instanceof` against one missed errors thrown as the other (a retry deadline from `withRetry` was not a `CoralSwapSDKError` and failed the public `DeadlineError` check). `@/utils/retry` now re-exports the `@/errors` class, which carries the retry fields `deadlineMs`, `nowMs` and `pastDeadlineMs` (#636)
 - `checkCompatibility` flags patch-level downgrades (e.g. `1.2.3` → `1.2.1` and `1.2.0` → `1.1.0`) as incompatible instead of treating same-minor patch returns as compatible, with advisory warning steps (#639)
 - `OracleModule.getPriceDeviation()` no longer reports `0` bps when the reference TWAP is `0n`. `computeDeviationBps()` short-circuited to `0`, so a pair whose TWAP accumulator never advanced was indistinguishable from one where oracle and spot agreed exactly — the manipulation detector returned its best possible score while blind. `price0DeviationBps`/`price1DeviationBps` are now `number | null`, where `null` means no usable reference price (#641)

@@ -94,9 +94,16 @@ export interface GetPairOptions {
  * Use {@link verifyPairAddress} wherever your code receives a `pairAddress` from an
  * untrusted source.
  */
+/** Cached snapshot of the factory's registered pair addresses. */
+interface RegisteredPairsCacheEntry {
+    pairs: Set<string>;
+    expiresAt: number;
+}
+
 export class FactoryModule {
     private client: CoralSwapClient;
     private cache: Map<string, CacheEntry> = new Map();
+    private registeredPairsCache: RegisteredPairsCacheEntry | null = null;
     private cacheTtlMs: number;
 
     /**
@@ -200,6 +207,29 @@ export class FactoryModule {
     }
 
     /**
+     * Get the set of all pair addresses registered with the factory.
+     *
+     * This is the authoritative trust boundary for event-derived reports.
+     * The result is cached for the module's TTL so a history, leaderboard and
+     * tax export in the same process do not each re-read `getAllPairs()`.
+     *
+     * @returns A copy of the cached (or freshly read) registered pair set.
+     */
+    async getRegisteredPairs(): Promise<Set<string>> {
+        const cached = this.registeredPairsCache;
+        if (cached && Date.now() < cached.expiresAt) {
+            return new Set(cached.pairs);
+        }
+
+        const pairs = new Set(await this.client.factory.getAllPairs());
+        this.registeredPairsCache = {
+            pairs,
+            expiresAt: Date.now() + this.cacheTtlMs,
+        };
+        return new Set(pairs);
+    }
+
+    /**
      * Verify that a pair address is a registered CoralSwap pool.
      *
      * Queries the on-chain factory's `getAllPairs()` and checks whether
@@ -261,8 +291,11 @@ export class FactoryModule {
     invalidateCache(pairAddress?: string): void {
         if (pairAddress === undefined) {
             this.cache.clear();
+            this.registeredPairsCache = null;
             return;
         }
+        // A new pair can invalidate an empty/stale registry snapshot too.
+        this.registeredPairsCache = null;
 
         // Walk the cache and remove any entry whose resolved address matches
         for (const [key, entry] of this.cache.entries()) {
@@ -299,6 +332,7 @@ export class FactoryModule {
      */
     clearCache(): void {
         this.cache.clear();
+        this.registeredPairsCache = null;
     }
 
     /**

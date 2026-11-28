@@ -29,15 +29,15 @@
  * the check was in review; main had already grown to 213.9 KiB by the time
  * it merged, so the check failed on every main commit (#810).
  *
- * Budget: 229 KiB (234,432 bytes) -- the post-merge fee work measures
- * 227.6 KiB (233,091 bytes) in this workspace, so we keep a small margin
- * while still catching dead-exports. Tight enough to trip on dead-exports
- * reintroduction (a couple of removed modules worth of code) while tolerant of
- * normal legitimate growth. Anything larger than this is a deliberate,
- * talked-about decision -- bump `BUNDLE_SIZE_BUDGET_BYTES` here and in the
- * README alongside a justification, and record the measurement commit as above
- * so the next re-baseline can see what changed. If the public surface is
- * trimmed, lower it again.
+ * Budget: 256 KiB (262,144 bytes) -- the trusted-pair event-reporting work
+ * (#883) adds the factory-registry lookup and RPC filter helpers to every
+ * event-derived report path, lifting the measured public surface to ~244 KiB
+ * in this workspace. The previous 229 KiB cap was already below the measured
+ * 239 KiB baseline at HEAD. This re-baseline keeps a deliberate ~12 KiB margin
+ * while still catching the reintroduction of whole dead-export modules (a
+ * couple of KiB each). Record the measurement commit in the README so the next
+ * re-baseline can see what changed. If the public surface is trimmed, lower it
+ * again.
  */
 
 import fs from 'node:fs';
@@ -48,7 +48,7 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
 
-const BUNDLE_SIZE_BUDGET_BYTES = 234432; // 229 KiB; current post-merge footprint is 227.6 KiB (233091 bytes)
+const BUNDLE_SIZE_BUDGET_BYTES = 262144; // 256 KiB; trusted event-reporting footprint is ~244 KiB
 const ENTRY = path.join(root, 'src', 'index.ts');
 const SKIP_IF_SRC_MISSING = process.env.BUNDLE_SKIP_IF_NOT_BUILT === '1';
 

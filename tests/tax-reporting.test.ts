@@ -14,6 +14,7 @@ const USER = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
 const TOKEN_A = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM";
 const TOKEN_B = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4";
 const TX_HASH = "abc123txhash";
+const PAIR = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
 
 // ---------------------------------------------------------------------------
 // ScVal-like builder helpers (mirrors swap-history.test.ts)
@@ -59,8 +60,10 @@ function makeSwapEvent(opts: {
   feeBps: number;
   txHash?: string;
   ledgerClosedAt?: string;
+  contractId?: string;
 }): Record<string, unknown> {
   return {
+    contractId: opts.contractId ?? PAIR,
     // Real getEvents responses carry topics as XDR ScVals, never bare strings.
     topic: [xdr.ScVal.scvSymbol("swap")],
     value: {
@@ -87,8 +90,10 @@ function makeLiquidityEvent(opts: {
   amountB: bigint;
   txHash?: string;
   ledgerClosedAt?: string;
+  contractId?: string;
 }): Record<string, unknown> {
   return {
+    contractId: opts.contractId ?? PAIR,
     topic: [xdr.ScVal.scvSymbol(opts.type)],
     value: {
       map: () => [
@@ -139,6 +144,7 @@ describe("TaxReportingModule.exportTradeHistory()", () => {
         ReturnType<typeof client.server.getLatestLedger>
       >);
 
+    jest.spyOn(client.factory, "getAllPairs").mockResolvedValue([PAIR]);
     tax = new TaxReportingModule(client);
   });
 
@@ -439,6 +445,7 @@ describe("TaxReportingModule.getCostBasis()", () => {
       .mockResolvedValue({ sequence: 5000 } as unknown as Awaited<
         ReturnType<typeof client.server.getLatestLedger>
       >);
+    jest.spyOn(client.factory, "getAllPairs").mockResolvedValue([PAIR]);
     tax = new TaxReportingModule(client);
   });
 
@@ -542,6 +549,7 @@ describe("TaxReportingModule.getCapitalGains()", () => {
       .mockResolvedValue({ sequence: 5000 } as unknown as Awaited<
         ReturnType<typeof client.server.getLatestLedger>
       >);
+    jest.spyOn(client.factory, "getAllPairs").mockResolvedValue([PAIR]);
     tax = new TaxReportingModule(client);
   });
 
@@ -621,6 +629,7 @@ describe("TaxReportingModule getEvents encoding", () => {
       .mockResolvedValue({ sequence: 50_000 } as unknown as Awaited<
         ReturnType<typeof client.server.getLatestLedger>
       >);
+    jest.spyOn(client.factory, "getAllPairs").mockResolvedValue([PAIR]);
     tax = new TaxReportingModule(client);
   });
 
@@ -633,8 +642,12 @@ describe("TaxReportingModule getEvents encoding", () => {
 
     await tax.exportTradeHistory(USER);
 
-    // One query per topic: swap, add_liquidity, remove_liquidity.
-    const topics = spy.mock.calls.map(([req]) => requestedTopic(req));
+    // One query per topic: swap, add_liquidity, remove_liquidity. The
+    // factory's new-pair refresh scan is not a report query.
+    const reportTopics = ["swap", "add_liquidity", "remove_liquidity"];
+    const topics = spy.mock.calls
+      .map(([req]) => requestedTopic(req))
+      .filter((topic) => reportTopics.includes(topic));
     expect(topics.sort()).toEqual(["add_liquidity", "remove_liquidity", "swap"]);
     for (const [req] of spy.mock.calls) {
       expect(req.filters[0].topics![0][0]).not.toBe("swap");
